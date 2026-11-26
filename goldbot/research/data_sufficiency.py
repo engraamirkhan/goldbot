@@ -133,8 +133,9 @@ def certificates(cfg: dict[str, Any]) -> list[Certificate]:
             req = Requirement(cell=f"{unit}/{tf}", unit=unit, tf=tf, inputs=int(req0["inputs"]),
                               keep_share=float(req0["keep_share"]), objective=req0["objective"],
                               label_templates=req0["label_templates"])
-            learn = None if u["learn"] is None else int(u["learn"][i])
-            judge = None if u["judge"] is None else int(u["judge"][i])
+            ul, uj = unit_rows(cfg, unit)
+            learn = None if ul is None else ul[i]
+            judge = None if uj is None else uj[i]
             gaps = [_gap(k, cfg["items"][k]) for k in [*cfg.get("tf_items", {}).get(tf, []), *u["items"]]]
             projected: str | None = None
             if daily_only and TF_SECONDS.get(tf, 0) < TF_SECONDS["1d"]:
@@ -338,6 +339,63 @@ def consumer_cells(consumers: Sequence[Consumer], supply: Mapping[str, Mapping[s
     return out
 
 
+# D-12 (PR #466, signed): the binding day-mean rho_u,inst per class membership and hold bucket
+# (docs/research/rho-measurement-2026-11.json `binding.rho_u_inst_day_mean`, the `max` over its variants). Quant S-1 on
+# #486: "Pooled projections use the D-12 binding day-mean rho_u,inst for the body's membership and hold bucket; 0.2 is
+# the D-13 admission bound for a new instrument vs gold, never a pooling divisor." R-e: a single cell divisor is
+# reporting only; a pooled read's Stage 0 Riley gate uses card 2.3's per-column charges (D-12 rho_u, D-12a rho_x).
+LABEL_H_S = {"1m": 3_600, "5m": 14_400, "15m": 28_800, "30m": 57_600, "1h": 86_400, "2h": 172_800, "4h": 432_000,
+             "1d": 864_000, "1w": 1_728_000}         # dl-v1 H_BY_TF (the label horizon sets the hold bucket)
+
+
+def hold_bucket(tf: str) -> str:
+    h = LABEL_H_S[tf]
+    return "le60m" if h <= 3_600 else ("1h-4h" if h <= 14_400 else "gt4h")
+
+
+def measured_rho(cfg: dict[str, Any], src: dict[str, Any]) -> dict[str, float]:
+    """tf -> binding rho_u,inst for `src` = {file, key, stat}: the D-12 value of that membership at the tf's bucket."""
+    import json
+
+    from goldbot.config import ROOT
+    d = json.loads((ROOT / src["file"]).read_text())["binding"]["rho_u_inst_day_mean"]
+    return {tf: min(1.0, float(d[f"{src['key']}|{hold_bucket(tf)}"][src.get("stat", "max")])) for tf in cfg["tfs"]}
+
+
+def _rho_row(cfg: dict[str, Any], pdef: dict[str, Any], override: float | None = None) -> list[float]:
+    if override is not None:
+        return [override] * len(cfg["tfs"])
+    if "rho_inst_from" in pdef:
+        m = measured_rho(cfg, pdef["rho_inst_from"])
+        return [m[tf] for tf in cfg["tfs"]]
+    return [float(pdef["rho_inst"])] * len(cfg["tfs"])
+
+
+def pooled_supply_by_tf(rows: Sequence[Sequence[int | None]], rho: Sequence[float]) -> list[int | None]:
+    """`pooled_supply` with a divisor per tf."""
+    out: list[int | None] = []
+    for i, col in enumerate(zip(*rows, strict=True)):
+        vals = [int(v) for v in col if v]
+        out.append(None if not vals else int(sum(vals) / (1 + (len(vals) - 1) * rho[i])))
+    return out
+
+
+def unit_rows(cfg: dict[str, Any], unit: str) -> tuple[list[int] | None, list[int] | None]:
+    """A unit's learn and judge rows; a card-pooled unit (`card_pooled: {k, rho_inst, rho_inst_from}`) is re-divided
+    at the D-12 binding rho of its membership and bucket: x (1 + (k-1) rho_card) / (1 + (k-1) rho_measured)."""
+    u = cfg["units"][unit]
+    learn = None if u["learn"] is None else [int(v) for v in u["learn"]]
+    judge = None if u["judge"] is None else [int(v) for v in u["judge"]]
+    cp = u.get("card_pooled")
+    if cp:
+        k, r0 = int(cp["k"]), float(cp["rho_inst"])
+        m = measured_rho(cfg, cp["rho_inst_from"])
+        f = [(1 + (k - 1) * r0) / (1 + (k - 1) * m[tf]) for tf in cfg["tfs"]]
+        learn = None if learn is None else [int(v * f[i]) for i, v in enumerate(learn)]
+        judge = None if judge is None else [int(v * f[i]) for i, v in enumerate(judge)]
+    return learn, judge
+
+
 def _measured_learn(u: dict[str, Any]) -> list[int | None] | None:
     m = u.get("measured") or {}
     row = m.get("learn_T2_core6")
@@ -372,21 +430,22 @@ def supply(cfg: dict[str, Any]) -> dict[str, dict[str, tuple[int | None, int | N
             if daily_only and TF_SECONDS.get(tf, 0) < TF_SECONDS["1d"]:
                 row[tf] = (0, 0)
                 continue
-            learn = meas[i] if meas is not None and meas[i] is not None else int(u["learn"][i])
-            row[tf] = (learn, None if u["judge"] is None else int(u["judge"][i]))
+            ul, uj = unit_rows(cfg, unit)
+            learn = meas[i] if meas is not None and meas[i] is not None else (None if ul is None else ul[i])
+            row[tf] = (learn, None if uj is None else uj[i])
         out[unit] = row
     for name, pdef in (cfg.get("pooled") or {}).items():
-        rho = float(pdef["rho_inst"])
-        lrn = pooled_supply(members(cfg, pdef["learn_members"]), rho)
-        jdg = pooled_supply(members(cfg, pdef["judge_members"]), rho)
+        rho = _rho_row(cfg, pdef)
+        lrn = pooled_supply_by_tf(members(cfg, pdef["learn_members"]), rho)
+        jdg = pooled_supply_by_tf(members(cfg, pdef["judge_members"]), rho)
         out[f"pooled_{name}"] = {tf: (lrn[i], jdg[i]) for i, tf in enumerate(tfs)}
     return out
 
 
 def routes(cfg: dict[str, Any]) -> list[Route]:
     """The contract's routes with every derived gain resolved from the counts in the same file (`gain_from`), so no
-    gain is typed by hand where it can be computed: `pooled` (pooled body minus the base unit, learn and judge),
-    `base_pooled_rho` (the same body at a measured rho minus the card rho), `measured` (one measured row minus
+    gain is typed by hand where it can be computed: `pooled` (pooled body at the D-12 binding rho minus the base unit,
+    learn and judge), `project` (card 2.2 projection of graded instruments), `measured` (one measured row minus
     another, e.g. untiered minus tiered), `measured_2h` (each unit's measured 2h cell, built only with the bar rule)."""
     tfs = list(cfg["tfs"])
     sup = supply(cfg)
@@ -397,35 +456,24 @@ def routes(cfg: dict[str, Any]) -> list[Route]:
         gain = {k: int(v) for k, v in (r.get("gain") or {}).items()}
         if "pooled" in gf:
             pdef = cfg["pooled"][gf["pooled"]]
-            rho = float(gf.get("rho", pdef["rho_inst"]))
-            lrn = pooled_supply(members(cfg, pdef["learn_members"]), rho)
-            jdg = pooled_supply(members(cfg, pdef["judge_members"]), rho)
-            if "base_pooled_rho" in gf:
-                b = float(gf["base_pooled_rho"])
-                bl = pooled_supply(members(cfg, pdef["learn_members"]), b)
-                bj = pooled_supply(members(cfg, pdef["judge_members"]), b)
-                for i, tf in enumerate(tfs):
-                    gain[f"pooled_{gf['pooled']}/{tf}"] = max(0, (lrn[i] or 0) - (bl[i] or 0))
-                    gain[f"pooled_{gf['pooled']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj[i] or 0))
-            else:
-                base = sup[gf["base"]]
-                for i, tf in enumerate(tfs):
-                    bl_, bj_ = base[tf]
-                    gain[f"{gf['base']}/{tf}"] = max(0, (lrn[i] or 0) - (bl_ or 0))
-                    gain[f"{gf['base']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj_ or 0))
-        for unit, (k, ldays, jdays) in (gf.get("project") or {}).items():
-            # card 2.2 projection of k instruments' intraday cells graded A over ldays / jdays session days
+            rho = _rho_row(cfg, pdef, gf.get("rho"))
+            lrn = pooled_supply_by_tf(members(cfg, pdef["learn_members"]), rho)
+            jdg = pooled_supply_by_tf(members(cfg, pdef["judge_members"]), rho)
+            base = sup[gf["base"]]
+            for i, tf in enumerate(tfs):
+                bl_, bj_ = base[tf]
+                gain[f"{gf['base']}/{tf}"] = max(0, (lrn[i] or 0) - (bl_ or 0))
+                gain[f"{gf['base']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj_ or 0))
+        for unit, spec in (gf.get("project") or {}).items():
+            # card 2.2 projection of k instruments graded A over ldays / jdays session days: intraday cells only (a B
+            # unit's months already load at 1d/1w), or every tf when the 4th element is "all" (new instruments)
+            k, ldays, jdays = spec[:3]
+            every_tf = len(spec) > 3 and spec[3] == "all"
             for tf in tfs:
-                if tf not in ("1d", "1w"):          # B months already load at 1d/1w
+                if every_tf or tf not in ("1d", "1w"):
                     pooled_k = 1 + (int(k) - 1) * RHO_INST
                     gain[f"{unit}/{tf}"] = int(card_per_day(tf) * int(ldays) * int(k) / pooled_k)
                     gain[f"{unit}/{tf}:judge"] = int(card_per_day(tf) * int(jdays) * int(k) / pooled_k)
-        for unit, k in (gf.get("rescale") or {}).items():
-            # a card-pooled unit of k instruments re-divided at the measured rho: x (1 + (k-1) rho_card) / (1 + (k-1) rho)
-            f = (1 + (int(k) - 1) * float(gf["base_pooled_rho"])) / (1 + (int(k) - 1) * float(gf["rho"])) - 1
-            for tf, (lv, jv) in sup[unit].items():
-                gain[f"{unit}/{tf}"] = int((lv or 0) * f)
-                gain[f"{unit}/{tf}:judge"] = int((jv or 0) * f)
         if "measured" in gf:
             m = cfg["units"][gf["measured"]]["measured"]
             for i, tf in enumerate(tfs):
@@ -458,4 +506,4 @@ def consumers(cfg: dict[str, Any]) -> list[Consumer]:
 
 __all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
            "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
-           "consumers", "inherit", "members", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
+           "consumers", "hold_bucket", "inherit", "measured_rho", "members", "pooled_supply", "pooled_supply_by_tf", "unit_rows", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]

@@ -17,15 +17,15 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | gold/4h | SHORT | INFEASIBLE | 295 / 4,300 | 0 | 30 / 1,109 | D-1: Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference) (2026-12-02 (plan); read date set by graded n_eff) |
 | gold/1d | SHORT | INFEASIBLE | 175 / 4,300 | 0 | 15 / 1,109 | D-1: Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference) (2026-12-02 (plan); read date set by graded n_eff) |
 | gold/1w | SHORT | INFEASIBLE | 88 / 4,300 | 0 | 7 / 1,109 | D-1: Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference) (2026-12-02 (plan); read date set by graded n_eff) |
-| fx10/1m | SHORT | SUFFICIENT | 11,399 / 4,300 | 26 | 10,948 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/5m | SHORT | SUFFICIENT | 8,468 / 4,300 | 19 | 8,133 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/15m | SHORT | SUFFICIENT | 6,306 / 4,300 | 14 | 6,056 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/30m | SHORT | SHORT | 4,174 / 4,300 | 9 | 4,009 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/1h | SHORT | SHORT | 3,221 / 4,300 | 7 | 3,094 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/2h | SHORT | INFEASIBLE | 1,611 / 4,300 | 3 | 1,547 / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
-| fx10/4h | SHORT | INFEASIBLE | 644 / 4,300 | 1 | 619 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/1d | SHORT | INFEASIBLE | 322 / 4,300 | 0 | 309 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
-| fx10/1w | SHORT | INFEASIBLE | 161 / 4,300 | 0 | 155 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/1m | SHORT | SUFFICIENT | 12,573 / 4,300 | 29 | 12,075 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/5m | SHORT | SUFFICIENT | 12,673 / 4,300 | 29 | 12,171 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/15m | SHORT | SUFFICIENT | 8,589 / 4,300 | 19 | 8,249 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/30m | SHORT | SUFFICIENT | 5,685 / 4,300 | 13 | 5,460 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/1h | SHORT | SUFFICIENT | 4,387 / 4,300 | 10 | 4,214 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/2h | SHORT | SHORT | 2,194 / 4,300 | 5 | 2,107 / 1,109 | TF-2h: 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) (2026-12-04) |
+| fx10/4h | SHORT | INFEASIBLE | 877 / 4,300 | 2 | 843 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/1d | SHORT | INFEASIBLE | 438 / 4,300 | 1 | 420 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
+| fx10/1w | SHORT | INFEASIBLE | 219 / 4,300 | 0 | 211 / 1,109 | D-3: no side-aware r3 labels, synthetic ask, ub95 cost per class (2026-12-04) |
 | metals_crosses_b/1m | SHORT | n/a: B is daily-only | 0 / 4,300 | 0 | 0 / 1,109 | B-DAILY: B months carry close-to-close labels and daily features only: no intraday rows load (2026-12-09) |
 | metals_crosses_b/5m | SHORT | n/a: B is daily-only | 0 / 4,300 | 0 | 0 / 1,109 | B-DAILY: B months carry close-to-close labels and daily features only: no intraday rows load (2026-12-09) |
 | metals_crosses_b/15m | SHORT | n/a: B is daily-only | 0 / 4,300 | 0 | 0 / 1,109 | B-DAILY: B months carry close-to-close labels and daily features only: no intraday rows load (2026-12-09) |
@@ -69,6 +69,7 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | TF-2h | 2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error) | add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change | data-engineer (raise), architect + implementer | 2026-12-04 | found 2026-11-25 | AT RISK |
 | ADV-REF | ADR 0106 real-money rule 'order <= about 1 % of daily volume' has no market-volume reference (broker tick volume is not market volume) | config/data/adv_reference.yaml values (schema from ADR 0106 lane 1): per instrument the exchange or survey reference, in USD notional per day, conservative leg only: gold = COMEX GC all-month daily volume x 100 oz x price (CME daily bulletin; LBMA OTC not counted), silver SI, WTI CL, indices their benchmark future (ES, NQ, FDAX, Z), FX = BIS Triennial 2025 spot turnover per pair (data.bis.org, reachable 2026-11-26); 20-day median where daily data exist; each value with source URL, as_of and review_by = as_of + 92 days; a stale value refuses real money like an unknown one. Values are counts, not market data: no price series is committed | data-engineer (values), implementer lane 1 (loader, fail-closed placeholder) | 2026-12-03 | method set 2026-11-26; CME pages refuse scripted reads (HTTP 403), bulletin PDF route being checked; values land after lane 1's schema | watch |
 | LANE5-QC | no dataset-version record; trainers do not refuse a version that failed QC (ADR 0106 gap map lane 5: OD2, OD6, GD1, GD2, GD4, A6, A7) | dataset_versions record (sha of minutes, tiers, label spec, feature spec) with a QC row per version: missing-bar share <= 0.1 % against the exchange calendar per (instrument, month), zero duplicate (instrument, ts_utc), two-source cross-check status (r11 tier / D-1 / D-14), regime coverage per asset and tf (rising / falling / sideways by trailing 20-bar return and ADX, defined before any read; >= N days each), leak traps L1-L14 run per version; trainers and dl-v1 loaders raise on a version whose QC row is not PASS | data-engineer | 2026-12-11 | starts after the sufficiency PRs (2026-11-27); sufficiency files of PR #482 untouched | watch |
+| D-12 | pooled n_eff divisor rho_u,inst unmeasured | scripts/research/measure_rho.py on learn | data-engineer + quant | 2026-12-09 | done (PR #466): binding day-mean rho_u,inst in docs/research/rho-measurement-2026-11.json; remaining: D-12a rho_x per column, label-blind | done |
 | D-2 | fs-v1 feature store not merged | PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf) | data-engineer | 2026-12-04 | done: merged in PR #462 (553d1d70); dl-v1 builds on it | done |
 | COUNT-mc | metals/crosses n_eff not counted | outcome-blind n_eff count by the card 2.2 method from the r11 tiers | data-engineer | 2026-11-28 | done 2026-11-26 (scripts/research/sufficiency_counts.py) | done |
 | COUNT-ie | index/energy learn 2018-2021 (R-L) n_eff not counted | outcome-blind count with the unit's R-L windows | data-engineer | 2026-11-28 | done 2026-11-26; judge row corrected to 2022-01..2025-09 | done |
@@ -86,8 +87,8 @@ Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, co
 | zoo-v2 | 4,300 (10 inputs) | 1,109 (keep 0.33) | 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w | history trainer zoo-v2 (L-cw, G-cw GBT-slow, HB, AVG; D-40 prior as 2 columns); SYNTH-ml item 10; card #460 2.3 Riley on a 10-input block; 1m/5m are range/abstain filters only (R11) |
 | sr-v3 | 2,580 (6 inputs) | 1,109 (keep 0.33) | 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w | sr-v3 served body at ladder level L3 (core-6); card #460 rev 4 Q1: L3 = a 6-column core prefix that meets Riley; the 10-input row is zoo-v2's |
 | x6 | 5,160 (12 inputs) | 1,109 (keep 0.33) | 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w | price-action block X6 served after core-6 (6 columns assumed until its card states p); card #460 rev 4 served order: a block enters whole, so the need is 430 x (6 + p); p = 6 assumed |
-| seq-1 | 17,200 (40 inputs) | 1,109 (keep 0.33) | 1h, 2h, 4h, 1d | SEQ-1 pooled TCN, fine-tune head on 32 columns + 8-dim embedding; SYNTH-ml item 17 / ml-3 P2: judged 1h-1d, 1w pooled into 1d; head = 40 inputs at Riley; pretraining uses dense rows (2-5M windows per fold), not n_eff |
-| rl-x1 | 10,750 (25 inputs) | 3,328 (keep 1.0) | 1m, 5m, 15m, 30m, 1h, 2h, 4h | RL-X1 offline fitted-Q exit policy (<= 25 state columns), one pooled policy with a tf stratum; SYNTH-ml item 12 / ml-5 P2: 1d/1w descriptive; every entry is judged (keep 1.0); Riley on the 25-column Q regression is this plan's reading, ml-researcher to confirm |
+| seq-1 | 6,020 (14 inputs) | 1,109 (keep 0.33) | 1h, 2h, 4h, 1d | SEQ-1 8-dim embedding as a block in zoo-v2, after core-6 (R-c); quant R-c on #486: zoo-v2 may take SEQ-1's 8-dim embedding as a block only if SEQ-1's pretraining is outcome-free and the embedding is refit per outer fold on that fold's purged training rows (feature_store.purge, embargo >= TCN window + H), learn 2010-17 only; Riley charges 8 inputs; one block decision, K 1; A8 parity battery on the 8 dimensions. A label-trained embedding needs nested cross-fitting and its own card |
+| rl-x1 | 10,750 (25 inputs) | 3,328 (keep 1.0) | 1m, 5m, 15m, 30m, 1h, 2h, 4h | RL-X1 offline fitted-Q exit policy (<= 25 state columns), one pooled policy with a tf stratum; SYNTH-ml item 12 / ml-5 P2: 1d/1w descriptive; every entry is judged (keep 1.0); Riley on the 25-column Q regression is this plan's reading, ml-researcher to confirm. Quant R-d: fits on learn 2010-01..2017-12, A/A-consistent rows only; learn_old 2003-05 only for A/A-consistent instrument-months (gold has none); test_old never fit, tuned or used for early stopping, read once under a booked id; holdout never read |
 | agg-v1 | forward only | forward n_eff 200 per cell | 15m, 1h, 4h | agg-v1 AdaHedge over frozen models (forward only); SYNTH-ml item 15 / ml-7: no fusion weight before forward n_eff >= 200 per cell; first judged read about 54 trading days at gold's 3.7 n_eff/day |
 
 ## Consumer x cell
@@ -96,51 +97,51 @@ Supply: learn = dl-v1 measured T2 core-6 n_eff where the unit has it, else the c
 
 | Cell | Learn | Judge | zoo-v2 | sr-v3 | x6 | seq-1 | rl-x1 | agg-v1 |
 |---|---|---|---|---|---|---|---|---|
-| gold/1m | 5,226 | 527 | J-582: RHO-measure 2026-12-09 | J-582: RHO-measure 2026-12-09 | J-582: RHO-measure 2026-12-09 |  | L-5.5k J-2.8k: GOLD-TIER 2026-12-04 |  |
-| gold/5m | 3,846 | 392 | L-454 J-717: RHO-measure 2026-12-09 | J-717: RHO-measure 2026-12-09 | L-1.3k J-717: RHO-measure 2026-12-09 |  | L-6.9k J-2.9k: open L-1.5k, cap 21 |  |
-| gold/15m | 2,707 | 292 | L-1.6k J-817: A2-pool 2026-12-04 | J-817: A2-pool 2026-12-04 | L-2.5k J-817: A2-pool 2026-12-04 |  | L-8.0k J-3.0k: open L-3.8k J-183, cap 16 | fwd |
-| gold/30m | 1,643 | 193 | L-2.7k J-916: GOLD-TIER 2026-12-04 | L-937 J-916: A2-pool 2026-12-04 | L-3.5k J-916: open L-411, cap 11 |  | L-9.1k J-3.1k: open L-6.0k J-1.2k, cap 11 |  |
-| gold/1h | 1,067 | 149 | L-3.2k J-960: open L-567, cap 8 | L-1.5k J-960: GOLD-TIER 2026-12-04 | L-4.1k J-960: open L-1.4k, cap 8 | L-16.1k J-960: open L-13.5k, cap 8 | L-9.7k J-3.2k: open L-7.0k J-1.7k, cap 8 | fwd |
-| gold/2h | 736 | 74 | L-3.6k J-1.0k: open L-3.6k J-339, cap 1 | L-1.8k J-1.0k: open L-1.8k J-339, cap 1 | L-4.4k J-1.0k: open L-4.4k J-339, cap 1 | L-16.5k J-1.0k: open L-16.5k J-339, cap 1 | L-10.0k J-3.3k: open L-10.0k J-2.6k, cap 1 |  |
-| gold/4h | 123 | 30 | L-4.2k J-1.1k: open L-3.4k J-801, cap 2 | L-2.5k J-1.1k: open L-1.6k J-801, cap 2 | L-5.0k J-1.1k: open L-4.2k J-801, cap 2 | L-17.1k J-1.1k: open L-16.3k J-801, cap 2 | L-10.6k J-3.3k: open L-9.8k J-3.0k, cap 2 | fwd |
-| gold/1d | 0 | 15 | L-4.3k J-1.1k: open L-3.3k J-956, cap 2 | L-2.6k J-1.1k: open L-1.6k J-956, cap 2 | L-5.2k J-1.1k: open L-4.2k J-956, cap 2 | L-17.2k J-1.1k: open L-16.2k J-956, cap 2 |  |  |
-| gold/1w | 0 | 7 | L-4.3k J-1.1k: open L-3.8k J-1.0k, cap 1 | L-2.6k J-1.1k: open L-2.1k J-1.0k, cap 1 | L-5.2k J-1.1k: open L-4.6k J-1.0k, cap 1 |  |  |  |
-| fx10/1m | 11,399 | 10,948 | ok | ok | ok |  | ok |  |
-| fx10/5m | 8,468 | 8,133 | ok | ok | ok |  | L-2.3k: RHO-measure 2026-12-09 |  |
-| fx10/15m | 6,306 | 6,056 | ok | ok | ok |  | L-4.4k: RHO-measure 2026-12-09 | fwd |
-| fx10/30m | 4,174 | 4,009 | L-126: RHO-measure 2026-12-09 | ok | L-986: RHO-measure 2026-12-09 |  | L-6.6k: open L-2.6k, cap 19 |  |
-| fx10/1h | 3,221 | 3,094 | L-1.1k: RHO-measure 2026-12-09 | ok | L-1.9k: RHO-measure 2026-12-09 | L-14.0k: open L-10.9k, cap 14 | L-7.5k J-234: open L-4.4k, cap 14 | fwd |
-| fx10/2h | 1,611 | 1,547 | L-2.7k: open L-1.1k, cap 7 | L-969: RHO-measure 2026-12-09 | L-3.5k: open L-2.0k, cap 7 | L-15.6k: open L-14.0k, cap 7 | L-9.1k J-1.8k: open L-7.6k J-290, cap 7 |  |
-| fx10/4h | 644 | 619 | L-3.7k J-490: open L-3.0k, cap 2 | L-1.9k J-490: open L-1.3k, cap 2 | L-4.5k J-490: open L-3.9k, cap 2 | L-16.6k J-490: open L-15.9k, cap 2 | L-10.1k J-2.7k: open L-9.5k J-2.1k, cap 2 | fwd |
-| fx10/1d | 322 | 309 | L-4.0k J-800: open L-3.7k J-503, cap 1 | L-2.3k J-800: open L-1.9k J-503, cap 1 | L-4.8k J-800: open L-4.5k J-503, cap 1 | L-16.9k J-800: open L-16.6k J-503, cap 1 |  |  |
-| fx10/1w | 161 | 155 | L-4.1k J-954: open L-4.0k J-805, cap 0 | L-2.4k J-954: open L-2.3k J-805, cap 0 | L-5.0k J-954: open L-4.8k J-805, cap 0 |  |  |  |
+| gold/1m | 5,226 | 527 | J-582: A2-pool 2026-12-04 | J-582: A2-pool 2026-12-04 | J-582: A2-pool 2026-12-04 |  | L-5.5k J-2.8k: D-13 2026-12-11 |  |
+| gold/5m | 3,846 | 392 | L-454 J-717: A2-pool 2026-12-04 | J-717: A2-pool 2026-12-04 | L-1.3k J-717: A2-pool 2026-12-04 |  | L-6.9k J-2.9k: D-13 2026-12-11 |  |
+| gold/15m | 2,707 | 292 | L-1.6k J-817: A2-pool 2026-12-04 | J-817: A2-pool 2026-12-04 | L-2.5k J-817: D-13 2026-12-11 |  | L-8.0k J-3.0k: D-13 2026-12-11 | fwd |
+| gold/30m | 1,643 | 193 | L-2.7k J-916: D-13 2026-12-11 | L-937 J-916: A2-pool 2026-12-04 | L-3.5k J-916: D-13 2026-12-11 |  | L-9.1k J-3.1k: open L-3.1k, cap 17 |  |
+| gold/1h | 1,067 | 149 | L-3.2k J-960: D-13 2026-12-11 | L-1.5k J-960: D-13 2026-12-11 | L-4.1k J-960: D-13 2026-12-11 | L-5.0k J-960: open L-287, cap 13 | L-9.7k J-3.2k: open L-5.0k, cap 13 | fwd |
+| gold/2h | 426 | 74 | L-3.9k J-1.0k: open L-1.1k, cap 7 | L-2.2k J-1.0k: D-13 2026-12-11 | L-4.7k J-1.0k: open L-1.9k, cap 7 | L-5.6k J-1.0k: open L-2.8k, cap 7 | L-10.3k J-3.3k: open L-7.5k J-956, cap 7 |  |
+| gold/4h | 123 | 30 | L-4.2k J-1.1k: open L-3.2k J-160, cap 2 | L-2.5k J-1.1k: open L-1.5k J-160, cap 2 | L-5.0k J-1.1k: open L-4.1k J-160, cap 2 | L-5.9k J-1.1k: open L-4.9k J-160, cap 2 | L-10.6k J-3.3k: open L-9.7k J-2.4k, cap 2 | fwd |
+| gold/1d | 0 | 15 | L-4.3k J-1.1k: open L-3.3k J-636, cap 2 | L-2.6k J-1.1k: open L-1.6k J-636, cap 2 | L-5.2k J-1.1k: open L-4.2k J-636, cap 2 | L-6.0k J-1.1k: open L-5.0k J-636, cap 2 |  |  |
+| gold/1w | 0 | 7 | L-4.3k J-1.1k: open L-3.8k J-873, cap 1 | L-2.6k J-1.1k: open L-2.1k J-873, cap 1 | L-5.2k J-1.1k: open L-4.7k J-873, cap 1 |  |  |  |
+| fx10/1m | 12,573 | 12,075 | ok | ok | ok |  | ok |  |
+| fx10/5m | 12,673 | 12,171 | ok | ok | ok |  | ok |  |
+| fx10/15m | 8,589 | 8,249 | ok | ok | ok |  | L-2.2k: D-13 2026-12-11 | fwd |
+| fx10/30m | 5,685 | 5,460 | ok | ok | ok |  | L-5.1k: open L-623, cap 23 |  |
+| fx10/1h | 4,387 | 4,214 | ok | ok | L-773: D-13 2026-12-11 | L-1.6k: D-13 2026-12-11 | L-6.4k: open L-2.9k, cap 18 | fwd |
+| fx10/2h | 2,194 | 2,107 | L-2.1k: open L-392, cap 9 | L-386: D-13 2026-12-11 | L-3.0k: open L-1.3k, cap 9 | L-3.8k: open L-2.1k, cap 9 | L-8.6k J-1.2k: open L-6.8k, cap 9 |  |
+| fx10/4h | 877 | 843 | L-3.4k J-266: open L-2.7k, cap 3 | L-1.7k J-266: open L-1.0k, cap 3 | L-4.3k J-266: open L-3.6k, cap 3 | L-5.1k J-266: open L-4.5k, cap 3 | L-9.9k J-2.5k: open L-9.2k J-1.8k, cap 3 | fwd |
+| fx10/1d | 438 | 420 | L-3.9k J-689: open L-3.5k J-355, cap 1 | L-2.1k J-689: open L-1.8k J-355, cap 1 | L-4.7k J-689: open L-4.4k J-355, cap 1 | L-5.6k J-689: open L-5.2k J-355, cap 1 |  |  |
+| fx10/1w | 219 | 211 | L-4.1k J-898: open L-3.9k J-731, cap 0 | L-2.4k J-898: open L-2.2k J-731, cap 0 | L-4.9k J-898: open L-4.8k J-731, cap 0 |  |  |  |
 | metals_crosses_b/1m | 0 | 0 | L-4.3k J-1.1k: D-14 2026-12-09 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: D-14 2026-12-09 |  | L-10.8k J-3.3k: D-14 2026-12-09 |  |
 | metals_crosses_b/5m | 0 | 0 | L-4.3k J-1.1k: D-14 2026-12-09 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: D-14 2026-12-09 |  | L-10.8k J-3.3k: open L-2.3k, cap 19 |  |
 | metals_crosses_b/15m | 0 | 0 | L-4.3k J-1.1k: D-14 2026-12-09 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: D-14 2026-12-09 |  | L-10.8k J-3.3k: open L-4.5k, cap 14 | fwd |
 | metals_crosses_b/30m | 0 | 0 | L-4.3k J-1.1k: open L-154, cap 9 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: open L-1.0k, cap 9 |  | L-10.8k J-3.3k: open L-6.6k, cap 9 |  |
-| metals_crosses_b/1h | 0 | 0 | L-4.3k J-1.1k: open L-1.1k, cap 7 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: open L-2.0k, cap 7 | L-17.2k J-1.1k: open L-14.0k, cap 7 | L-10.8k J-3.3k: open L-7.5k J-208, cap 7 | fwd |
-| metals_crosses_b/2h | 0 | 0 | L-4.3k J-1.1k: open L-2.7k, cap 3 | L-2.6k J-1.1k: open L-980, cap 3 | L-5.2k J-1.1k: open L-3.6k, cap 3 | L-17.2k J-1.1k: open L-15.6k, cap 3 | L-10.8k J-3.3k: open L-9.2k J-1.8k, cap 3 |  |
-| metals_crosses_b/4h | 0 | 0 | L-4.3k J-1.1k: open L-3.7k J-485, cap 1 | L-2.6k J-1.1k: open L-1.9k J-485, cap 1 | L-5.2k J-1.1k: open L-4.5k J-485, cap 1 | L-17.2k J-1.1k: open L-16.6k J-485, cap 1 | L-10.8k J-3.3k: open L-10.1k J-2.7k, cap 1 | fwd |
-| metals_crosses_b/1d | 229 | 114 | L-4.1k J-995: open L-3.5k J-920, cap 1 | L-2.4k J-995: open L-1.7k J-920, cap 1 | L-4.9k J-995: open L-4.3k J-920, cap 1 | L-17.0k J-995: open L-16.4k J-920, cap 1 |  |  |
-| metals_crosses_b/1w | 115 | 57 | L-4.2k J-1.1k: open L-3.9k J-1.0k, cap 0 | L-2.5k J-1.1k: open L-2.2k J-1.0k, cap 0 | L-5.0k J-1.1k: open L-4.7k J-1.0k, cap 0 |  |  |  |
+| metals_crosses_b/1h | 0 | 0 | L-4.3k J-1.1k: open L-1.1k, cap 7 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: open L-2.0k, cap 7 | L-6.0k J-1.1k: open L-2.8k, cap 7 | L-10.8k J-3.3k: open L-7.5k J-208, cap 7 | fwd |
+| metals_crosses_b/2h | 0 | 0 | L-4.3k J-1.1k: open L-2.7k, cap 3 | L-2.6k J-1.1k: open L-980, cap 3 | L-5.2k J-1.1k: open L-3.6k, cap 3 | L-6.0k J-1.1k: open L-4.4k, cap 3 | L-10.8k J-3.3k: open L-9.2k J-1.8k, cap 3 |  |
+| metals_crosses_b/4h | 0 | 0 | L-4.3k J-1.1k: open L-3.7k J-485, cap 1 | L-2.6k J-1.1k: open L-1.9k J-485, cap 1 | L-5.2k J-1.1k: open L-4.5k J-485, cap 1 | L-6.0k J-1.1k: open L-5.4k J-485, cap 1 | L-10.8k J-3.3k: open L-10.1k J-2.7k, cap 1 | fwd |
+| metals_crosses_b/1d | 229 | 114 | L-4.1k J-995: open L-3.6k J-995, cap 1 | L-2.4k J-995: open L-1.9k J-995, cap 1 | L-4.9k J-995: open L-4.5k J-995, cap 1 | L-5.8k J-995: open L-5.3k J-995, cap 1 |  |  |
+| metals_crosses_b/1w | 115 | 57 | L-4.2k J-1.1k: open L-4.0k J-1.1k, cap 0 | L-2.5k J-1.1k: open L-2.2k J-1.1k, cap 0 | L-5.0k J-1.1k: open L-4.8k J-1.1k, cap 0 |  |  |  |
 | index_energy_b/1m | 0 | 0 | L-4.3k J-1.1k: D-14 2026-12-09 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: D-14 2026-12-09 |  | L-10.8k J-3.3k: open L-5.1k, cap 13 |  |
 | index_energy_b/5m | 0 | 0 | L-4.3k J-1.1k: open L-95, cap 9 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: open L-955, cap 9 |  | L-10.8k J-3.3k: open L-6.5k, cap 9 |  |
 | index_energy_b/15m | 0 | 0 | L-4.3k J-1.1k: open L-1.2k, cap 7 | L-2.6k J-1.1k: D-14 2026-12-09 | L-5.2k J-1.1k: open L-2.0k, cap 7 |  | L-10.8k J-3.3k: open L-7.6k J-353, cap 7 | fwd |
 | index_energy_b/30m | 0 | 0 | L-4.3k J-1.1k: open L-2.2k, cap 4 | L-2.6k J-1.1k: open L-507, cap 4 | L-5.2k J-1.1k: open L-3.1k, cap 4 |  | L-10.8k J-3.3k: open L-8.7k J-1.4k, cap 4 |  |
-| index_energy_b/1h | 0 | 0 | L-4.3k J-1.1k: open L-2.7k, cap 3 | L-2.6k J-1.1k: open L-980, cap 3 | L-5.2k J-1.1k: open L-3.6k, cap 3 | L-17.2k J-1.1k: open L-15.6k, cap 3 | L-10.8k J-3.3k: open L-9.2k J-1.8k, cap 3 | fwd |
-| index_energy_b/2h | 0 | 0 | L-4.3k J-1.1k: open L-3.5k J-349, cap 1 | L-2.6k J-1.1k: open L-1.8k J-349, cap 1 | L-5.2k J-1.1k: open L-4.4k J-349, cap 1 | L-17.2k J-1.1k: open L-16.4k J-349, cap 1 | L-10.8k J-3.3k: open L-9.9k J-2.6k, cap 1 |  |
-| index_energy_b/4h | 0 | 0 | L-4.3k J-1.1k: open L-4.0k J-805, cap 0 | L-2.6k J-1.1k: open L-2.3k J-805, cap 0 | L-5.2k J-1.1k: open L-4.8k J-805, cap 0 | L-17.2k J-1.1k: open L-16.9k J-805, cap 0 | L-10.8k J-3.3k: open L-10.4k J-3.0k, cap 0 | fwd |
-| index_energy_b/1d | 117 | 121 | L-4.2k J-988: open L-2.9k J-898, cap 3 | L-2.5k J-988: open L-1.2k J-898, cap 3 | L-5.0k J-988: open L-3.8k J-898, cap 3 | L-17.1k J-988: open L-15.8k J-898, cap 3 |  |  |
+| index_energy_b/1h | 0 | 0 | L-4.3k J-1.1k: open L-2.7k, cap 3 | L-2.6k J-1.1k: open L-980, cap 3 | L-5.2k J-1.1k: open L-3.6k, cap 3 | L-6.0k J-1.1k: open L-4.4k, cap 3 | L-10.8k J-3.3k: open L-9.2k J-1.8k, cap 3 | fwd |
+| index_energy_b/2h | 0 | 0 | L-4.3k J-1.1k: open L-3.5k J-349, cap 1 | L-2.6k J-1.1k: open L-1.8k J-349, cap 1 | L-5.2k J-1.1k: open L-4.4k J-349, cap 1 | L-6.0k J-1.1k: open L-5.2k J-349, cap 1 | L-10.8k J-3.3k: open L-9.9k J-2.6k, cap 1 |  |
+| index_energy_b/4h | 0 | 0 | L-4.3k J-1.1k: open L-4.0k J-805, cap 0 | L-2.6k J-1.1k: open L-2.3k J-805, cap 0 | L-5.2k J-1.1k: open L-4.8k J-805, cap 0 | L-6.0k J-1.1k: open L-5.7k J-805, cap 0 | L-10.8k J-3.3k: open L-10.4k J-3.0k, cap 0 | fwd |
+| index_energy_b/1d | 117 | 121 | L-4.2k J-988: open L-3.0k J-988, cap 3 | L-2.5k J-988: open L-1.3k J-988, cap 3 | L-5.0k J-988: open L-3.8k J-988, cap 3 | L-5.9k J-988: open L-4.7k J-988, cap 3 |  |  |
 | index_energy_b/1w | 58 | 60 | L-4.2k J-1.0k: open L-3.6k J-1.0k, cap 1 | L-2.5k J-1.0k: open L-1.9k J-1.0k, cap 1 | L-5.1k J-1.0k: open L-4.5k J-1.0k, cap 1 |  |  |  |
-| pooled_gold_fx/1m | 8,148 | 4,365 | ok | ok | ok |  | L-2.6k: open L-565, cap 23 |  |
-| pooled_gold_fx/5m | 6,056 | 3,243 | ok | ok | ok |  | L-4.7k J-85: open L-3.2k, cap 17 |  |
-| pooled_gold_fx/15m | 4,409 | 2,414 | ok | ok | L-751: RHO-measure 2026-12-09 |  | L-6.3k J-914: open L-5.2k J-310, cap 12 | fwd |
-| pooled_gold_fx/30m | 2,833 | 1,598 | L-1.5k: open L-759, cap 8 | ok | L-2.3k: open L-1.6k, cap 8 |  | L-7.9k J-1.7k: open L-7.2k J-1.3k, cap 8 |  |
-| pooled_gold_fx/1h | 2,023 | 1,233 | L-2.3k: open L-1.8k, cap 5 | L-557: open L-51, cap 5 | L-3.1k: open L-2.6k, cap 5 | L-15.2k: open L-14.7k, cap 5 | L-8.7k J-2.1k: open L-8.2k J-1.8k, cap 5 | fwd |
-| pooled_gold_fx/2h | - | 616 | L-4.3k J-493: open L-4.3k J-339, cap 0 | L-2.6k J-493: open L-2.6k J-339, cap 0 | L-5.2k J-493: open L-5.2k J-339, cap 0 | L-17.2k J-493: open L-17.2k J-339, cap 0 | L-10.8k J-2.7k: open L-10.8k J-2.6k, cap 0 |  |
-| pooled_gold_fx/4h | 363 | 246 | L-3.9k J-863: open L-3.8k J-801, cap 1 | L-2.2k J-863: open L-2.1k J-801, cap 1 | L-4.8k J-863: open L-4.7k J-801, cap 1 | L-16.8k J-863: open L-16.7k J-801, cap 1 | L-10.4k J-3.1k: open L-10.3k J-3.0k, cap 1 | fwd |
-| pooled_gold_fx/1d | 35 | 122 | L-4.3k J-987: open L-4.3k J-956, cap 0 | L-2.5k J-987: open L-2.5k J-956, cap 0 | L-5.1k J-987: open L-5.1k J-956, cap 0 | L-17.2k J-987: open L-17.2k J-956, cap 0 |  |  |
-| pooled_gold_fx/1w | - | 61 | L-4.3k J-1.0k: open L-4.3k J-1.0k, cap 0 | L-2.6k J-1.0k: open L-2.6k J-1.0k, cap 0 | L-5.2k J-1.0k: open L-5.2k J-1.0k, cap 0 |  |  |  |
+| pooled_gold_fx/1m | 8,736 | 4,680 | ok | ok | ok |  | L-2.0k: D-13 2026-12-11 |  |
+| pooled_gold_fx/5m | 7,200 | 3,856 | ok | ok | ok |  | L-3.5k: D-13 2026-12-11 |  |
+| pooled_gold_fx/15m | 5,023 | 2,750 | ok | ok | L-137: D-13 2026-12-11 |  | L-5.7k J-578: D-13 2026-12-11 | fwd |
+| pooled_gold_fx/30m | 3,227 | 1,820 | L-1.1k: D-13 2026-12-11 | ok | L-1.9k: D-13 2026-12-11 |  | L-7.5k J-1.5k: open L-3.1k, cap 17 |  |
+| pooled_gold_fx/1h | 2,305 | 1,405 | L-2.0k: D-13 2026-12-11 | L-275: D-13 2026-12-11 | L-2.9k: D-13 2026-12-11 | L-3.7k: open L-287, cap 13 | L-8.4k J-1.9k: open L-5.0k, cap 13 | fwd |
+| pooled_gold_fx/2h | 1,076 | 701 | L-3.2k J-408: open L-1.5k, cap 6 | L-1.5k J-408: D-13 2026-12-11 | L-4.1k J-408: open L-2.4k, cap 6 | L-4.9k J-408: open L-3.2k, cap 6 | L-9.7k J-2.6k: open L-8.0k J-956, cap 6 |  |
+| pooled_gold_fx/4h | 413 | 281 | L-3.9k J-828: open L-3.2k J-160, cap 2 | L-2.2k J-828: open L-1.5k J-160, cap 2 | L-4.7k J-828: open L-4.1k J-160, cap 2 | L-5.6k J-828: open L-4.9k J-160, cap 2 | L-10.3k J-3.0k: open L-9.7k J-2.4k, cap 2 | fwd |
+| pooled_gold_fx/1d | 35 | 139 | L-4.3k J-970: open L-3.9k J-636, cap 0 | L-2.5k J-970: open L-2.2k J-636, cap 0 | L-5.1k J-970: open L-4.8k J-636, cap 0 | L-6.0k J-970: open L-5.6k J-636, cap 0 |  |  |
+| pooled_gold_fx/1w | - | 69 | L-4.3k J-1.0k: open L-4.1k J-873, cap 0 | L-2.6k J-1.0k: open L-2.4k J-873, cap 0 | L-5.2k J-1.0k: open L-5.0k J-873, cap 0 |  |  |  |
 
 ## Routes, ranked by expected counted n_eff per day of work
 
@@ -148,79 +149,76 @@ Counted = the card 2.2 n_eff the route adds summed over cells (learn and `:judge
 
 | Rank | Route | Kind | Basis | Counted n_eff | p | Effort (d) | Per day | Sign-off | Owner | Due | Status | Training-only gain |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | RHO-measure: measure rho_x per column (label-blind, 2010-11 fold) and the residual rho_u,inst (D-12) that set the pooled divisor; projected at rho 0.2, the D-13 admission bound | pooled | projected | 78,661 | 0.5 | 2 | 19,665 | quant | data-engineer (rho_x), ml-researcher-staff (D-12) | 2026-12-09 | rho_x lane delegated 2026-11-26 (label-blind); D-12 after A4 unseals learn labels (PR #482) | - |
-| 2 | A2-pool: aug-v1 A2: pooled gold + FX body per tf (real rows, instrument levels, Q2 tie rule picks the body label-blind) | pooled | measured | 21,474 | 0.9 | 2 | 9,663 | quant (H-103 A2 card) | data-engineer + ml-researcher | 2026-12-04 | EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind) | - |
+| 1 | A2-pool: aug-v1 A2: pooled gold + FX body per tf (real rows, instrument levels, Q2 tie rule picks the body label-blind) | pooled | measured | 26,999 | 0.9 | 2 | 12,150 | quant (H-103 A2 card) | data-engineer + ml-researcher | 2026-12-04 | EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind) | - |
+| 2 | D-13: admit independent instruments (index, energy, rates, crypto, agri, least-gold-correlated FX; Dimson rho vs gold <= 0.2 on learn) graded A on Dukascopy 1m bid+ask, pooled into the gold+FX body and the FX unit (projected by card 2.2 at rho 0.5: 6 instruments, 2,000 learn / 1,950 judge days) | organic | projected | 152,612 | 0.4 | 6 | 10,174 | quant (references) | data-engineer; quant (references) | 2026-12-11 | pre-screen script exists (d13_independent_rank.py); pulls delegated 2026-11-26 | - |
 | 3 | D-14: second source (Dukascopy 1m bid+ask) for HistData C/F/P months: index, energy, XAG, crosses intraday rows (B units load none today) | organic | projected | 104,968 | 0.4 | 5 | 8,397 | - | data-engineer | 2026-12-09 | not started; delegated 2026-11-26 (projected by card 2.2: 4 instruments per unit graded A where Dukascopy lists them, 2h/4h follow once graded) | - |
-| 4 | GOLD-TIER: gold 2010-17: lift the 27 non-A months (14 C close_vs_ref 0.95-0.957, 13 B range2_extremes) by a second graded minute source (HistData XAUUSD 2009+, if independent of Dukascopy) or a quant ruling that feature-lookback months need B, not A; ceiling = untiered - T2 | organic | measured | 8,660 | 0.4 | 3 | 1,155 | quant | data-engineer | 2026-12-04 | not started; delegated 2026-11-26 | - |
-| 5 | BROKER-M1: broker MT5 M1 forward capture (D-1 fallback ii): gold judge rows from 2026-10-01 at card 2.2 per-day rates, about 65 trading days to 2026-12-31 if the months grade | organic | projected | 677 | 0.7 | 0.5 | 948 | quant | data-engineer + sre | 2026-12-31 | capture running (PR #471/#477); first grade after the November freeze | - |
+| 4 | BROKER-M1: broker MT5 M1 forward capture (D-1 fallback ii): gold judge rows from 2026-10-01 at card 2.2 per-day rates, about 65 trading days to 2026-12-31 if the months grade | organic | projected | 677 | 0.7 | 0.5 | 948 | quant | data-engineer + sre | 2026-12-31 | capture running (PR #471/#477); first grade after the November freeze | - |
+| 5 | TF-2h: 2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe) | organic | measured | 426 | 1.0 | 0.5 | 852 | - | data-engineer | 2026-11-26 | code done; PR open | - |
 | 6 | DEEP-DAILY: deep daily history in a pre-learn window no read has touched: gold 1978-2002 (raw/daily/xauusd_daily_1978_present), XAG, index and energy daily from 1990 (free: FRED, Yahoo, Stooq) graded against a second daily source; T0 close-to-close labels at 1d/1w (projected by card 2.2, hold 10 / 20 days) | organic | projected | 3,420 | 0.6 | 5 | 410 | quant + evaluator (new window) | data-engineer | 2026-12-09 | not started; delegated 2026-11-26 | - |
-| 7 | HEADS: multi-horizon heads (dl-v1 16 heads per bar) and 1d/1w labels decided on the 4h grid | other | projected | 0 | 1.0 | 0.5 | 0 | - | data-engineer | 2026-11-26 | built (dl-v1) | more targets per event; n_eff counted once per event (uniqueness) |
-| 8 | TF-2h: 2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe) | organic | measured | 0 | 1.0 | 0.5 | 0 | - | data-engineer | 2026-11-26 | code done; PR open | - |
-| 9 | A1-offsets: aug-v1 A1 dense offset (phase) rows: training rows only, weight 1/P, purged with their real span | synthetic | projected | 0 | 1.0 | 0.5 | 0 | quant | data-engineer + ml-researcher | 2026-12-04 | factory supports --phases; awaiting quant sign | x1.5 magnitude, x1.86-2.13 sign information (ml-8 measured); counted 0 by card 2.2 until power accounting (SYNTH-ml item 2) is signed |
-| 10 | A3-bagging: aug-v1 A3 stationary-bootstrap bagging (training only) | synthetic | projected | 0 | 1.0 | 1 | 0 | quant | ml-researcher | 2027-01-15 | after the H-103 A1/A2 read | variance reduction only; 0 n_eff |
-| 11 | A4-generative: GAN/diffusion rows | synthetic | projected | 0 | 1.0 | 5 | 0 | quant | ml-researcher | after the A3 verdict | not scheduled | none counted; only if A3 passes |
+| 7 | GOLD-TIER: rule R-a (ADR 0104 4, quant ruling on #486): lookback months may be B for close-only columns (registry CLOSE_ONLY_COLUMNS); label window stays A / A-consistent; C, F, P never. Re-counted on the r5 gold events, not projected. HistData source switch refused (R-b) | organic | measured | 0 | 1.0 | 1 | 0 | quant (R-a signed) | data-engineer | 2026-11-26 | re-counted 2026-11-26 (PR #492): +0 at every tf and column set; the binding column is atr_ratio_14_100 (810 bars, reads ranges, not close-only). Next lever is the quant's: a shorter slow-leg column (new spec id) or its place in the core order | - |
+| 8 | HEADS: multi-horizon heads (dl-v1 16 heads per bar) and 1d/1w labels decided on the 4h grid | other | projected | 0 | 1.0 | 0.5 | 0 | - | data-engineer | 2026-11-26 | built (dl-v1) | more targets per event; n_eff counted once per event (uniqueness) |
+| 9 | D-12a: D-12a: rho_x per column, label-blind (2010-11 fold, upper 95 % CI), frozen by hash for the Stage 0 per-column Riley charges (card 2.3 rev 4 Q1; R-e) | other | projected | 0 | 1.0 | 2 | 0 | quant | data-engineer | 2026-12-02 | delegated 2026-11-26 | no cell-divisor gain: per-column charges set each pooled body's served prefix at Stage 0 |
+| 10 | A1-offsets: aug-v1 A1 dense offset (phase) rows: training rows only, weight 1/P, purged with their real span | synthetic | projected | 0 | 1.0 | 0.5 | 0 | quant | data-engineer + ml-researcher | 2026-12-04 | factory supports --phases; awaiting quant sign | x1.5 magnitude, x1.86-2.13 sign information (ml-8 measured); counted 0 by card 2.2 until power accounting (SYNTH-ml item 2) is signed |
+| 11 | A3-bagging: aug-v1 A3 stationary-bootstrap bagging (training only) | synthetic | projected | 0 | 1.0 | 1 | 0 | quant | ml-researcher | 2027-01-15 | after the H-103 A1/A2 read | variance reduction only; 0 n_eff |
+| 12 | A4-generative: GAN/diffusion rows | synthetic | projected | 0 | 1.0 | 5 | 0 | quant | ml-researcher | after the A3 verdict | not scheduled | none counted; only if A3 passes |
 
 ### Route gains per cell
 
 | Route | Cell | Counted n_eff |
 |---|---|---|
-| RHO-measure | fx10/15m | 6,080 |
-| RHO-measure | fx10/15m:judge | 5,839 |
-| RHO-measure | fx10/1d | 310 |
-| RHO-measure | fx10/1d:judge | 297 |
-| RHO-measure | fx10/1h | 3,105 |
-| RHO-measure | fx10/1h:judge | 2,983 |
-| RHO-measure | fx10/1m | 10,991 |
-| RHO-measure | fx10/1m:judge | 10,557 |
-| RHO-measure | fx10/1w | 155 |
-| RHO-measure | fx10/1w:judge | 149 |
-| RHO-measure | fx10/2h | 1,553 |
-| RHO-measure | fx10/2h:judge | 1,491 |
-| RHO-measure | fx10/30m | 4,024 |
-| RHO-measure | fx10/30m:judge | 3,865 |
-| RHO-measure | fx10/4h | 621 |
-| RHO-measure | fx10/4h:judge | 596 |
-| RHO-measure | fx10/5m | 8,165 |
-| RHO-measure | fx10/5m:judge | 7,842 |
-| RHO-measure | index_energy_b/1d | 87 |
-| RHO-measure | index_energy_b/1d:judge | 90 |
-| RHO-measure | index_energy_b/1w | 43 |
-| RHO-measure | index_energy_b/1w:judge | 45 |
-| RHO-measure | metals_crosses_b/1d | 152 |
-| RHO-measure | metals_crosses_b/1d:judge | 75 |
-| RHO-measure | metals_crosses_b/1w | 76 |
-| RHO-measure | metals_crosses_b/1w:judge | 37 |
-| RHO-measure | pooled_gold_fx/15m | 1,102 |
-| RHO-measure | pooled_gold_fx/15m:judge | 604 |
-| RHO-measure | pooled_gold_fx/1d:judge | 31 |
-| RHO-measure | pooled_gold_fx/1h | 506 |
-| RHO-measure | pooled_gold_fx/1h:judge | 308 |
-| RHO-measure | pooled_gold_fx/1m | 2,037 |
-| RHO-measure | pooled_gold_fx/1m:judge | 1,091 |
-| RHO-measure | pooled_gold_fx/1w:judge | 15 |
-| RHO-measure | pooled_gold_fx/2h:judge | 154 |
-| RHO-measure | pooled_gold_fx/30m | 708 |
-| RHO-measure | pooled_gold_fx/30m:judge | 399 |
-| RHO-measure | pooled_gold_fx/4h | 91 |
-| RHO-measure | pooled_gold_fx/4h:judge | 62 |
-| RHO-measure | pooled_gold_fx/5m | 1,514 |
-| RHO-measure | pooled_gold_fx/5m:judge | 811 |
-| A2-pool | gold/15m | 1,702 |
-| A2-pool | gold/15m:judge | 2,122 |
+| A2-pool | gold/15m | 2,316 |
+| A2-pool | gold/15m:judge | 2,458 |
 | A2-pool | gold/1d | 35 |
-| A2-pool | gold/1d:judge | 107 |
-| A2-pool | gold/1h | 956 |
-| A2-pool | gold/1h:judge | 1,084 |
-| A2-pool | gold/1m | 2,922 |
-| A2-pool | gold/1m:judge | 3,838 |
-| A2-pool | gold/1w:judge | 54 |
-| A2-pool | gold/2h:judge | 542 |
-| A2-pool | gold/30m | 1,190 |
-| A2-pool | gold/30m:judge | 1,405 |
-| A2-pool | gold/4h | 240 |
-| A2-pool | gold/4h:judge | 216 |
-| A2-pool | gold/5m | 2,210 |
-| A2-pool | gold/5m:judge | 2,851 |
+| A2-pool | gold/1d:judge | 124 |
+| A2-pool | gold/1h | 1,238 |
+| A2-pool | gold/1h:judge | 1,256 |
+| A2-pool | gold/1m | 3,510 |
+| A2-pool | gold/1m:judge | 4,153 |
+| A2-pool | gold/1w:judge | 62 |
+| A2-pool | gold/2h | 650 |
+| A2-pool | gold/2h:judge | 627 |
+| A2-pool | gold/30m | 1,584 |
+| A2-pool | gold/30m:judge | 1,627 |
+| A2-pool | gold/4h | 290 |
+| A2-pool | gold/4h:judge | 251 |
+| A2-pool | gold/5m | 3,354 |
+| A2-pool | gold/5m:judge | 3,464 |
+| D-13 | fx10/15m | 6,711 |
+| D-13 | fx10/15m:judge | 6,543 |
+| D-13 | fx10/1d | 342 |
+| D-13 | fx10/1d:judge | 334 |
+| D-13 | fx10/1h | 3,428 |
+| D-13 | fx10/1h:judge | 3,342 |
+| D-13 | fx10/1m | 12,131 |
+| D-13 | fx10/1m:judge | 11,828 |
+| D-13 | fx10/1w | 171 |
+| D-13 | fx10/1w:judge | 167 |
+| D-13 | fx10/2h | 1,714 |
+| D-13 | fx10/2h:judge | 1,671 |
+| D-13 | fx10/30m | 4,442 |
+| D-13 | fx10/30m:judge | 4,331 |
+| D-13 | fx10/4h | 685 |
+| D-13 | fx10/4h:judge | 668 |
+| D-13 | fx10/5m | 9,012 |
+| D-13 | fx10/5m:judge | 8,786 |
+| D-13 | pooled_gold_fx/15m | 6,711 |
+| D-13 | pooled_gold_fx/15m:judge | 6,543 |
+| D-13 | pooled_gold_fx/1d | 342 |
+| D-13 | pooled_gold_fx/1d:judge | 334 |
+| D-13 | pooled_gold_fx/1h | 3,428 |
+| D-13 | pooled_gold_fx/1h:judge | 3,342 |
+| D-13 | pooled_gold_fx/1m | 12,131 |
+| D-13 | pooled_gold_fx/1m:judge | 11,828 |
+| D-13 | pooled_gold_fx/1w | 171 |
+| D-13 | pooled_gold_fx/1w:judge | 167 |
+| D-13 | pooled_gold_fx/2h | 1,714 |
+| D-13 | pooled_gold_fx/2h:judge | 1,671 |
+| D-13 | pooled_gold_fx/30m | 4,442 |
+| D-13 | pooled_gold_fx/30m:judge | 4,331 |
+| D-13 | pooled_gold_fx/4h | 685 |
+| D-13 | pooled_gold_fx/4h:judge | 668 |
+| D-13 | pooled_gold_fx/5m | 9,012 |
+| D-13 | pooled_gold_fx/5m:judge | 8,786 |
 | D-14 | index_energy_b/15m | 3,131 |
 | D-14 | index_energy_b/15m:judge | 2,975 |
 | D-14 | index_energy_b/1h | 1,600 |
@@ -249,19 +247,12 @@ Counted = the card 2.2 n_eff the route adds summed over cells (learn and `:judge
 | D-14 | metals_crosses_b/4h:judge | 624 |
 | D-14 | metals_crosses_b/5m | 8,411 |
 | D-14 | metals_crosses_b/5m:judge | 8,201 |
-| GOLD-TIER | gold/15m | 1,472 |
-| GOLD-TIER | gold/1d | 298 |
-| GOLD-TIER | gold/1h | 1,204 |
-| GOLD-TIER | gold/1m | 2,112 |
-| GOLD-TIER | gold/1w | 208 |
-| GOLD-TIER | gold/30m | 1,208 |
-| GOLD-TIER | gold/4h | 481 |
-| GOLD-TIER | gold/5m | 1,677 |
 | BROKER-M1 | gold/15m:judge | 127 |
 | BROKER-M1 | gold/1h:judge | 65 |
 | BROKER-M1 | gold/1m:judge | 230 |
 | BROKER-M1 | gold/30m:judge | 84 |
 | BROKER-M1 | gold/5m:judge | 171 |
+| TF-2h | gold/2h | 426 |
 | DEEP-DAILY | gold/1d | 630 |
 | DEEP-DAILY | gold/1w | 315 |
 | DEEP-DAILY | index_energy_b/1d | 1,200 |

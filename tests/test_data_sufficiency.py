@@ -125,8 +125,9 @@ def test_supply_uses_the_measured_judged_head_and_derived_gains_are_computed_not
     m = cfg["units"]["gold"]["measured"]
     assert sup["gold"]["4h"][0] == m["learn_T2_core6"][6]          # measured T2 core-6, not the card count
     assert sup["index_energy_b"]["15m"] == (0, 0)                  # B loads no intraday row
-    tier = next(r for r in D.routes(cfg) if r.id == "GOLD-TIER")
-    assert tier.gain["gold/4h"] == m["learn_untiered"][6] - m["learn_T2_core6"][6]
+    tier = next(r for r in D.routes(cfg) if r.id == "GOLD-TIER")      # R-a re-counted, never projected (S-3)
+    assert tier.gain.get("gold/4h", 0) == m["learn_T2_core6_Ra"][6] - m["learn_T2_core6"][6]
+    assert "untiered" not in str(cfg["routes"])
     pool = next(r for r in D.routes(cfg) if r.id == "A2-pool")
     pooled_1h, gold_1h = sup["pooled_gold_fx"]["1h"][0], sup["gold"]["1h"][0]
     assert pooled_1h is not None and gold_1h is not None
@@ -144,3 +145,19 @@ def test_a_cell_is_closed_by_the_first_ranked_route_whose_cumulative_gain_covers
     assert g.residual_learn == 0 and g.max_inputs_after == 10
     p = D.consumer_cells([con], {"pool": {"1h": (1_000, 2_000)}}, [big])[0]
     assert p.closed_by is None and p.residual_learn == 800 and p.max_inputs_after == 8
+
+
+def test_pooled_divisors_are_the_d12_binding_rho_by_bucket_never_the_admission_bound():
+    """Quant S-1 on #486: pooled projections use the D-12 binding day-mean rho_u,inst for the body's membership and
+    hold bucket; 0.2 (the D-13 admission bound) is never a pooling divisor."""
+    cfg = _cfg()
+    src = cfg["pooled"]["gold_fx"]["rho_inst_from"]
+    rho = D.measured_rho(cfg, src)
+    assert D.hold_bucket("1m") == "le60m" and D.hold_bucket("5m") == "1h-4h" and D.hold_bucket("1h") == "gt4h"
+    assert rho["1m"] == pytest.approx(0.39895) and rho["5m"] == pytest.approx(0.26154) and rho["4h"] == pytest.approx(0.31666)
+    assert 0.2 not in set(rho.values())
+    assert "RHO-measure" not in {r.id for r in D.routes(cfg)}
+    learn, _ = D.unit_rows(cfg, "fx10")
+    card = cfg["units"]["fx10"]["learn"]
+    fx = D.measured_rho(cfg, cfg["units"]["fx10"]["card_pooled"]["rho_inst_from"])
+    assert learn is not None and learn[0] == int(card[0] * 5.5 / (1 + 9 * fx["1m"]))
