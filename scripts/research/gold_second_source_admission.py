@@ -18,7 +18,8 @@ Review rules (PR #469, for runs after 2026-11-26; the Forexite run is not repeat
 * grid (quant C1): the candidate grid per year is max(tick_of(candidate), tick_of(dukascopy)); a candidate whose
   observed grid differs from its documented grid is refused before any statistic ("inputs wrong, not run");
 * lags (code LOW 2): (a) and (b*) are the maximum over candidate shifts of -2..+2 minutes;
-* controls (code LOW 3): every negative-control year 2010-18 must be present, else the controls are invalid.
+* controls (code LOW 3): every negative-control year 2010-18 must be present, else the controls are invalid;
+* controls (quant K1): measured with the candidate's own statistics, lagged (b*) and lagged (a) (`control_pair`).
 
     uv run python scripts/research/gold_second_source_admission.py [--raw raw] [--out ~/tmp/dgrade/admission.json]
 """
@@ -202,6 +203,13 @@ def controls_valid(neg: dict[int, dict[str, object]], pos: dict[int, dict[str, o
             and all(v["b"] is not None and float(str(v["b"])) >= SYN_MIN for v in syn.values()))
 
 
+def control_pair(x: pd.Series, d: pd.Series, tick: float) -> dict[str, object]:
+    """A control pair, measured with EXACTLY the candidate's statistics (quant K1): the lagged (b*) and (a)."""
+    bv, bn, b_lags = lagged(b_star, x, d, tick)
+    av, ah, a_lags = lagged(a_share, x, d, tick)
+    return {"b": bv, "moved": bn, "b_by_lag": b_lags, "a": av, "a_hours": ah, "a_by_lag": a_lags, "tick": tick}
+
+
 def candidate_year(f: pd.Series, d: pd.Series, year: int, documented: float, bound: float) -> dict[str, object]:
     """One candidate year: the grid check first (refuses before any statistic), then coverage, clock, (a), (b*)."""
     t = candidate_grid(documented, f, d)
@@ -247,17 +255,15 @@ def main() -> int:
             print("neg", y, "missing", flush=True)
             continue                              # a missing year invalidates the controls (controls_valid)
         t = max(tick_of(d), tick_of(h))
-        neg[y] = {"b": b_star(h, d, t)[0], "moved": b_star(h, d, t)[1], "tick": t}
+        neg[y] = control_pair(h, d, t)
         print("neg", y, neg[y], flush=True)
     for y in POS_YEARS:
         d, h = dukascopy(a.raw, y), histdata(a.raw, y)
         t = max(tick_of(d), tick_of(h))
-        b, n = b_star(h, d, t)
-        pos[y] = {"b": b, "moved": n, "tick": t}
+        pos[y] = control_pair(h, d, t)
         own = tick_of(d)
         shifted = pd.Series((np.round(d.to_numpy() / own) + round(SYN_SHIFT / own)) * own, index=d.index)
-        bs, ns = b_star(shifted, d, max(own, FOREXITE_TICK))
-        syn[y] = {"b": bs, "moved": ns}
+        syn[y] = control_pair(shifted, d, max(own, FOREXITE_TICK))
         print("pos", y, pos[y], "syn", syn[y], flush=True)
     neg_vals = [float(str(v["b"])) for v in neg.values() if v["b"] is not None]
     bound = B_MAX if neg_vals and all(v < B_MAX for v in neg_vals) else max(neg_vals, default=B_MAX)

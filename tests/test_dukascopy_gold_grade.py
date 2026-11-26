@@ -240,3 +240,15 @@ def test_controls_are_invalid_when_a_negative_year_is_missing() -> None:
     assert A.controls_valid(neg, pos, syn)
     del neg[2014]
     assert not A.controls_valid(neg, pos, syn)
+
+
+def test_a_control_pair_reads_the_same_as_a_candidate_pair() -> None:
+    A = _load_research("gold_second_source_admission")
+    rng = np.random.default_rng(5)
+    ts = pd.date_range("2016-03-07 00:00", periods=4000, freq="min", tz="UTC")
+    d = pd.Series(np.round(1250 + np.cumsum(rng.integers(-4, 5, len(ts))) * 0.001, 3), index=ts)
+    h = pd.Series(np.round(d.to_numpy() + rng.normal(0, 0.05, len(ts)), 2), index=ts)
+    ctrl = A.control_pair(h, d, 0.01)
+    b, _, _ = A.lagged(A.b_star, h, d, 0.01)
+    a, _, _ = A.lagged(A.a_share, h, d, 0.01)
+    assert ctrl["b"] == b and ctrl["a"] == a

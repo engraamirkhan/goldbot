@@ -205,20 +205,26 @@ manifest and gold's n_eff stay as they are. **D-1 goes to fallback (ii):** the p
 
 **Forexite closed (quant C2, verbatim).** Forexite is closed for D-1 and the 2018-25 confirm window: single use; a later documentation of its price field does not reopen it, and its (a)/(b*) figures are never cited as independence evidence.
 
-**(ii) broker capture (quant C3, verbatim).** Broker MT5 M1 capture from 2026-10-01 runs now and then daily (copy_rates_range to raw/, sha256 per file, gaps logged); a month without a complete capture grades C. MT5 bars are Bid-built for CFD symbols (MetaQuotes documentation, cited): price field documented; the broker reference must pass (a)-(c) per month before it grades.
-- Where the capture lives (PD ruling, 2026-11-26; the quant wording above is unchanged): no new scheduled job.
-  - **The capture record is the brain store table `bars_1m_broker`.** The existing scheduler job `feed_reconcile`
-    fills it daily: copy_rates_range through the read-only bridge.
-  - **The copy into raw/** (`scripts/broker_m1_capture.py`: a sha256 per month file, gaps logged) runs as the first
-    step of each monthly grade, and once on 2026-11-26.
-- Retention and backup, checked 2026-11-26:
-  - No job prunes or rotates `bars_1m_broker`, so no exemption is needed. The store only rewrites a partition on a
-    dedupe append (rows kept). Compaction covers other tables only (decisions, fills, dq_events, observe_ticks, ticks)
-    and keeps every row. Tick retention (`ticks.retain_days`) applies to state/ticks, not to this table.
-  - The table is in the daily restic backup to Object Storage. Only the `dukascopy` and `fred` sources and the
-    `features` and `labels` tables are excluded. The brain's last backup was ok at 2026-11-25 22:24 UTC.
-  - Snapshot retention is daily 14, weekly 8, monthly 12, run from the owner's Mac. So every month stays recoverable
-    from a monthly snapshot for a year.
+**(ii) broker capture (quant K2, verbatim; replaces the C3 sentence).** Broker MT5 M1 from 2026-10-01 is captured daily by the brain's `feed_reconcile` (copy_rates_range, read-only bridge) into `bars_1m_broker`. That table has no retention pruning and is in the backup set (D-11/N13). A missed trading day raises the learning-liveness alert the same day. `scripts/broker_m1_capture.py` copies each closed month into raw/broker_m1/ with a sha256 per file and a gap log within 5 days of month-end, and before any grade. A month without a complete capture grades C. MT5 bars are Bid-built (MT5 Help, 'Charts', cited). The broker reference must pass (a)-(c) per month before it grades.
+
+How each claim holds (2026-11-26):
+- **Retention.** No job prunes or rotates `bars_1m_broker`. The store rewrites a partition only on a dedupe append,
+  and rows are kept. Compaction covers other tables only and keeps every row. Tick retention applies to state/ticks.
+- **Backup.** The table is in the daily restic backup: only `dukascopy`, `fred`, `features` and `labels` are excluded.
+  The last backup was ok at 2026-11-25 22:24 UTC. Snapshot retention is daily 14, weekly 8, monthly 12.
+- **Same-day alert.** Health check `learning:broker_m1_capture` (goldbot/ops/checks/capture.py, ops PR
+  `ops/broker-m1-capture-guard`) FAILs from 23:50 UTC on a session day when icm-demo holds fewer than 60 % of that
+  session's 1,380 minutes. A FAIL reaches the owner through the health alert loop. Until that PR is deployed, this
+  claim is not live.
+- **Month copy within 5 days.**
+  - The daily scheduler job `broker_m1_copy` (23:55 UTC on weekdays, same ops PR) rewrites the previous and the
+    current month into raw/broker_m1/icm-demo/ on the brain, with SHA256SUMS and gaps.json.
+  - The same check FAILs when a closed month's copy is missing more than 5 days after month-end.
+  - `scripts/broker_m1_capture.py` makes the same copy from the Mac before any grade.
+  - Until that PR is deployed, this claim is not live.
+
+**Reference account (quant K3, verbatim).** Reference for (ii): icm-demo (the traded ICM feed). Fixed 2026-11-26, before any grade. Vantage and icm-probe are not graded against Dukascopy for D-1. If icm-demo fails (a)-(c) in a month, that month grades C. There is no switch to another account.
+
 - Citation: MetaTrader 5 Help, "Charts" (metatrader5.com/en/terminal/help/charts_analysis/charts, fetched
   2026-11-26): "Bid prices are used for constructing charts."
 - First copy, 2026-10-01..2026-11-25 23:19 UTC:
