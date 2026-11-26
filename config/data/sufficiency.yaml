@@ -16,19 +16,19 @@ units:
     learn: [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88]
     judge: [527, 392, 292, 193, 149, 74, 30, 15, 7]
     items: [D-1, D-2, D-3, D-4, D-5gold]
-    # D-5 measured (dl-v1, ADR 0104 4 as fixed by the quant on 2026-11-26): card 2.2 n_eff on measured uniqueness,
+    # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
     # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
-    # ff653ea7) with the input lookback of each column set (registry lookbacks, d1 context for P30's d1_slope_ema20).
+    # ff653ea7) with each column set's input lookback (per-column registry lookbacks proved by truncation; d1 in daily bars).
     # Outcome-blind skeleton counts; the label store stays sealed until ADR 0085 A4 records the sha. learn/judge above
     # stay the D-1 count until then. test_old labels: sealed, counts only.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_T2_core6: [5231, 3889, 2784, 1758, 1184, null, 169, 0, 0]
-      learn_T2_core12: [5231, 3889, 2784, 1758, 1184, null, 169, 0, 0]
-      learn_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
+      learn_T2_core6: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
+      learn_T2_core12: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
+      learn_T2_P30: [2316, 1743, 1317, 896, 711, null, 123, 0, 0]
       learn_untiered: [7338, 5523, 4179, 2851, 2271, null, 604, 298, 208]
-      test_old_T2_core6: [159, 108, 65, 26, 0, null, 0, 0, 0]
+      test_old_T2_core6: [157, 104, 56, 13, 0, null, 0, 0, 0]
       test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
@@ -43,9 +43,9 @@ units:
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_T2_core6: [6997, 5254, 3932, 2640, 2021, null, 455, 69, 0]
-      EURUSD_learn_T2_core12: [6997, 5254, 3932, 2640, 2021, null, 455, 69, 0]
-      EURUSD_learn_T2_P30: [2505, 1885, 1426, 972, 770, null, 203, 8, 0]
+      EURUSD_learn_T2_core6: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]
+      EURUSD_learn_T2_core12: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]
+      EURUSD_learn_T2_P30: [5753, 4331, 3278, 2235, 1769, null, 422, 36, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:
     label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"

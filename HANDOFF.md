@@ -67,22 +67,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - `load_labels` needs tiers and a column set, refuses confirm/test_old without a booked read id, and stays sealed
       until ADR 0085 A4 records the tiers sha.
     - The tier check reads the column set's registry lookback, plus the d1 context.
-  - Four registry lookbacks were raised to their 1 %-weight EWM horizon (atr 459, moving_averages 461,
-    microstructure 63, gaps 63).
-  - Counts after tier survival, T2, phase 0, D-1 served tiers (ff653ea7). Gold P30 is 0 because d1_slope_ema20's
-    645-day lookback always reaches a C month before 2018.
+  - Lookbacks: each fs-v1 column declares its own lookback in the registry (`COLUMN_LOOKBACKS`, per tf where it
+    differs). A truncation test proves every one (290 cases). The feature-level lookbacks were raised to their EWM
+    horizons. Both changes are additive; the engine reads neither.
+  - Counts after tier survival, T2, phase 0, D-1 served tiers (ff653ea7):
 
     | Unit (window) | Column set | 1m | 5m | 15m | 30m | 1h | 4h | 1d | 1w |
     |---|---|---|---|---|---|---|---|---|---|
-    | gold 2010-17 | core-6 = core-12 | 5,231 | 3,889 | 2,784 | 1,758 | 1,184 | 169 | 0 | 0 |
-    | gold 2010-17 | P30 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-    | gold 2003-09 (sealed) | core-6 | 159 | 108 | 65 | 26 | 0 | 0 | 0 | 0 |
-    | EURUSD 2010-17 | core-6 = core-12 | 6,997 | 5,254 | 3,932 | 2,640 | 2,021 | 455 | 69 | 0 |
-    | EURUSD 2010-17 | P30 | 2,505 | 1,885 | 1,426 | 972 | 770 | 203 | 8 | 0 |
+    | gold 2010-17 | core-6 = core-12 | 5,226 | 3,847 | 2,708 | 1,644 | 1,068 | 123 | 0 | 0 |
+    | gold 2010-17 | P30 | 2,316 | 1,743 | 1,317 | 896 | 711 | 123 | 0 | 0 |
+    | gold 2003-09 (sealed) | core-6 | 157 | 104 | 56 | 13 | 0 | 0 | 0 | 0 |
+    | EURUSD 2010-17 | core-6 = core-12 | 6,996 | 5,239 | 3,907 | 2,607 | 1,968 | 422 | 36 | 0 |
+    | EURUSD 2010-17 | P30 | 5,753 | 4,331 | 3,278 | 2,235 | 1,769 | 422 | 36 | 0 |
 
-  - Size: 59.7 M heads for gold learn, 43.8 M for gold test_old, 69.3 M for EURUSD.
-  - Wall time: gold 39 min, EURUSD 19 min, on 4 workers, including the fs-v1 rebuild. No label value or statistic was
-    read.
+  - Units with no usable rows are NOT STARTED (data), per card 2.3.
+  - No label value or statistic was read.
 - **Exploration labels: a stop inside the spread is voided, never labelled (2026-11-25).**
   - **Finding.** On the brain, 1,039 `exploration_obs` rows have |label_sim_r| > 20 R. 1,038 of them are non-gold
     candidates (FX, rates, energy, ags, metals; session days 2026-11-02..03). They were replayed on XAUUSD bars with
