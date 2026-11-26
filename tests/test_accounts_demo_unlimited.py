@@ -91,7 +91,9 @@ def test_the_limits_of_every_account_that_is_not_demo_probe_only_are_byte_identi
     """Owner rule 2026-11-25: real money unchanged. `engine_limits` of every live, observe-only and non-probe account,
     serialised, equals what origin/main 0bb07649 gave before this change (the fixture, written by running the same
     dump there). A deliberate, owner-approved change to a live limit regenerates the fixture in its own PR, so the
-    diff of this file is the review signal; nothing else may move it."""
+    diff of this file is the review signal; nothing else may move it. Regenerated once for ADR 0106 decision 2 (the
+    owner's real-money limits): `real_money` and `adv_reference` on every account, and icm-live's pilot within 1 % /
+    2 % with its drawdown stages back on."""
     import json
     s = load_settings()
     now = {k: json.loads(engine_limits(s, a).model_dump_json(exclude={"demo_unlimited", "demo_floor"}))

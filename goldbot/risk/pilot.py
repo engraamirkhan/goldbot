@@ -18,6 +18,11 @@ absolute (`max_risk_frac` lets it bind down to £25 of equity); (2) the 2% daily
 (`daily_cap_frac`, so the account's `daily_loss_limit_abs` binds); (3) `leverage_cap` 20 -> 500; (4) the drawdown
 kill gives way to the pilot stop (`drawdown_stages: false`). Each is a config value read by engine_limits for the pilot
 account only; none is a code path that skips a check.
+
+ADR 0106 decision 2 (the owner's real-money limits, goldbot/risk/real_money.py) supersedes rails 1, 2 and 4: the block
+is refused at load when `max_risk_frac` is above 1 %, `daily_cap_frac` above 2 % or `drawdown_stages` is false, enabled
+or not, and the RiskGate applies the 1 % / 2 % / 15 % limits after every pilot rule anyway. Rail 3 (`leverage_cap`)
+and the absolute terms (£3.12, £6.25, £25, 30 entries, 0.01 lot) stand: they are only ever tighter.
 """
 from __future__ import annotations
 
@@ -27,6 +32,7 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.risk.real_money import RM_DAILY_STOP, RM_MAX_RISK_PER_TRADE
 
 #: ADR 0055's terms: the bounds of `PilotRules`
 PILOT_LOT = 0.01
@@ -36,8 +42,10 @@ PILOT_MAX_STOP_LOSS = 25.0           # account currency (GBP), cumulative realis
 PILOT_MAX_DAILY_LOSS = 6.25          # account currency (GBP): the account's daily_loss_limit_abs, two full stops
 PILOT_MAX_ENTRIES = 30               # filled entries
 PILOT_MAX_LEVERAGE_CAP = 500.0
-PILOT_MAX_RISK_FRAC = 0.125          # £3.12 of £25: the per-trade £ cap binds down to the pilot's lowest equity
-PILOT_MAX_DAILY_FRAC = 0.25          # £6.25 of £25: the absolute daily limit binds down to the pilot's lowest equity
+# ADR 0106 decision 2 supersedes ADR 0055's 0.125 (£3.12 of £25) and 0.25 (£6.25 of £25): never above the owner's
+# real-money limits. At 1 % the pilot's £3.12 trade needs about £312 of equity; below that the gate refuses it
+PILOT_MAX_RISK_FRAC = RM_MAX_RISK_PER_TRADE
+PILOT_MAX_DAILY_FRAC = RM_DAILY_STOP
 PILOT_MAX_WEEKLY_FRAC = 0.25         # ADR 0055 amendment: £12.50 at £50
 
 
@@ -65,7 +73,7 @@ class PilotRules(FrozenRecord):
     max_risk_frac: float = Field(0.01, gt=0, le=PILOT_MAX_RISK_FRAC)
     # rail 2: the daily cap as a fraction of the day-start equity (the account's daily_loss_limit_abs binds first)
     daily_cap_frac: float = Field(0.02, gt=0, le=PILOT_MAX_DAILY_FRAC)
-    # rail 4: False = the 8%/12% drawdown stages do not run on this account; the pilot stop is the hard halt
+    # rail 4 (superseded, ADR 0106): the 8%/12% drawdown stages always run; False is refused at load
     drawdown_stages: bool = True
     # ADR 0055 amendment (trading-safety ruling): the weekly cap as a fraction of the week-start equity, replacing the
     # 5% weekly cap on this account only (5% = £2.50 at £50 would end the week after one full stop)
@@ -76,6 +84,8 @@ class PilotRules(FrozenRecord):
 
     @model_validator(mode="after")
     def _complete(self) -> PilotRules:
+        if not self.drawdown_stages:         # judged enabled or not: a block that would turn the stages off is refused
+            raise ValueError("drawdown_stages: false is refused (ADR 0106: the 15 % halt holds on real money)")
         if not self.enabled:
             return self
         if not self.pilot_id or self.start_utc is None:

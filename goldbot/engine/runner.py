@@ -400,6 +400,7 @@ class Engine:
         self._flow_balance: float | None = None
         self._epoch = 0                                 # ADR 0049 D3: the demo roll's epoch and when it began
         self._epoch_utc: pd.Timestamp | None = None
+        self._rm_daily_stop_saved = False                # ADR 0106: whether the risk file holds the latch as it is
         self._rearm_seen: str | None = None
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
@@ -1989,6 +1990,10 @@ class Engine:
                 self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
             # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
             self._save_risk_state_now("the stage change")
+        elif st.rm_daily_stop != self._rm_daily_stop_saved:
+            # ADR 0106: the 2% stop survives a restart at once, whichever check latched it (a failed save retries here)
+            if self._save_risk_state_now("the real-money daily stop"):
+                self._rm_daily_stop_saved = st.rm_daily_stop
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
         self._limits.after_stage(self, now)
@@ -2027,7 +2032,8 @@ class Engine:
         if st.stage == Stage.HALTED or hwm <= 0:
             return False
         dd = 1 - acc.equity / hwm
-        if dd >= L.dd_stage2:
+        halt = self.gate.halt_at()          # dd_stage2; on real money never above ADR 0106's 15%
+        if dd >= halt:
             self._reread_account = False
             if self._stage2_pending_since is not None or self._equity_corroborated(acc, hwm):
                 self._set_stage2_pending(None)
@@ -2042,7 +2048,7 @@ class Engine:
         self._reread_account = False
         if self._stage2_pending_since is None:
             return False
-        if not dd < L.dd_stage2 - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
+        if not dd < halt - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
             self._stage2_clean_since = None
             return True
         self._stage2_clean_since = self._stage2_clean_since or now
@@ -2505,7 +2511,8 @@ class Engine:
             weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
             rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
             stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
-            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc))
+            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc,
+            rm_daily_stop=st.rm_daily_stop))
 
     def _save_risk_state_now(self, what: str) -> bool:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
@@ -2543,6 +2550,7 @@ class Engine:
         self._kill_everything = snap.kill_everything
         self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
         self._epoch, self._epoch_utc = snap.epoch, snap.epoch_utc
+        st.rm_daily_stop = self._rm_daily_stop_saved = snap.rm_daily_stop   # ADR 0106: held to the roll across a restart
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

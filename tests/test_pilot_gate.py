@@ -3,7 +3,12 @@
 stop, including the round trip"; "£6.25 (two full stops), absolute"; "after £25 cumulative realised loss or 30 filled
 entries ... entries halt for good"; "at most 1" open position; "15m families only"; `leverage_cap` 500, the terminal's
 own leverage when lower. Trading-safety condition (HIGH): the £25 stop is checked BEFORE each entry with the open
-risk and this trade. Every other account sizes and trades exactly as before."""
+risk and this trade. Every other account sizes and trades exactly as before.
+
+These tests pin the pilot's own mechanics on the gate's fields as ADR 0055 set them (12.5 % a trade, 25 % a day and
+week, stages off), on a gate without `real_money`. ADR 0106 decision 2 supersedes those three rails: the block can no
+longer carry them (goldbot/risk/pilot.py), and on real money the gate refuses the same £50 entry `rm_risk_per_trade`
+after every pilot rule (tests/test_real_money_limits.py)."""
 from __future__ import annotations
 
 from typing import Any
@@ -18,18 +23,20 @@ NOW = pd.Timestamp("2026-10-30 10:00", tz="UTC")
 GBP_PER_USD = 0.7508
 PRICE = 4014.84
 RULES = PilotRules(enabled=True, adr=55, pilot_id="icm-live-adr55", start_utc=pd.Timestamp("2026-10-29", tz="UTC"),
-                   leverage_cap=500, max_risk_frac=0.125, daily_cap_frac=0.25, weekly_cap_frac=0.25,
-                   drawdown_stages=False, weekend_flat=True)
+                   leverage_cap=500, weekly_cap_frac=0.25, weekend_flat=True)
+# ADR 0055's rails 1, 2 and 4 as the gate's fields (superseded by ADR 0106; see the module docstring)
+ADR55_RISK_FRAC, ADR55_DAILY_FRAC = 0.125, 0.25
 STOP_GBP = 0.01 * 100 * 3.5 * GBP_PER_USD            # a $3.50 stop at 0.01 lot: £2.63
 TRIP_GBP = 0.05 * 3.5 * 0.01 * 100 * GBP_PER_USD     # its round trip: £0.13
 
 
 def _limits(pilot: PilotRules | None = RULES, **kw: Any) -> RiskLimits:
-    """icm-live's limits as engine_limits builds them from config/accounts.yaml (tiny-live risk per trade underneath)."""
+    """icm-live's limits as engine_limits built them under ADR 0055 (tiny-live risk per trade underneath), before ADR
+    0106 bounded the block and set `real_money`."""
     base: dict[str, Any] = dict(risk_per_trade=0.001, min_lot_risk_cap=None, daily_loss_limit_abs=6.25)
     if pilot is not None:
-        base.update(pilot=pilot, max_positions=1, max_risk_per_trade=pilot.max_risk_frac,
-                    daily_cap=pilot.daily_cap_frac, weekly_cap=pilot.weekly_cap_frac, leverage_cap=pilot.leverage_cap,
+        base.update(pilot=pilot, max_positions=1, max_risk_per_trade=ADR55_RISK_FRAC,
+                    daily_cap=ADR55_DAILY_FRAC, weekly_cap=pilot.weekly_cap_frac, leverage_cap=pilot.leverage_cap,
                     dd_stage1=1.0, dd_stage2=1.0, dd_stage1_clear=1.0)
     return RiskLimits(**{**base, **kw})
 
@@ -152,10 +159,12 @@ def test_the_pilot_weekly_cap_is_25_percent_and_the_standing_5_percent_elsewhere
     assert "weekly_cap" in plain
 
 
-def test_the_drawdown_stages_do_not_run_on_the_pilot_account():
-    st = _state(equity=30.0, balance_closed_hwm=50.0)              # 40% below the mark: no 12% kill
-    d = _check(st=st)
-    assert d.allowed and st.stage == Stage.NORMAL
+def test_stages_turned_off_on_the_pilot_still_halt_at_15_percent_once_the_account_is_real_money():
+    st = _state(equity=30.0, balance_closed_hwm=50.0)              # 40% below the mark
+    assert _check(st=st).allowed and st.stage == Stage.NORMAL      # ADR 0055's fields alone: no stage ran
+    st = _state(equity=30.0, balance_closed_hwm=50.0)
+    d = _check(limits=_limits(real_money=True), st=st)             # ADR 0106: the 15% halt whatever dd_stage2 says
+    assert not d.allowed and st.stage == Stage.HALTED and "rm_drawdown_halt" in d.reasons
 
 
 # ---------------------------------------------------------------- the pilot stop

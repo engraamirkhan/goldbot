@@ -483,3 +483,19 @@ findings:
     source: cycle 2026-11-26 06:21 UTC health (FAIL job:broker_m1_copy, learning:broker_m1_copy after the 35da0698 deploy);
       repo unit fixed in fix/scheduler-raw-write, the brain needs the unit drop-in + scheduler restart (deploy does not reinstall units)
     check: {fn: manual, params: {}}
+
+  - id: ADR0106-RM-LIMITS
+    title: Real-money limits of ADR 0106 (1 % a trade, 2 % a day latched, 15 % halt, 1 % of daily volume) are code constants applied last in the RiskGate
+    owner: implementer
+    severity: critical
+    due: 2026-12-04
+    source: ADR 0106 decision 2 (owner 2026-11-26); gap map lane 1; tests/test_real_money_limits.py (AST guard on the constants)
+    check: {fn: file_text, params: {patterns: ["goldbot/risk/real_money.py"], regex: "^RM_MAX_RISK_PER_TRADE: Final\\[float\\] = 0\\.01 .*\\n^RM_DAILY_STOP: Final\\[float\\] = 0\\.02 .*\\n^RM_DD_HALT: Final\\[float\\] = 0\\.15 .*\\n^RM_MAX_ADV_SHARE: Final\\[float\\] = 0\\.01 ", expect: present}}
+
+  - id: ADV-REFERENCE-XAUUSD
+    title: The reference daily volume of every live-account instrument is filled with its source and date (until then every real-money entry is refused)
+    owner: data-engineer
+    severity: high
+    due: 2026-12-04
+    source: ADR 0106 decision 2 ("order size <= about 1 % of the asset's daily volume"); config/data/adv_reference.yaml placeholder from lane 1 (XAUUSD from the COMEX GC reference)
+    check: {fn: file_text, params: {patterns: ["config/data/adv_reference.yaml"], regex: "adv_notional: null", expect: absent}}

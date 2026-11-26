@@ -1,5 +1,6 @@
 {
  "icm-depth": {
+  "adv_reference": {},
   "blackout_entries": true,
   "daily_cap": 0.02,
   "daily_loss_limit_abs": null,
@@ -40,6 +41,7 @@
   "point": 0.01,
   "probe_only": false,
   "project_open_risk": false,
+  "real_money": false,
   "reopen": {
    "after_daily_reopen_min": 10,
    "after_monday_open_min": 30,
@@ -64,12 +66,13 @@
   "weekly_cap": 0.05
  },
  "icm-live": {
+  "adv_reference": {},
   "blackout_entries": true,
-  "daily_cap": 0.25,
+  "daily_cap": 0.02,
   "daily_loss_limit_abs": 6.25,
-  "dd_stage1": 1.0,
-  "dd_stage1_clear": 1.0,
-  "dd_stage2": 1.0,
+  "dd_stage1": 0.08,
+  "dd_stage1_clear": 0.05,
+  "dd_stage2": 0.12,
   "equity_check_tolerance": 0.02,
   "equity_recovery_s": 60.0,
   "exploration_arms": {},
@@ -89,7 +92,7 @@
   "max_combined_lots": 3.0,
   "max_combined_notional_frac": 0.3,
   "max_positions": 1,
-  "max_risk_per_trade": 0.125,
+  "max_risk_per_trade": 0.01,
   "max_spread_points": 45.0,
   "max_spread_stop_frac": 0.3,
   "max_tick_ahead_s": 10.0,
@@ -102,14 +105,14 @@
   ],
   "pilot": {
    "adr": 55,
-   "daily_cap_frac": 0.25,
-   "drawdown_stages": false,
+   "daily_cap_frac": 0.02,
+   "drawdown_stages": true,
    "enabled": true,
    "leverage_cap": 500.0,
    "lot": 0.01,
    "max_entries": 30,
    "max_positions": 1,
-   "max_risk_frac": 0.125,
+   "max_risk_frac": 0.01,
    "max_risk_per_trade_abs": 3.12,
    "max_stop_usd": 4.0,
    "pilot_id": "icm-live-adr55",
@@ -124,6 +127,7 @@
   "point": 0.01,
   "probe_only": false,
   "project_open_risk": false,
+  "real_money": true,
   "reopen": {
    "after_daily_reopen_min": 10,
    "after_monday_open_min": 30,
@@ -148,6 +152,7 @@
   "weekly_cap": 0.25
  },
  "vantage-live": {
+  "adv_reference": {},
   "blackout_entries": true,
   "daily_cap": 0.02,
   "daily_loss_limit_abs": null,
@@ -188,6 +193,7 @@
   "point": 0.01,
   "probe_only": false,
   "project_open_risk": false,
+  "real_money": true,
   "reopen": {
    "after_daily_reopen_min": 10,
    "after_monday_open_min": 30,
@@ -212,6 +218,7 @@
   "weekly_cap": 0.05
  },
  "vantage-live-obs": {
+  "adv_reference": {},
   "blackout_entries": true,
   "daily_cap": 0.02,
   "daily_loss_limit_abs": null,
@@ -252,6 +259,7 @@
   "point": 0.01,
   "probe_only": false,
   "project_open_risk": false,
+  "real_money": true,
   "reopen": {
    "after_daily_reopen_min": 10,
    "after_monday_open_min": 30,

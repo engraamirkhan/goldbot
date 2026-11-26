@@ -183,3 +183,23 @@ Decided by the trading-safety reviewer under the owner's delegation. The unlock 
   - the account's stop-out level, read from the terminal.
 - **If IC Markets does not confirm it in writing, the pilot does not start.** A debt larger than the deposit is outside
   what the owner delegated.
+
+## Amendment (ADR 0106 decision 2, 2026-11-26): rails 1, 2 and 4 superseded
+- **What changed.** The owner's own real-money limits (ADR 0106 decision 2: 1 % a trade, 2 % a day then stop for the
+  day, a 15 % drawdown halt, 1 % of the daily volume) are stricter than three of the four rails this record loosened
+  for icm-live. They supersede them, with no further sign-off, because nothing loosens:
+  - rail 1, the per-trade 1 % raised to £3.12 (`max_risk_frac` up to 0.125): now at most 1 %, the round trip included;
+  - rail 2, the daily 2 % raised to £6.25 (`daily_cap_frac` up to 0.25): now at most 2 %, and latched to the risk-day
+    roll; `daily_loss_limit_abs` £6.25 still binds when smaller;
+  - rail 4, the drawdown stages off (`drawdown_stages: false`): the stages run again and the account halts at 15 % at
+    the latest.
+  Rail 3 (`leverage_cap` 500, the terminal's own leverage when lower) and every absolute term (0.01 lot, $4 stop,
+  £3.12 a trade, £6.25 a day, £25 or 30 entries, one position, 15m only) stand: each is only ever tighter.
+- **Where it is enforced.** `goldbot/risk/real_money.py` holds the four figures as code constants; the RiskGate applies
+  them after every pilot rule on a real-money account (`RiskLimits.real_money`, set by `engine_limits` for a live
+  account's real terminal). `PilotRules` refuses at load a block with `max_risk_frac` above 1 %, `daily_cap_frac`
+  above 2 % or `drawdown_stages: false`, enabled or not; config/accounts.yaml icm-live carries 0.01, 0.02 and true.
+- **Consequence.** At 1 %, the pilot's 0.01 lot with a $3.50 stop (about £2.76 with its round trip) needs about £280
+  of equity; at £50 every pilot entry is refused `rm_risk_per_trade`. The £50 pilot as written cannot trade; a pilot at
+  a larger deposit is the CFO's sizing note (minimum equity per instrument at 1 %) and stays the owner's decision with
+  the live unlock and the funding. Tests: tests/test_real_money_limits.py, tests/test_pilot_gate.py.

@@ -934,20 +934,24 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     ADR 0055 ("Option (a) for account `icm-live` only. Every other account and every default is unchanged"): a live
     account's enabled `pilot:` block (goldbot/risk/pilot.py) goes to the gate with its four changed rails, all read
     from that block: the per-trade maximum (`max_risk_frac`), the daily and weekly caps (`daily_cap_frac`,
-    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, and
-    the drawdown stages off when `drawdown_stages` is false (the pilot stop is the hard halt), plus one position.
-    Against the real terminal only."""
+    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, plus one position. Against the real terminal only.
+
+    ADR 0106 decision 2: a live account against its real terminal is `real_money` (the owner's limits of
+    goldbot/risk/real_money.py apply in the gate after everything set here) with the reference daily volumes of
+    config/data/adv_reference.yaml; the pilot's fractions are bounded by those limits at load and its drawdown
+    stages always run. Paper and demo: neither, so every demo decision is as before."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
+    from goldbot.risk.real_money import load_adv_reference
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
     pilot = acc.pilot if acc.pilot.enabled and acc.is_live and not paper else None
     if pilot is not None:
-        stages = {} if pilot.drawdown_stages else {"dd_stage1": 1.0, "dd_stage2": 1.0, "dd_stage1_clear": 1.0}
         limits = limits.model_copy(update={"pilot": pilot, "max_positions": min(limits.max_positions,
                                                                                  pilot.max_positions),
                                            "max_risk_per_trade": pilot.max_risk_frac, "daily_cap": pilot.daily_cap_frac,
                                            "weekly_cap": pilot.weekly_cap_frac,
-                                           "leverage_cap": pilot.leverage_cap, **stages})
+                                           "leverage_cap": pilot.leverage_cap})
+    money = acc.is_live and not paper
     # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
                                      "probe_only": acc.probe_only and not paper,
@@ -963,7 +967,10 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      "blackout_entries": blackout_entries(acc, paper=paper),
                                      # ADR 0097: no limits on a demo probe_only account that says so, the floor kept
                                      "demo_unlimited": demo_unlimited(acc, paper=paper),
-                                     "demo_floor": settings.risk.demo_floor})
+                                     "demo_floor": settings.risk.demo_floor,
+                                     # ADR 0106: the owner's real-money limits, a live account's real terminal only
+                                     "real_money": money,
+                                     "adv_reference": load_adv_reference() if money else {}})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

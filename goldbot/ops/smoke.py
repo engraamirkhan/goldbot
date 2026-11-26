@@ -152,6 +152,7 @@ STATE_SOURCES: dict[str, str] = {
     "group_notional": "none: an XAUUSD-only state (the lots and USD notional cap, as before)",
     "other_group_notional": "none: an XAUUSD-only state",
     "exposure_unknown": "false: an XAUUSD-only state values its book through open_lots / open_notional",
+    "rm_daily_stop": "risk_<account>.json rm_daily_stop (ADR 0106; absent = not latched)",
 }
 
 
@@ -343,6 +344,7 @@ def _risk_file(state_dir: Path, account_id: str) -> dict[str, Any]:
         return {"hwm": float(d["balance_closed_hwm"]), "day": float(d["day_start_equity"]),
                 "week": float(d["week_start_equity"]), "stage": Stage(d.get("stage", Stage.NORMAL.value)),
                 "unconfirmed": bool(d.get("stage2_pending_since")),
+                "rm_daily_stop": d.get("rm_daily_stop") is True,
                 "last_reset": pd.Timestamp(d["last_reset"]) if d.get("last_reset") else None}
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceError(f"{path.name} malformed ({type(exc).__name__})") from exc
@@ -512,7 +514,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
         terminal_account_changed=False,   # the smoke stops before this unless verify_terminal_account passed (S1)
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id), pilot=None, broker_leverage=None,
-        group_notional=None, other_group_notional=None, exposure_unknown=False,
+        group_notional=None, other_group_notional=None, exposure_unknown=False, rm_daily_stop=risk["rm_daily_stop"],
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)
