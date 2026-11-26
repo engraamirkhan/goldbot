@@ -51,10 +51,11 @@ def test_a_cell_no_pooling_can_rescue_is_infeasible_with_its_data_remedies_and_n
     assert "D-13" in plan and "2003-09" in plan and "D-12" in plan and "rule-only" in plan
 
 
-def test_supply_is_what_the_loader_keeps_b_units_are_daily_only_and_gold_waits_for_its_grade():
+def test_supply_is_what_the_loader_keeps_b_units_are_daily_only_and_gold_is_graded():
     """Quant C2."""
     cells = _cells()
     b = cells["index_energy_b/15m"]
     assert b.n_eff_judge == 0 and b.projected == "n/a: B is daily-only" and b.verdict == "SHORT"
-    assert cells["gold/15m"].projected == "UNMEASURED (D-1)"
+    g = cells["gold/15m"]                                  # graded by D-1 (r11-v2.1): measured, no projection label
+    assert g.projected == "SHORT" and "D-1" in [x.item for x in g.gaps] and g.n_eff_judge == 292
     assert cells["gold/1m"].verdict == "SHORT"
