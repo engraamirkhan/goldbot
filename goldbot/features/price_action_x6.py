@@ -60,10 +60,11 @@ LV_HALF = 0.15        # every level is an area of +- 0.15 ATR_htf (the price_act
 LV_CAP = 5.0          # distances and rooms capped at 5 ATR_htf
 LV_RETEST = 6         # break / retest state lives 6 htf bars (4h: one day)
 HTF = "4h"
-# The moment card rev 7 adopted X6 (the push that applied the #484 code review; recorded in ADR 0104's X6 amendment).
-# X6 is legitimate only if no sr-v3 label read or Stage 0/L statistic was recorded before it (card rev 7); sr-v3 rows
-# after it are the normal Stage 0 onward and never void the amendment.
-X6_ADOPTED_UTC = "2026-11-26T10:45:00+00:00"
+# The guard instant of card rev 7 (quant L2 on #484): the committer time of the merge commit that lands X6 on main, set
+# by a one-line follow-up commit immediately after merge (ISO 8601 UTC). None = not yet merged: the legitimacy test then
+# fails closed on EVERY sr-v3 row, whatever its date. sr-v3 rows dated at or after the merge time are the normal Stage 0
+# onward and never void the amendment.
+X6_MERGED_UTC: str | None = None
 
 CANDLE_COLUMNS = ("x6_body_frac", "x6_clv", "x6_io_bar")
 STRUCTURE_COLUMNS = ("x6_ms_state", "x6_ms_bos")

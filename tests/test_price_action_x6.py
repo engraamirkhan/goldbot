@@ -246,20 +246,23 @@ def _is_sr_v3(row: dict[str, Any]) -> bool:
     return any(isinstance(row.get(f), str) and SR_V3_FIELD.match(row[f]) for f in SR_V3_FIELDS)
 
 
-def _before_adoption(row: dict[str, Any]) -> bool:
-    """Dated before X6_ADOPTED_UTC; a row with no parseable `ts` counts as before (fail closed)."""
+def _before_merge(row: dict[str, Any], cut: str | None) -> bool:
+    """Dated before the guard instant `cut` (X6_MERGED_UTC). Fails closed: with no instant yet (None, not merged) every
+    row counts as before, and so does a row with no parseable `ts`."""
+    if cut is None:
+        return True
     try:
         ts = pd.Timestamp(row["ts"])
     except (KeyError, TypeError, ValueError):
         return True
     if ts.tzinfo is None:
         ts = ts.tz_localize("UTC")
-    return bool(ts < pd.Timestamp(X6.X6_ADOPTED_UTC))
+    return bool(ts < pd.Timestamp(cut))
 
 
-def _void_rows(path: Path) -> list[dict[str, Any]]:
+def _void_rows(path: Path, cut: str | None = X6.X6_MERGED_UTC) -> list[dict[str, Any]]:
     from goldbot.research import windows as WN
-    return [r for r in WN.read_ledger(path) if _is_sr_v3(r) and _before_adoption(r)]
+    return [r for r in WN.read_ledger(path) if _is_sr_v3(r) and _before_merge(r, cut)]
 
 
 def _ledgers() -> list[Path]:
@@ -275,17 +278,18 @@ def _ledgers() -> list[Path]:
     return out
 
 
-def test_no_sr_v3_label_read_existed_when_x6_was_adopted() -> None:
-    """Card rev 7: X6 is legitimate only if no sr-v3 label value or Stage 0/L statistic existed when it was adopted
-    (X6_ADOPTED_UTC, ADR 0104 X6 amendment): no sr-v3 row of the dl-v1 consumption ledger or the read-once ledger is
-    dated before it. Later sr-v3 rows (Stage 0 onward) pass. A missing ledger (CI) holds no row."""
+def test_no_sr_v3_label_read_existed_when_x6_merged() -> None:
+    """Card rev 7 (quant L2 on #484): no sr-v3 row of the dl-v1 consumption ledger or the read-once ledger is dated
+    before X6_MERGED_UTC (ADR 0104 X6 amendment), or has no parseable ts; before the merge instant is set (None), no
+    sr-v3 row may exist at all. Later sr-v3 rows (Stage 0 onward) pass. A missing ledger (CI) holds no row."""
     for p in _ledgers():
         rows = _void_rows(p)
-        assert not rows, f"{p}: {len(rows)} sr-v3 rows dated before X6 was adopted: the X6 amendment is void"
+        assert not rows, f"{p}: {len(rows)} sr-v3 rows dated before X6 merged (or X6_MERGED_UTC unset): X6 is void"
 
 
 def test_the_legitimacy_guard_fails_on_an_earlier_row_and_passes_a_later_one(tmp_path: Path) -> None:
-    t0 = pd.Timestamp(X6.X6_ADOPTED_UTC)
+    cut = "2026-11-26T12:00:00+00:00"
+    t0 = pd.Timestamp(cut)
     rows = [
         {"type": "consumption", "id": "sr-v3/gold/1m/stage0", "columns": [], "ts": (t0 - pd.Timedelta("1s")).isoformat()},
         {"family": "self_retrain_v3", "window": "learn", "key": "sr-v3/gold/15m/stage0",
@@ -297,8 +301,16 @@ def test_the_legitimacy_guard_fails_on_an_earlier_row_and_passes_a_later_one(tmp
     ]
     p = tmp_path / "window_reads.jsonl"
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    void = _void_rows(p)
+    void = _void_rows(p, cut)
     assert [r.get("id") or r.get("key") for r in void] == ["sr-v3/gold/1m/stage0", "sr_v3:gold"]
     later = tmp_path / "later.jsonl"
     later.write_text(json.dumps(rows[1]) + "\n")
-    assert _void_rows(later) == []
+    assert _void_rows(later, cut) == []
+    # not yet merged (None): fails closed on every sr-v3 row, the later one included; never on a non-sr-v3 row
+    assert [r.get("id") or r.get("key") for r in _void_rows(p, None)] == [
+        "sr-v3/gold/1m/stage0", "sr-v3/gold/15m/stage0", "sr_v3:gold"]
+
+
+def test_the_merge_instant_is_unset_or_an_iso_utc_time() -> None:
+    v = X6.X6_MERGED_UTC
+    assert v is None or pd.Timestamp(v).tzinfo is not None
