@@ -7,6 +7,7 @@ headers, so the same inputs give the same sha256.
 from __future__ import annotations
 
 import io
+import os
 import warnings
 
 import numpy as np
@@ -47,6 +48,7 @@ def tiny_mlp(spec: BuildSpec) -> bytes:
 
 
 def drifting(spec: BuildSpec) -> bytes:
-    """A builder whose output changes on every call: the rebuild must report the mismatch."""
-    drifting.calls = getattr(drifting, "calls", 0) + 1     # type: ignore[attr-defined]
-    return f"call {drifting.calls}".encode()                # type: ignore[attr-defined]
+    """A builder whose output changes on every call, in any process: the rebuild must report the mismatch. (A
+    per-process call counter gave `call 1` both in the test and in the rebuild subprocess when the test ran first in
+    its worker, so the 'mismatch' matched; CI issue #498.)"""
+    return os.urandom(16)
