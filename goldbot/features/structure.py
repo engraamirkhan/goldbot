@@ -143,7 +143,7 @@ def f_swings(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out.frame()
 
 
-@feature("gaps", "structure", lookback=20, signed={"gap_atr": 0.0, "last_gap_level_dist_atr": 0.0})
+@feature("gaps", "structure", lookback=63, signed={"gap_atr": 0.0, "last_gap_level_dist_atr": 0.0})
 def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Gaps between consecutive bars (session break / weekend / news) in ATR, and whether filled."""
     a = atr(df, 14)
