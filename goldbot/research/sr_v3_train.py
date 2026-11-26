@@ -50,6 +50,7 @@ from goldbot.data.daily import session_date
 from goldbot.research import decision_cost as DC
 from goldbot.research import diagnostics as G
 from goldbot.research import learners as L
+from goldbot.research import model_quality as MQ
 from goldbot.research import objective as O
 from goldbot.research import sr_v3 as V
 from goldbot.research import windows as WN
@@ -59,7 +60,10 @@ log = logging.getLogger("goldbot.sr_v3_train")
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path.home() / "tmp" / "sr-v3"                 # market-derived outputs stay local (ADR 0048)
 MAX_TREE_ROWS = 2_000_000
-SEEDS: tuple[int, ...] = tuple(V.SEED_CANARY + i for i in range(5))      # ADR 0106: >= 5 seeds
+# ADR 0106 ">= 5 seeds", fixed before the first fit by the run's manifest key (quant Q1 on #494, ADR 0109): every
+# unit and learner of the v0 run fits with these seeds and every manifest records the same key
+MANIFEST_KEY = "sr-v3:v0"
+SEEDS: tuple[int, ...] = tuple(MQ.seed_list(MANIFEST_KEY))
 CANARY_DELTAS: tuple[float, ...] = (0.03, 0.05, 0.10)
 
 
@@ -321,7 +325,8 @@ class Collected:
     sample: pd.DataFrame
     pi: float
     n_rows: int
-    train_end: pd.Timestamp | None = None    # the last label instant v0 trains on (run manifest train_end)
+    train_end: pd.Timestamp | None = None    # the last decision instant v0 trains on (run manifest train_end)
+    label_end_max: pd.Timestamp | None = None    # the latest label horizon end among v0's rows (manifest, quant Q4)
 
 
 def _years(data: UnitData, plan: UnitPlan, years: Sequence[int], phases: Sequence[int]) -> Iterator[pd.DataFrame]:
@@ -353,12 +358,13 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
     hb_idx = [V.P30.index(c) for c in HB_COLUMNS]
     samples = []
     n_rows = 0
-    last = 0
+    last = last_dec = 0
     for f in _years(data, plan, V.LEARN_YEARS, phases):
         n_rows += len(f)
         v0m = train_mask(f, V.LEARN_YEARS[-1] + 1)
         if v0m.any():
             last = max(last, int(_ns(f["horizon_end_utc"])[v0m].max()))
+            last_dec = max(last_dec, int(_ns(f["decision_utc"])[v0m].max()))
         zero = np.zeros(len(f))
         full = _td(f, V.P30, zero, design_effect=plan.design_effect)
         for Y in folds:
@@ -383,7 +389,8 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
         samples.append(f[keep].assign(w=f["w"].to_numpy(float)[keep] / pi))
     sample = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame(columns=list(ROW_COLS))
     return Collected(impute=impute, impute_lcw=impute_lcw, lcw=lcw, hb=hb, priors=pri, sample=sample, pi=pi, n_rows=n_rows,
-                     train_end=pd.Timestamp(last, tz="UTC") if last else None)
+                     train_end=pd.Timestamp(last_dec, tz="UTC") if last_dec else None,
+                     label_end_max=pd.Timestamp(last, tz="UTC") if last else None)
 
 
 def hb_fit(moms: Mapping[tuple[str, str], L.Moments], impute: Mapping[tuple[str, str], np.ndarray],
@@ -694,7 +701,6 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                     "auc_in_band": bool(abs(auc - 0.5) <= 4 * se) if np.isfinite(auc) else True,
                     "passed": bool(float((k & ~k0).mean()) <= G.MAX_FALSE_KEEP or int(k.sum()) < V.MIN_KEPT)}
     out["shuffle"] = sh
-    from goldbot.research import model_quality as MQ
 
     def net_mean(k: np.ndarray) -> float:
         return float((O.clip_r(te["gross"].to_numpy(float) - cost_of(te, pri)) * k).mean())
@@ -714,9 +720,10 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                                    shift={k: float(pt[k]) / float(gb[k]) for k in gb}))
     # ADR 0106 "stays profitable when parameters are shifted slightly": model_quality's +-10 % / +-20 % grid, one
     # parameter at a time, net mean after cost on the last fold (HB here is its own rung: λ0 and λ_c play λ, λ_a)
-    out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw")).model_dump(mode="json"),
-                              "HB": MQ.param_shift(lin, ev_lin("HB")).model_dump(mode="json"),
-                              "G-cw": MQ.param_shift(gb, ev_g).model_dump(mode="json")}
+    rk = rows_key(te)
+    out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw"), rows=rk).model_dump(mode="json"),
+                              "HB": MQ.param_shift(lin, ev_lin("HB"), rows=rk).model_dump(mode="json"),
+                              "G-cw": MQ.param_shift(gb, ev_g, rows=rk).model_dump(mode="json")}
     out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < 0.9].reset_index(drop=True), te, plan,
                                                 pri, col.impute, seed=sd), pri) for sd in seeds]}
     curve = []
@@ -766,7 +773,16 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
              seeds: Sequence[int] = SEEDS, col: Collected | None = None, harness_rows: int = 200_000,
              with_harness: bool = True) -> UnitResult:
     """Walk-forward fit, OOF scoring, v0 artifacts and the report for one unit (see the module docstring). The run is
-    recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here."""
+    recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here. Fits on one BLAS/OpenMP thread, as
+    `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit and so the artifact sha."""
+    from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
+    with threadpool_limits(limits=1):
+        return _fit_unit(data, plan, hb_by_fold=hb_by_fold, seeds=seeds, col=col, harness_rows=harness_rows,
+                         with_harness=with_harness)
+
+
+def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
+              seeds: Sequence[int], col: Collected | None, harness_rows: int, with_harness: bool) -> UnitResult:
     col = col or collect(data, plan, seed=seeds[0])
     dense_by_year: dict[int, L.DenseArtifact] = {}
     oof_parts: list[pd.DataFrame] = []
@@ -810,6 +826,7 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
     report["train_end"] = str(col.train_end)
+    report["label_end_max"] = str(col.label_end_max)
     return UnitResult(report=report, artifacts=arts, oof=oof)
 
 
@@ -921,11 +938,19 @@ def row_edge(oof: pd.DataFrame, kind: str, col: str) -> np.ndarray:
     return oof["net"].to_numpy(float) * k
 
 
+def rows_key(f: pd.DataFrame) -> str:
+    """model_quality.rows_key of a read's rows: instrument, tf, phase (0 when the frame has none), decision instant
+    and side, in row order."""
+    phase = f["phase"].astype(str) if "phase" in f else pd.Series("0", index=f.index)
+    keys = (f["instrument"].astype(str) + "|" + f["tf"].astype(str) + "|" + phase + "|"
+            + pd.Series(_ns(f["decision_utc"]), index=f.index).astype(str) + "|" + f["side"].astype(str))
+    return MQ.rows_key(list(keys))
+
+
 def seed_verdicts(oof: pd.DataFrame, seeds: Sequence[int]) -> dict[str, Any]:
     """ADR 0106 "results stable across at least 5 random seeds" (model_quality.seed_stability): per learner, the mean
     net R per OOF row for each seed. L-cw and HB are closed forms: every seed gives the same edge, and the verdict
     records that (detail.seed_invariant)."""
-    from goldbot.research import model_quality as MQ
     out: dict[str, Any] = {}
     if not len(oof):
         return out
@@ -937,7 +962,7 @@ def seed_verdicts(oof: pd.DataFrame, seeds: Sequence[int]) -> dict[str, Any]:
         if len(cols) != len(seeds):
             continue
         edges = {sd: float(row_edge(oof, kind, c).mean()) for sd, c in cols.items()}
-        v = MQ.seed_stability(edges)
+        v = MQ.seed_stability(edges, rows=rows_key(oof))
         out[name] = v.model_copy(update={"detail": {**v.detail, "seed_invariant": bool(np.ptp(list(edges.values()))
                                                                                        == 0)}})
     return out
@@ -1025,41 +1050,31 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
                 data_version: str, data_root: Path, data_files: Sequence[str], hb_plans: Sequence[UnitPlan],
                 root: Path, repo: Path = ROOT) -> dict[str, Any]:
     """Record every v0 artifact with research/run_manifest.py (ADR 0106 decision 7, ADR 0109): data version and file
-    shas, settings, seeds, code sha, train end, the builder, results and the quality verdicts. G-cw first: every other
-    learner's `beats_baseline` names the GBT manifest (ADR 0106 decision 3, reported for families F and G too)."""
-    from goldbot.research import model_quality as MQ
+    shas, settings, the manifest key and its seeds, code sha, train end and label end, the folds, the builder, results
+    and the quality verdicts (seed_stability on the OOF rows, param_shift on the last fold's sample). The v0 artifact
+    is seed index 0 (`served="seed0"`). No `beats_baseline` verdict is written here: it needs a registry trial (K +1)
+    and is read at promotion, never by the trainer (the trial budget is not the trainer's to spend); the report's
+    paired D against G-cw stays diagnostic."""
     from goldbot.research import run_manifest as RM
-    oof = res.oof
-    verdicts = seed_verdicts(oof, seeds)
+    verdicts = seed_verdicts(res.oof, seeds)
     shift = (res.report.get("harness") or {}).get("parameter_shift") or {}
     shas = {f: RM.file_sha256(Path(data_root) / f) for f in data_files}
-    end = pd.Timestamp(res.report.get("train_end") or WN.SPANS[WN.Window.LEARN][1])
-    order = ["G-cw", *[k for k in res.artifacts if k != "G-cw"]]
+    learn_end = WN.SPANS[WN.Window.LEARN][1]
+    end = pd.Timestamp(res.report.get("train_end") or learn_end)
+    label_end = pd.Timestamp(res.report.get("label_end_max") or learn_end)
+    folds = [f"oof:{y}" for y in plan.oof_years] + [f"v0:{V.LEARN_YEARS[0]}-{V.LEARN_YEARS[-1]}"]
     out: dict[str, Any] = {}
-    gbt_id: str | None = None
-    for name in order:
-        if name not in res.artifacts:
-            continue
-        q: list[Any] = []
-        if name in verdicts:
-            q.append(verdicts[name])
+    for name in res.artifacts:
+        q = [v for v in (verdicts.get(name),) if v is not None]
         if name in shift:
             q.append(MQ.QualityVerdict.model_validate(shift[name]))
-        if gbt_id is not None and name in BUILT and f"v_{name}" in oof:
-            ok = oof[f"v_{name}"].notna() & oof["v_G-cw"].notna()
-            o = oof[ok].reset_index(drop=True)
-            kind = L.LEARNERS[name].kind or "gross"
-            q.append(MQ.beats_baseline(pd.Series(row_edge(o, kind, f"v_{name}")), pd.Series(row_edge(o, "p", "v_G-cw")),
-                                       o["day"].astype(str), baseline_manifest_id=gbt_id))
-        m = RM.record(model=f"sr-v3:{plan.unit}:{name}", family=FAMILY[name],  # type: ignore[arg-type]
-                      artifact=res.artifacts[name].encode(), data_version=data_version,
-                      settings=run_settings(plan, name, source, hb_plans), seeds=seeds, train_end=end,
-                      scaler_fit_end=end, data_files=shas, builder=BUILDER,
-                      results=(res.report.get("learners", {}).get(name) or {}).get("read", {}), quality=q,
-                      spec_id=V.SPEC_VERSION, root=root, repo=repo)
-        out[name] = m
-        if name == "G-cw":
-            gbt_id = m.manifest_id
+        out[name] = RM.record(model=f"sr-v3:{plan.unit}:{name}", family=FAMILY[name],  # type: ignore[arg-type]
+                              artifact=res.artifacts[name].encode(), data_version=data_version,
+                              settings=run_settings(plan, name, source, hb_plans), manifest_key=MANIFEST_KEY,
+                              served="seed0", seeds=seeds, unit=plan.unit, fold_keys=folds, train_end=end,
+                              scaler_fit_end=end, label_end_max=label_end, data_files=shas, builder=BUILDER,
+                              results=(res.report.get("learners", {}).get(name) or {}).get("read", {}), quality=q,
+                              spec_id=V.SPEC_VERSION, root=root, repo=repo)
     return out
 
 # ---------------------------------------------------------------------------------------------- the stores

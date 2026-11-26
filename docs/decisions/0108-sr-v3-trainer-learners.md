@@ -44,11 +44,17 @@ read.
    sr-v3 is not in GATE_SPECS. The hook needs are listed in `sr_v3_serve.ENGINE_HOOK_NEEDS` for the trading-safety
    PR (card M2).
 7. **Run record.** There is no trainer-owned run log. `record_unit` writes one research/run_manifest.py manifest
-   (PR #494, ADR 0109) per v0 artifact. Each carries model_quality verdicts:
-   - seed_stability over 5 seeds (L-cw and HB are closed forms and are marked seed-invariant);
-   - param_shift on the ±10 % / ±20 % grid;
-   - beats_baseline against the G-cw manifest.
-   The builder is `sr_v3_train.build_artifact`, so `run_manifest.rebuild` refits any model byte for byte.
+   (PR #494, ADR 0109) per v0 artifact, under manifest key `sr-v3:v0`: the fit seeds are `seed_list("sr-v3:v0")`
+   (5 seeds, fixed before the first fit, quant Q1 on #494), the v0 artifact is seed index 0 (`served="seed0"`), with
+   the unit, the folds, `train_end` (last decision) and `label_end_max` (last label end). Quality verdicts:
+   - seed_stability over the 5 seeds on the OOF rows (L-cw and HB are closed forms and are marked seed-invariant);
+   - param_shift on the ±10 % / ±20 % grid, on the last fold's sample (a full-OOF grid would refit every fold 12
+     times per learner), so its rows_key differs from seed_stability's;
+   - no beats_baseline: it books a registry trial (K +1), so it is read at promotion and never by the trainer. The
+     report's paired D against G-cw stays diagnostic. A manifest is therefore not servable under ADR 0109 until the
+     promotion read adds a beats_baseline on one row set (for the quant to rule on: param_shift on the same rows).
+   The builder is `sr_v3_train.build_artifact`, so `run_manifest.rebuild` refits any model byte for byte; fits run on
+   one BLAS/OpenMP thread, as the rebuild does.
 8. **Core-12** follows the quant ruling of 2026-11-26: rv_ratio is position 4 and atr_ratio_14_100 moves to the rest
    of P30. The D-12a file has no ρ_x for rv_ratio, so the ladder charges it at ρ_x = 1 until the data team measures it.
 9. **Refusals.** Labels are read only through `load_labels` on the learn window, with procedure `sr-v3` so every

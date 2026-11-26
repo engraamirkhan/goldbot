@@ -47,6 +47,8 @@ def tiny_mlp(spec: BuildSpec) -> bytes:
 
 
 def drifting(spec: BuildSpec) -> bytes:
-    """A builder whose output changes on every call: the rebuild must report the mismatch."""
+    """A builder whose output changes on every call, in this process and in any other (the rebuild script runs in a
+    child, whose call counter starts again at 1): the rebuild must report the mismatch."""
+    import os
     drifting.calls = getattr(drifting, "calls", 0) + 1     # type: ignore[attr-defined]
-    return f"call {drifting.calls}".encode()                # type: ignore[attr-defined]
+    return f"pid {os.getpid()} call {drifting.calls}".encode()   # type: ignore[attr-defined]

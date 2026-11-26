@@ -274,12 +274,14 @@ def test_every_v0_artifact_is_recorded_with_its_quality_and_rebuilds_byte_exactl
         "frames_sha256"], data_root=tmp_path, data_files=[frames.name], hb_plans=[plan], root=tmp_path / "manifests")
     assert set(mans) == set(res.artifacts)
     g = mans["G-cw"]
-    assert g.family == "C" and g.builder == T.BUILDER and len(g.seeds) == 5 and g.data_files[frames.name]
+    assert g.family == "C" and g.builder == T.BUILDER and g.data_files[frames.name]
+    assert g.manifest_key == T.MANIFEST_KEY and g.seeds == list(T.SEEDS) and len(g.seeds) == 5 and g.served == "seed0"
+    assert g.unit == plan.unit and g.fold_keys[-1] == "v0:2010-2017"
     assert {q.check for q in g.quality} == {"seed_stability", "param_shift"}
-    for name in ("L-cw", "HB", "AVG"):
-        bb = [q for q in mans[name].quality if q.check == "beats_baseline"]
-        assert bb and bb[0].detail["baseline_manifest_id"] == g.manifest_id
-    assert mans["L-cw"].train_end <= pd.Timestamp("2018-01-01", tz="UTC")
+    # beats_baseline books a registry trial (K +1): it is read at promotion, never by the trainer
+    assert not [q for m in mans.values() for q in m.quality if q.check == "beats_baseline"]
+    lcw = mans["L-cw"]
+    assert lcw.train_end <= lcw.label_end_max <= pd.Timestamp("2018-01-01", tz="UTC")
     assert RM.load(g.manifest_id, tmp_path / "manifests") == g
     spec = RM.BuildSpec(data_files={frames.name: str(frames)}, settings=g.settings, seeds=g.seeds,
                         train_end=g.train_end, scaler_fit_end=g.scaler_fit_end)
