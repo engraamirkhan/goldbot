@@ -59,6 +59,7 @@ from goldbot.engine import (
     key_zones,
     order_send,
     pilot,
+    risk_state,
     shadow_replay,
     shadow_scoring,
     state_heartbeat,
@@ -2506,53 +2507,13 @@ class Engine:
         return risk_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _save_risk_state(self) -> None:
-        st = self.state
-        self.state_store.save_risk(RiskSnapshot(
-            last_reset=self._last_reset, day_start_equity=st.day_start_equity, week_start_equity=st.week_start_equity,
-            balance_closed_hwm=st.balance_closed_hwm, stage=Stage(st.stage), rearm_seen=self._rearm_seen,
-            weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
-            rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
-            stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
-            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc,
-            rm_daily_stop=st.rm_daily_stop))
+        risk_state.save(self)
 
     def _save_risk_state_now(self, what: str) -> bool:
-        """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
-        in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
-        disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
-        logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
-        (`_write_state`) saves the risk state again. True when saved."""
-        try:
-            self._save_risk_state()
-        except Exception as exc:
-            log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
-                      "state write", what, type(exc).__name__)
-            self.note_tick_error(exc)
-            return False
-        return True
+        return risk_state.save_now(self, what)
 
     def _load_risk_state(self) -> None:
-        self._kill_everything = False
-        snap = self.state_store.load_risk()       # unreadable -> raises: fail loudly rather than forget a drawdown halt
-        if snap is None:
-            # first start: an earlier re-arm on the bus is not a re-arm of this engine
-            self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
-            return
-        st = self.state
-        self._last_reset = snap.last_reset
-        st.day_start_equity = snap.day_start_equity
-        st.week_start_equity = snap.week_start_equity
-        st.balance_closed_hwm = snap.balance_closed_hwm
-        st.stage = snap.stage
-        self._rearm_seen, self._weekend_done = snap.rearm_seen, snap.weekend_done
-        self._halted_at = snap.halted_at
-        self._propose_only_until = snap.propose_only_until
-        self._rearm_refused = snap.rearm_refused
-        self._stage2_pending_since = snap.stage2_pending_since
-        self._kill_everything = snap.kill_everything
-        self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
-        self._epoch, self._epoch_utc = snap.epoch, snap.epoch_utc
-        st.rm_daily_stop = self._rm_daily_stop_saved = snap.rm_daily_stop   # ADR 0106: held to the roll across a restart
+        risk_state.load(self)
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
