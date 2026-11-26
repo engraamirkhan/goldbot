@@ -14,12 +14,13 @@ units:
     method: dense-skeleton          # one method per cell, learn and judge (quant A3 on PR #482)
     # learn: D-5 measured supply (ADR 0085 A4 recorded the served tiers sha 2026-11-26): T2 n_eff after tier survival
     # for the core-12 level-order prefix (L2, >= the 10-input block), from `measured.learn_T2_core12`. 2h is null: no
-    # bar rule (TF-2h), not measurable (quant A2). Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736,
+    # bar rule (TF-2h), not measurable (quant A2). Card rev 8 (rv_ratio at core-12 position 4) re-ran it once on the
+    # same skeleton: was [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0] with atr_ratio_14_100. Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736,
     # 295, 175, 88].
     # judge: the same measured skeleton T2 n_eff (core-12, tiers ff653ea7) on the confirm window 2018-01..2025-09
     # (quant A3: C-1 governs label values, not skeleton counts). null until that count lands; never the card-method
     # day count, which would mix methods in one cell (was [527, 392, 292, 193, 149, 74, 30, 15, 7]).
-    learn: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+    learn: [5232, 3901, 2802, 1786, 1233, null, 187, 0, 0]
     judge: null
     items: [D-1, D-2, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
@@ -30,11 +31,11 @@ units:
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_T2_core6: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
-      learn_T2_core12: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+      learn_T2_core6: [5232, 3901, 2802, 1786, 1233, null, 187, 0, 0]
+      learn_T2_core12: [5232, 3901, 2802, 1786, 1233, null, 187, 0, 0]
       learn_T2_P30: [2151, 1617, 1222, 831, 660, null, 123, 0, 0]
       learn_untiered: [7338, 5523, 4179, 2851, 2271, null, 604, 298, 208]
-      test_old_T2_core6: [157, 104, 56, 13, 0, null, 0, 0, 0]
+      test_old_T2_core6: [159, 109, 70, 33, 3, null, 0, 0, 0]
       test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
@@ -47,11 +48,12 @@ units:
     items: [D-2, D-3, D-4, D-5fx]
     # D-5 measured (dl-v1, ADR 0104 4): EURUSD alone, same method, tiers and column sets as gold. Bid-only: barrier
     # labels need N7 before a judged read.
+    # core-6 / core-12 rows re-run once under card rev 8 (rv_ratio at position 4) on the same skeleton.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_T2_core6: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
-      EURUSD_learn_T2_core12: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
+      EURUSD_learn_T2_core6: [6997, 5259, 3937, 2649, 2041, null, 468, 93, 0]
+      EURUSD_learn_T2_core12: [6997, 5259, 3937, 2649, 2041, null, 468, 93, 0]
       EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, null, 422, 35, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:

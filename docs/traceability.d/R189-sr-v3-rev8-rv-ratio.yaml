@@ -1,0 +1,5 @@
+id: R189
+requirement: 'sr-v3 card rev 8 (quant ruling 2026-11-26, label-blind, before any sr-v3 label read): core-12 position 4 is rv_ratio (replaces atr_ratio_14_100, which moves to the rest of P30); the same order at every tf; K 0; the outcome-blind counts are re-run once and taken as they come. Second of the two merge times behind X6_MERGED_UTC (quant sequencing on #482)'
+status: in review
+code: goldbot/research/dense_labels.py CORE12 (COLUMN_SETS core-6, core-12); docs/research/prereg-2026-11-26-sr-v3.md (rev 8, 3.1); config/data/sufficiency.yaml gold measured
+test: tests/research/test_dense_labels.py::test_core_12_position_4_is_rv_ratio_and_atr_ratio_14_100_stays_in_p30_after_rev_8

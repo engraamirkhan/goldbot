@@ -6,7 +6,7 @@
    "cell": "gold/1m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5232,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -70,11 +70,11 @@
    "cell": "gold/5m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3901,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 8,
+   "max_inputs": 9,
    "gaps": [
     {
      "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
@@ -117,8 +117,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 3,846 < 4,300 for a 10-input block (max 8 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,692) and the per-cell input cap to the card",
+     "gap": "learn n_eff 3,901 < 4,300 for a 10-input block (max 9 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,802) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -142,7 +142,7 @@
    "cell": "gold/15m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2802,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -189,8 +189,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 2,707 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,414) and the per-cell input cap to the card",
+     "gap": "learn n_eff 2,802 < 4,300 for a 10-input block (max 6 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,604) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -214,11 +214,11 @@
    "cell": "gold/30m",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1786,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 3,
+   "max_inputs": 4,
    "gaps": [
     {
      "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
@@ -261,8 +261,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 3,286 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
+     "gap": "no pooling reaches 4,300 (bound 3,572 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
@@ -286,7 +286,7 @@
    "cell": "gold/1h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1233,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -333,7 +333,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 2,134 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 2,466 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -430,7 +430,7 @@
    "cell": "gold/4h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 123,
+   "n_eff_learn": 187,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -477,7 +477,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 246 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 374 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
