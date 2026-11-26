@@ -83,6 +83,16 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        passes, and one bar less fails on some seed.
      - `tests/test_feature_lookback_ewm.py` keeps the feature-level lookbacks at or above their 1 %-weight EWM
        horizon.
+     - **Amendment 2026-11-26 (sr-v3 rev 7, block X6; before any label read).** A column with bounded memory by
+       construction (no EWM, no carried state: `goldbot/features/price_action_x6.py`) declares its **structural**
+       bound (`price_action_x6.structural_lookback`), not the 8-seed fixture minimum, which is lower on a random
+       walk (pivots are dense) than what a sparse-pivot trend reads. For these columns:
+       - the truncation half of the check holds at the declared value (`column_lookback.passes`);
+       - the value at T built from only the last L bars equals the full-history value exactly
+         (`tests/test_price_action_x6.py`);
+       - the tightness half does not apply. Over-declaring costs warm-up and embargo, never a leaked bar.
+       `column_lookback` gains an optional fixture length `n` (default 4,000, unchanged for fs-v1), because the X6
+       level columns read up to 8,640 bars at 1m.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
