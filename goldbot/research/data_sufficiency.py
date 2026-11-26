@@ -16,7 +16,7 @@ SHORT with the gaps, plans and dates. `max_inputs` = learn n_eff / 430 is report
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from statistics import NormalDist
 from typing import Any, Literal
 
@@ -172,5 +172,247 @@ def certificates(cfg: dict[str, Any]) -> list[Certificate]:
     return out
 
 
-__all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "Certificate", "Gap", "Requirement", "certificates",
-           "certify", "power_n", "r2_from_auc"]
+# --------------------------------------------------------------------------------------------- consumers and routes
+# Owner directive 2026-11-26: the data team provides the data every model needs (organic, pooled, synthetic or other)
+# and never concludes "not enough data". Each consumer states its own requirement; each route that can close a short
+# cell states its COUNTED n_eff gain per cell and its effort, and routes are ranked by counted n_eff per day of work.
+RouteKind = Literal["organic", "pooled", "synthetic", "other"]
+# aug-v1 (SYNTH-ml R10, ml-8): synthetic, bootstrap and augmented rows count 0 toward n_eff, power and every gate;
+# offset (phase) rows count through uniqueness only, which card 2.2 already does (phase rows add no n_eff).
+SYNTHETIC_COUNTS_ZERO = True
+
+
+class Consumer(FrozenRecord):
+    """One model consumer of the data, with the requirement its card or plan states."""
+    id: str
+    label: str
+    inputs: int                                # Riley 430 n_eff per input on the learn window
+    keep_share: float = 0.33                   # A22 power row of the judged read
+    tfs: tuple[str, ...]                       # the timeframes it is judged (or trained) at
+    forward_only: bool = False                 # judged on forward rows only (agg-v1): history counts do not serve it
+    forward_n_eff: int | None = None           # its own forward requirement per cell
+    source: str
+
+    def n_train(self) -> int:
+        return RILEY_PER_PARAM * self.inputs
+
+    def n_judge(self) -> int:
+        return POWER_N_EFF[self.keep_share]
+
+
+class Route(FrozenRecord):
+    """A way to close short cells. `gain` = COUNTED n_eff added per cell ("unit/tf" -> n_eff, card 2.2 method, learn
+    window unless the key ends in ":judge"); a route whose rows never count (synthetic) carries 0 and says what it adds
+    for training in `training_gain`."""
+    id: str
+    kind: RouteKind
+    title: str
+    gain: dict[str, int]
+    training_gain: str = ""
+    effort_days: float
+    signoff: str = ""                          # who signs before use (quant for every synthetic route)
+    p_deliver: float = 1.0                     # the data team's probability the gain lands as stated (ranking only)
+    basis: Literal["measured", "projected"] = "projected"
+    owner: str
+    due: str
+    status: str
+    pr: str = ""
+
+    def counted(self) -> int:
+        return int(sum(self.gain.values()))
+
+    def per_day(self) -> float:
+        """Expected counted n_eff per day of work: counted x p_deliver / effort_days (the ranking key)."""
+        return self.counted() * self.p_deliver / self.effort_days
+
+
+def check_route(r: Route) -> Route:
+    """The aug-v1 rules as code: a synthetic route counts 0 n_eff and names the quant's sign-off; every route has a
+    positive effort, an owner and a date."""
+    if r.effort_days <= 0:
+        raise ValueError(f"{r.id}: effort_days must be > 0")
+    if not 0 < r.p_deliver <= 1:
+        raise ValueError(f"{r.id}: p_deliver must be in (0, 1]")
+    if not (r.owner and r.due):
+        raise ValueError(f"{r.id}: a route needs an owner and a date")
+    if r.kind == "synthetic":
+        if SYNTHETIC_COUNTS_ZERO and any(v != 0 for v in r.gain.values()):
+            raise ValueError(f"{r.id}: synthetic rows count 0 toward n_eff, power and gates (aug-v1 R10)")
+        if "quant" not in r.signoff:
+            raise ValueError(f"{r.id}: every synthetic route is signed by the quant before use")
+    return r
+
+
+def rank_routes(routes: Sequence[Route]) -> list[Route]:
+    """Expected counted n_eff per day of work, highest first; ties by the earlier due date, then id."""
+    return sorted((check_route(r) for r in routes), key=lambda r: (-r.per_day(), r.due, r.id))
+
+
+def pooled_supply(members: Sequence[Sequence[int | None]], rho_inst: float) -> list[int | None]:
+    """Card 2.2 pooling of per-instrument n_eff rows (same tf order): sum / (1 + (k - 1) rho_inst), k = the members
+    with rows at that tf. None where no member is counted."""
+    out: list[int | None] = []
+    for col in zip(*members, strict=True):
+        vals = [int(v) for v in col if v]
+        out.append(None if not vals else int(sum(vals) / (1 + (len(vals) - 1) * rho_inst)))
+    return out
+
+
+# card 2.2 holds (scripts/research/sufficiency_counts.py, solved from the card's gold row): minutes below a day
+CARD_HOLD_MIN = {"1m": 60, "5m": 240, "15m": 480, "30m": 960, "1h": 1380}
+CARD_HOLD_DAYS = {"2h": 2, "4h": 5, "1d": 10, "1w": 20}
+CARD_RHO_DAY = 0.25
+
+
+def card_per_day(tf: str) -> float:
+    """n_eff per graded session day of one instrument by the card 2.2 method."""
+    if tf in CARD_HOLD_MIN:
+        u = 1380 / CARD_HOLD_MIN[tf]
+        return u / (1 + (u - 1) * CARD_RHO_DAY)
+    return 1 / CARD_HOLD_DAYS[tf]
+
+
+class ConsumerCell(FrozenRecord):
+    consumer: str
+    cell: str                                  # unit/tf
+    n_eff_learn: int | None
+    n_eff_judge: int | None
+    need_train: int
+    need_judge: int
+    short_learn: int                           # 0 when met
+    short_judge: int
+    status: Literal["MEETS", "SHORT", "FORWARD"]
+    routes: tuple[str, ...]                    # routes with a counted gain on this cell, ranked
+
+
+def consumer_cells(consumers: Sequence[Consumer], supply: Mapping[str, Mapping[str, tuple[int | None, int | None]]],
+                   routes: Sequence[Route]) -> list[ConsumerCell]:
+    """Every consumer x unit x tf it uses. `supply`: unit -> tf -> (learn, judge). A SHORT cell lists the ranked
+    routes that add counted n_eff to it; a cell with no such route raises (the owner rule: a gap always has a plan)."""
+    ranked = rank_routes(routes)
+    out = []
+    for c in consumers:
+        for unit, by_tf in supply.items():
+            for tf in c.tfs:
+                if tf not in by_tf:
+                    continue
+                learn, judge = by_tf[tf]
+                cell = f"{unit}/{tf}"
+                rs = tuple(r.id for r in ranked if r.gain.get(cell, 0) > 0 or r.gain.get(f"{cell}:judge", 0) > 0)
+                if c.forward_only:
+                    out.append(ConsumerCell(consumer=c.id, cell=cell, n_eff_learn=learn, n_eff_judge=judge,
+                                            need_train=c.n_train(), need_judge=c.forward_n_eff or c.n_judge(),
+                                            short_learn=0, short_judge=0, status="FORWARD", routes=rs))
+                    continue
+                sl = max(0, c.n_train() - (learn or 0))
+                sj = max(0, c.n_judge() - (judge or 0))
+                status: Literal["MEETS", "SHORT"] = "SHORT" if sl or sj else "MEETS"
+                if status == "SHORT" and not rs:
+                    raise ValueError(f"{c.id} {cell}: SHORT with no route (the gap needs a plan and a date)")
+                out.append(ConsumerCell(consumer=c.id, cell=cell, n_eff_learn=learn, n_eff_judge=judge,
+                                        need_train=c.n_train(), need_judge=c.n_judge(), short_learn=sl,
+                                        short_judge=sj, status=status, routes=rs))
+    return out
+
+
+def _measured_learn(u: dict[str, Any]) -> list[int | None] | None:
+    m = u.get("measured") or {}
+    row = m.get("learn_T2_core6")
+    return None if row is None else [None if v is None else int(v) for v in row]
+
+
+def supply(cfg: dict[str, Any]) -> dict[str, dict[str, tuple[int | None, int | None]]]:
+    """unit -> tf -> (learn, judge) for the consumer table. Learn is the dl-v1 MEASURED T2 core-6 n_eff where the unit
+    has it (the judged head, tier survival and input lookback applied), else the contract's card count; B units load
+    no intraday row (quant C2). Pooled bodies follow (`pooled_supply` at their rho_inst)."""
+    from goldbot.config import TF_SECONDS
+    tfs = list(cfg["tfs"])
+    out: dict[str, dict[str, tuple[int | None, int | None]]] = {}
+    for unit, u in cfg["units"].items():
+        if u["learn"] is None:
+            continue
+        meas = _measured_learn(u)
+        daily_only = u.get("tiers_kept") == "B"
+        row: dict[str, tuple[int | None, int | None]] = {}
+        for i, tf in enumerate(tfs):
+            if daily_only and TF_SECONDS.get(tf, 0) < TF_SECONDS["1d"]:
+                row[tf] = (0, 0)
+                continue
+            learn = meas[i] if meas is not None and meas[i] is not None else int(u["learn"][i])
+            row[tf] = (learn, None if u["judge"] is None else int(u["judge"][i]))
+        out[unit] = row
+    for name, pdef in (cfg.get("pooled") or {}).items():
+        rho = float(pdef["rho_inst"])
+        lrn = pooled_supply(list(pdef["learn_members"].values()), rho)
+        jdg = pooled_supply(list(pdef["judge_members"].values()), rho)
+        out[f"pooled_{name}"] = {tf: (lrn[i], jdg[i]) for i, tf in enumerate(tfs)}
+    return out
+
+
+def routes(cfg: dict[str, Any]) -> list[Route]:
+    """The contract's routes with every derived gain resolved from the counts in the same file (`gain_from`), so no
+    gain is typed by hand where it can be computed: `pooled` (pooled body minus the base unit, learn and judge),
+    `base_pooled_rho` (the same body at a measured rho minus the card rho), `measured` (one measured row minus
+    another, e.g. untiered minus tiered), `measured_2h` (each unit's measured 2h cell, built only with the bar rule)."""
+    tfs = list(cfg["tfs"])
+    sup = supply(cfg)
+    out = []
+    for r in cfg.get("routes") or []:
+        r = dict(r)
+        gf = r.pop("gain_from", None) or {}
+        gain = {k: int(v) for k, v in (r.get("gain") or {}).items()}
+        if "pooled" in gf:
+            pdef = cfg["pooled"][gf["pooled"]]
+            rho = float(gf.get("rho", pdef["rho_inst"]))
+            lrn = pooled_supply(list(pdef["learn_members"].values()), rho)
+            jdg = pooled_supply(list(pdef["judge_members"].values()), rho)
+            if "base_pooled_rho" in gf:
+                b = float(gf["base_pooled_rho"])
+                bl = pooled_supply(list(pdef["learn_members"].values()), b)
+                bj = pooled_supply(list(pdef["judge_members"].values()), b)
+                for i, tf in enumerate(tfs):
+                    gain[f"pooled_{gf['pooled']}/{tf}"] = max(0, (lrn[i] or 0) - (bl[i] or 0))
+                    gain[f"pooled_{gf['pooled']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj[i] or 0))
+            else:
+                base = sup[gf["base"]]
+                for i, tf in enumerate(tfs):
+                    bl_, bj_ = base[tf]
+                    gain[f"{gf['base']}/{tf}"] = max(0, (lrn[i] or 0) - (bl_ or 0))
+                    gain[f"{gf['base']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj_ or 0))
+        for unit, (k, ldays, jdays) in (gf.get("project") or {}).items():
+            # card 2.2 projection of k instruments' intraday cells graded A over ldays / jdays session days
+            for tf in tfs:
+                if tf not in ("1d", "1w"):          # B months already load at 1d/1w
+                    pooled_k = 1 + (int(k) - 1) * RHO_INST
+                    gain[f"{unit}/{tf}"] = int(card_per_day(tf) * int(ldays) * int(k) / pooled_k)
+                    gain[f"{unit}/{tf}:judge"] = int(card_per_day(tf) * int(jdays) * int(k) / pooled_k)
+        for unit, k in (gf.get("rescale") or {}).items():
+            # a card-pooled unit of k instruments re-divided at the measured rho: x (1 + (k-1) rho_card) / (1 + (k-1) rho)
+            f = (1 + (int(k) - 1) * float(gf["base_pooled_rho"])) / (1 + (int(k) - 1) * float(gf["rho"])) - 1
+            for tf, (lv, jv) in sup[unit].items():
+                gain[f"{unit}/{tf}"] = int((lv or 0) * f)
+                gain[f"{unit}/{tf}:judge"] = int((jv or 0) * f)
+        if "measured" in gf:
+            m = cfg["units"][gf["measured"]]["measured"]
+            for i, tf in enumerate(tfs):
+                a, b = m[gf["to"]][i], m[gf["from"]][i]
+                if a is not None and b is not None:
+                    gain[f"{gf['measured']}/{tf}"] = max(0, int(a) - int(b))
+        if gf.get("measured_2h"):
+            i = tfs.index("2h")
+            for unit, u in cfg["units"].items():
+                v = (_measured_learn(u) or [None] * len(tfs))[i]
+                if v:
+                    gain[f"{unit}/2h"] = int(v)
+        r["gain"] = {k: v for k, v in gain.items() if v > 0}
+        out.append(Route(**r))
+    return out
+
+
+def consumers(cfg: dict[str, Any]) -> list[Consumer]:
+    return [Consumer(id=k, **{**v, "tfs": tuple(v["tfs"])}) for k, v in (cfg.get("consumers") or {}).items()]
+
+
+__all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
+           "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
+           "consumers", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]

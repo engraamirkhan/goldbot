@@ -21,14 +21,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -90,14 +82,6 @@
      "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -171,14 +155,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -250,14 +226,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -327,14 +295,6 @@
      "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -416,14 +376,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -493,14 +445,6 @@
      "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -574,14 +518,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -653,14 +589,6 @@
      "item": "D-1"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -724,14 +652,6 @@
    "max_inputs": 26,
    "gaps": [
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -778,14 +698,6 @@
    "need_judge": 1109,
    "max_inputs": 19,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -834,14 +746,6 @@
    "max_inputs": 14,
    "gaps": [
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -888,14 +792,6 @@
    "need_judge": 1109,
    "max_inputs": 9,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -951,14 +847,6 @@
    "need_judge": 1109,
    "max_inputs": 7,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -1023,14 +911,6 @@
      "item": "TF-2h"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1085,14 +965,6 @@
    "need_judge": 1109,
    "max_inputs": 1,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -1157,14 +1029,6 @@
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1227,14 +1091,6 @@
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -1307,14 +1163,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1376,14 +1224,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "B-DAILY"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -1449,14 +1289,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1520,14 +1352,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1589,14 +1413,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "B-DAILY"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -1670,14 +1486,6 @@
      "item": "TF-2h"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1741,14 +1549,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -1803,14 +1603,6 @@
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -1874,14 +1666,6 @@
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -1954,14 +1738,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -2023,14 +1799,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "B-DAILY"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -2096,14 +1864,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -2167,14 +1927,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -2236,14 +1988,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "B-DAILY"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -2317,14 +2061,6 @@
      "item": "TF-2h"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -2388,14 +2124,6 @@
      "item": "B-DAILY"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
      "owner": "implementer + microstructure-researcher",
@@ -2450,14 +2178,6 @@
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -2521,14 +2241,6 @@
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
      "plan": "W2-2 / A9 implementation",
@@ -2609,14 +2321,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -2662,14 +2366,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "D-14"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no dense labels for index and energy",
@@ -2719,14 +2415,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -2774,14 +2462,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -2827,14 +2507,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "D-14"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no dense labels for index and energy",
@@ -2892,14 +2564,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -2945,14 +2609,6 @@
      "due": "2026-12-09",
      "blocks": true,
      "item": "D-14"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
     },
     {
      "gap": "no dense labels for index and energy",
@@ -3002,14 +2658,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -3057,14 +2705,6 @@
      "item": "D-14"
     },
     {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
      "gap": "no dense labels for index and energy",
      "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
@@ -3084,6 +2724,3257 @@
     "label_templates": "T0-T7 (D-4)",
     "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
    }
+  }
+ ],
+ "consumer_cells": [
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/1m",
+   "n_eff_learn": 5226,
+   "n_eff_judge": 527,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 582,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/5m",
+   "n_eff_learn": 3847,
+   "n_eff_judge": 392,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 453,
+   "short_judge": 717,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/15m",
+   "n_eff_learn": 2708,
+   "n_eff_judge": 292,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 1592,
+   "short_judge": 817,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/30m",
+   "n_eff_learn": 1644,
+   "n_eff_judge": 193,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 2656,
+   "short_judge": 916,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 3232,
+   "short_judge": 960,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/2h",
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 3564,
+   "short_judge": 1035,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4177,
+   "short_judge": 1079,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/1d",
+   "n_eff_learn": 0,
+   "n_eff_judge": 15,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1094,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "gold/1w",
+   "n_eff_learn": 0,
+   "n_eff_judge": 7,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1102,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/1m",
+   "n_eff_learn": 11399,
+   "n_eff_judge": 10948,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/5m",
+   "n_eff_learn": 8468,
+   "n_eff_judge": 8133,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/15m",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/30m",
+   "n_eff_learn": 4174,
+   "n_eff_judge": 4009,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 126,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 1079,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/2h",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 2689,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 3656,
+   "short_judge": 490,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/1d",
+   "n_eff_learn": 322,
+   "n_eff_judge": 309,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 3978,
+   "short_judge": 800,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "fx10/1w",
+   "n_eff_learn": 161,
+   "n_eff_judge": 155,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4139,
+   "short_judge": 954,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/1d",
+   "n_eff_learn": 229,
+   "n_eff_judge": 114,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4071,
+   "short_judge": 995,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "metals_crosses_b/1w",
+   "n_eff_learn": 115,
+   "n_eff_judge": 57,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4185,
+   "short_judge": 1052,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/1d",
+   "n_eff_learn": 117,
+   "n_eff_judge": 121,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4183,
+   "short_judge": 988,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "index_energy_b/1w",
+   "n_eff_learn": 58,
+   "n_eff_judge": 60,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4242,
+   "short_judge": 1049,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/1m",
+   "n_eff_learn": 8148,
+   "n_eff_judge": 4365,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/5m",
+   "n_eff_learn": 6057,
+   "n_eff_judge": 3243,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/15m",
+   "n_eff_learn": 4410,
+   "n_eff_judge": 2414,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/30m",
+   "n_eff_learn": 2834,
+   "n_eff_judge": 1598,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 1466,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 2276,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/2h",
+   "n_eff_learn": null,
+   "n_eff_judge": 616,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 493,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 3937,
+   "short_judge": 863,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/1d",
+   "n_eff_learn": 36,
+   "n_eff_judge": 122,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4264,
+   "short_judge": 987,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "zoo-v2",
+   "cell": "pooled_gold_fx/1w",
+   "n_eff_learn": null,
+   "n_eff_judge": 61,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "short_learn": 4300,
+   "short_judge": 1048,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/1m",
+   "n_eff_learn": 5226,
+   "n_eff_judge": 527,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 582,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/5m",
+   "n_eff_learn": 3847,
+   "n_eff_judge": 392,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 717,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/15m",
+   "n_eff_learn": 2708,
+   "n_eff_judge": 292,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 817,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/30m",
+   "n_eff_learn": 1644,
+   "n_eff_judge": 193,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 936,
+   "short_judge": 916,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 1512,
+   "short_judge": 960,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/2h",
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 1844,
+   "short_judge": 1035,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2457,
+   "short_judge": 1079,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/1d",
+   "n_eff_learn": 0,
+   "n_eff_judge": 15,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1094,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "gold/1w",
+   "n_eff_learn": 0,
+   "n_eff_judge": 7,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1102,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/1m",
+   "n_eff_learn": 11399,
+   "n_eff_judge": 10948,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/5m",
+   "n_eff_learn": 8468,
+   "n_eff_judge": 8133,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/15m",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/30m",
+   "n_eff_learn": 4174,
+   "n_eff_judge": 4009,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/2h",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 969,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 1936,
+   "short_judge": 490,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/1d",
+   "n_eff_learn": 322,
+   "n_eff_judge": 309,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2258,
+   "short_judge": 800,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "fx10/1w",
+   "n_eff_learn": 161,
+   "n_eff_judge": 155,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2419,
+   "short_judge": 954,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/1d",
+   "n_eff_learn": 229,
+   "n_eff_judge": 114,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2351,
+   "short_judge": 995,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "metals_crosses_b/1w",
+   "n_eff_learn": 115,
+   "n_eff_judge": 57,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2465,
+   "short_judge": 1052,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/1d",
+   "n_eff_learn": 117,
+   "n_eff_judge": 121,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2463,
+   "short_judge": 988,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "index_energy_b/1w",
+   "n_eff_learn": 58,
+   "n_eff_judge": 60,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2522,
+   "short_judge": 1049,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/1m",
+   "n_eff_learn": 8148,
+   "n_eff_judge": 4365,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/5m",
+   "n_eff_learn": 6057,
+   "n_eff_judge": 3243,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/15m",
+   "n_eff_learn": 4410,
+   "n_eff_judge": 2414,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/30m",
+   "n_eff_learn": 2834,
+   "n_eff_judge": 1598,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 556,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/2h",
+   "n_eff_learn": null,
+   "n_eff_judge": 616,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 493,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2217,
+   "short_judge": 863,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/1d",
+   "n_eff_learn": 36,
+   "n_eff_judge": 122,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2544,
+   "short_judge": 987,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "sr-v3",
+   "cell": "pooled_gold_fx/1w",
+   "n_eff_learn": null,
+   "n_eff_judge": 61,
+   "need_train": 2580,
+   "need_judge": 1109,
+   "short_learn": 2580,
+   "short_judge": 1048,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/1m",
+   "n_eff_learn": 5226,
+   "n_eff_judge": 527,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 582,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/5m",
+   "n_eff_learn": 3847,
+   "n_eff_judge": 392,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 1313,
+   "short_judge": 717,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/15m",
+   "n_eff_learn": 2708,
+   "n_eff_judge": 292,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 2452,
+   "short_judge": 817,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/30m",
+   "n_eff_learn": 1644,
+   "n_eff_judge": 193,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 3516,
+   "short_judge": 916,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4092,
+   "short_judge": 960,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/2h",
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4424,
+   "short_judge": 1035,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5037,
+   "short_judge": 1079,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/1d",
+   "n_eff_learn": 0,
+   "n_eff_judge": 15,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1094,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "gold/1w",
+   "n_eff_learn": 0,
+   "n_eff_judge": 7,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1102,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/1m",
+   "n_eff_learn": 11399,
+   "n_eff_judge": 10948,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/5m",
+   "n_eff_learn": 8468,
+   "n_eff_judge": 8133,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/15m",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/30m",
+   "n_eff_learn": 4174,
+   "n_eff_judge": 4009,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 986,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 1939,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/2h",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 3549,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4516,
+   "short_judge": 490,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/1d",
+   "n_eff_learn": 322,
+   "n_eff_judge": 309,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4838,
+   "short_judge": 800,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "fx10/1w",
+   "n_eff_learn": 161,
+   "n_eff_judge": 155,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4999,
+   "short_judge": 954,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/1d",
+   "n_eff_learn": 229,
+   "n_eff_judge": 114,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4931,
+   "short_judge": 995,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "metals_crosses_b/1w",
+   "n_eff_learn": 115,
+   "n_eff_judge": 57,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5045,
+   "short_judge": 1052,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/1d",
+   "n_eff_learn": 117,
+   "n_eff_judge": 121,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5043,
+   "short_judge": 988,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "index_energy_b/1w",
+   "n_eff_learn": 58,
+   "n_eff_judge": 60,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5102,
+   "short_judge": 1049,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/1m",
+   "n_eff_learn": 8148,
+   "n_eff_judge": 4365,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/5m",
+   "n_eff_learn": 6057,
+   "n_eff_judge": 3243,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/15m",
+   "n_eff_learn": 4410,
+   "n_eff_judge": 2414,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 750,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/30m",
+   "n_eff_learn": 2834,
+   "n_eff_judge": 1598,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 2326,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 3136,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/2h",
+   "n_eff_learn": null,
+   "n_eff_judge": 616,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 493,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 4797,
+   "short_judge": 863,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/1d",
+   "n_eff_learn": 36,
+   "n_eff_judge": 122,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5124,
+   "short_judge": 987,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "x6",
+   "cell": "pooled_gold_fx/1w",
+   "n_eff_learn": null,
+   "n_eff_judge": 61,
+   "need_train": 5160,
+   "need_judge": 1109,
+   "short_learn": 5160,
+   "short_judge": 1048,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16132,
+   "short_judge": 960,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "gold/2h",
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16464,
+   "short_judge": 1035,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17077,
+   "short_judge": 1079,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "gold/1d",
+   "n_eff_learn": 0,
+   "n_eff_judge": 15,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1094,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 13979,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "fx10/2h",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 15589,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16556,
+   "short_judge": 490,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "fx10/1d",
+   "n_eff_learn": 322,
+   "n_eff_judge": 309,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16878,
+   "short_judge": 800,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "metals_crosses_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "metals_crosses_b/1d",
+   "n_eff_learn": 229,
+   "n_eff_judge": 114,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16971,
+   "short_judge": 995,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "index_energy_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 1109,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "index_energy_b/1d",
+   "n_eff_learn": 117,
+   "n_eff_judge": 121,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17083,
+   "short_judge": 988,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure",
+    "DEEP-DAILY"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 15176,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "pooled_gold_fx/2h",
+   "n_eff_learn": null,
+   "n_eff_judge": 616,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17200,
+   "short_judge": 493,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 16837,
+   "short_judge": 863,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "seq-1",
+   "cell": "pooled_gold_fx/1d",
+   "n_eff_learn": 36,
+   "n_eff_judge": 122,
+   "need_train": 17200,
+   "need_judge": 1109,
+   "short_learn": 17164,
+   "short_judge": 987,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/1m",
+   "n_eff_learn": 5226,
+   "n_eff_judge": 527,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 5524,
+   "short_judge": 2801,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/5m",
+   "n_eff_learn": 3847,
+   "n_eff_judge": 392,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 6903,
+   "short_judge": 2936,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/15m",
+   "n_eff_learn": 2708,
+   "n_eff_judge": 292,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 8042,
+   "short_judge": 3036,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/30m",
+   "n_eff_learn": 1644,
+   "n_eff_judge": 193,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 9106,
+   "short_judge": 3135,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 9682,
+   "short_judge": 3179,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/2h",
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10014,
+   "short_judge": 3254,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10627,
+   "short_judge": 3298,
+   "status": "SHORT",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/1m",
+   "n_eff_learn": 11399,
+   "n_eff_judge": 10948,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "MEETS",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/5m",
+   "n_eff_learn": 8468,
+   "n_eff_judge": 8133,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 2282,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/15m",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 4444,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/30m",
+   "n_eff_learn": 4174,
+   "n_eff_judge": 4009,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 6576,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 7529,
+   "short_judge": 234,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/2h",
+   "n_eff_learn": 1611,
+   "n_eff_judge": 1547,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 9139,
+   "short_judge": 1781,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10106,
+   "short_judge": 2709,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/1m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/5m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/30m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/2h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 3328,
+   "status": "SHORT",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/1m",
+   "n_eff_learn": 8148,
+   "n_eff_judge": 4365,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 2602,
+   "short_judge": 0,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/5m",
+   "n_eff_learn": 6057,
+   "n_eff_judge": 3243,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 4693,
+   "short_judge": 85,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/15m",
+   "n_eff_learn": 4410,
+   "n_eff_judge": 2414,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 6340,
+   "short_judge": 914,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/30m",
+   "n_eff_learn": 2834,
+   "n_eff_judge": 1598,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 7916,
+   "short_judge": 1730,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 8726,
+   "short_judge": 2095,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/2h",
+   "n_eff_learn": null,
+   "n_eff_judge": 616,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10750,
+   "short_judge": 2712,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "rl-x1",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 10750,
+   "need_judge": 3328,
+   "short_learn": 10387,
+   "short_judge": 3082,
+   "status": "SHORT",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "gold/15m",
+   "n_eff_learn": 2708,
+   "n_eff_judge": 292,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "gold/1h",
+   "n_eff_learn": 1068,
+   "n_eff_judge": 149,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER",
+    "BROKER-M1"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "gold/4h",
+   "n_eff_learn": 123,
+   "n_eff_judge": 30,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "A2-pool",
+    "GOLD-TIER"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "fx10/15m",
+   "n_eff_learn": 6306,
+   "n_eff_judge": 6056,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "fx10/1h",
+   "n_eff_learn": 3221,
+   "n_eff_judge": 3094,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "fx10/4h",
+   "n_eff_learn": 644,
+   "n_eff_judge": 619,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "metals_crosses_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "metals_crosses_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "metals_crosses_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "index_energy_b/15m",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "index_energy_b/1h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "index_energy_b/4h",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "D-14"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "pooled_gold_fx/15m",
+   "n_eff_learn": 4410,
+   "n_eff_judge": 2414,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "pooled_gold_fx/1h",
+   "n_eff_learn": 2024,
+   "n_eff_judge": 1233,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  },
+  {
+   "consumer": "agg-v1",
+   "cell": "pooled_gold_fx/4h",
+   "n_eff_learn": 363,
+   "n_eff_judge": 246,
+   "need_train": 0,
+   "need_judge": 200,
+   "short_learn": 0,
+   "short_judge": 0,
+   "status": "FORWARD",
+   "routes": [
+    "RHO-measure"
+   ]
+  }
+ ],
+ "routes": [
+  {
+   "id": "RHO-measure",
+   "kind": "pooled",
+   "title": "measure rho_x per column (label-blind, 2010-11 fold) and the residual rho_u,inst (D-12) that set the pooled divisor; projected at rho 0.2, the D-13 admission bound",
+   "gain": {
+    "pooled_gold_fx/1m": 2037,
+    "pooled_gold_fx/1m:judge": 1091,
+    "pooled_gold_fx/5m": 1514,
+    "pooled_gold_fx/5m:judge": 811,
+    "pooled_gold_fx/15m": 1102,
+    "pooled_gold_fx/15m:judge": 604,
+    "pooled_gold_fx/30m": 708,
+    "pooled_gold_fx/30m:judge": 399,
+    "pooled_gold_fx/1h": 506,
+    "pooled_gold_fx/1h:judge": 308,
+    "pooled_gold_fx/2h:judge": 154,
+    "pooled_gold_fx/4h": 91,
+    "pooled_gold_fx/4h:judge": 62,
+    "pooled_gold_fx/1d:judge": 31,
+    "pooled_gold_fx/1w:judge": 15,
+    "fx10/1m": 10991,
+    "fx10/1m:judge": 10557,
+    "fx10/5m": 8165,
+    "fx10/5m:judge": 7842,
+    "fx10/15m": 6080,
+    "fx10/15m:judge": 5839,
+    "fx10/30m": 4024,
+    "fx10/30m:judge": 3865,
+    "fx10/1h": 3105,
+    "fx10/1h:judge": 2983,
+    "fx10/2h": 1553,
+    "fx10/2h:judge": 1491,
+    "fx10/4h": 621,
+    "fx10/4h:judge": 596,
+    "fx10/1d": 310,
+    "fx10/1d:judge": 297,
+    "fx10/1w": 155,
+    "fx10/1w:judge": 149,
+    "metals_crosses_b/1d": 152,
+    "metals_crosses_b/1d:judge": 75,
+    "metals_crosses_b/1w": 76,
+    "metals_crosses_b/1w:judge": 37,
+    "index_energy_b/1d": 87,
+    "index_energy_b/1d:judge": 90,
+    "index_energy_b/1w": 43,
+    "index_energy_b/1w:judge": 45
+   },
+   "training_gain": "",
+   "effort_days": 2.0,
+   "signoff": "quant",
+   "p_deliver": 0.5,
+   "basis": "projected",
+   "owner": "data-engineer (rho_x), ml-researcher-staff (D-12)",
+   "due": "2026-12-09",
+   "status": "rho_x lane delegated 2026-11-26 (label-blind); D-12 after A4 unseals learn labels (PR #482)",
+   "pr": "",
+   "counted": 78661,
+   "per_day": 19665.2
+  },
+  {
+   "id": "A2-pool",
+   "kind": "pooled",
+   "title": "aug-v1 A2: pooled gold + FX body per tf (real rows, instrument levels, Q2 tie rule picks the body label-blind)",
+   "gain": {
+    "gold/1m": 2922,
+    "gold/1m:judge": 3838,
+    "gold/5m": 2210,
+    "gold/5m:judge": 2851,
+    "gold/15m": 1702,
+    "gold/15m:judge": 2122,
+    "gold/30m": 1190,
+    "gold/30m:judge": 1405,
+    "gold/1h": 956,
+    "gold/1h:judge": 1084,
+    "gold/2h:judge": 542,
+    "gold/4h": 240,
+    "gold/4h:judge": 216,
+    "gold/1d": 36,
+    "gold/1d:judge": 107,
+    "gold/1w:judge": 54
+   },
+   "training_gain": "",
+   "effort_days": 2.0,
+   "signoff": "quant (H-103 A2 card)",
+   "p_deliver": 0.9,
+   "basis": "measured",
+   "owner": "data-engineer + ml-researcher",
+   "due": "2026-12-04",
+   "status": "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)",
+   "pr": "",
+   "counted": 21475,
+   "per_day": 9663.8
+  },
+  {
+   "id": "D-14",
+   "kind": "organic",
+   "title": "second source (Dukascopy 1m bid+ask) for HistData C/F/P months: index, energy, XAG, crosses intraday rows (B units load none today)",
+   "gain": {
+    "index_energy_b/1m": 5661,
+    "index_energy_b/1m:judge": 5378,
+    "index_energy_b/5m": 4205,
+    "index_energy_b/5m:judge": 3995,
+    "index_energy_b/15m": 3131,
+    "index_energy_b/15m:judge": 2975,
+    "index_energy_b/30m": 2073,
+    "index_energy_b/30m:judge": 1969,
+    "index_energy_b/1h": 1600,
+    "index_energy_b/1h:judge": 1520,
+    "index_energy_b/2h": 800,
+    "index_energy_b/2h:judge": 760,
+    "index_energy_b/4h": 320,
+    "index_energy_b/4h:judge": 304,
+    "metals_crosses_b/1m": 11323,
+    "metals_crosses_b/1m:judge": 11040,
+    "metals_crosses_b/5m": 8411,
+    "metals_crosses_b/5m:judge": 8201,
+    "metals_crosses_b/15m": 6263,
+    "metals_crosses_b/15m:judge": 6107,
+    "metals_crosses_b/30m": 4146,
+    "metals_crosses_b/30m:judge": 4042,
+    "metals_crosses_b/1h": 3200,
+    "metals_crosses_b/1h:judge": 3120,
+    "metals_crosses_b/2h": 1600,
+    "metals_crosses_b/2h:judge": 1560,
+    "metals_crosses_b/4h": 640,
+    "metals_crosses_b/4h:judge": 624
+   },
+   "training_gain": "",
+   "effort_days": 5.0,
+   "signoff": "",
+   "p_deliver": 0.4,
+   "basis": "projected",
+   "owner": "data-engineer",
+   "due": "2026-12-09",
+   "status": "not started; delegated 2026-11-26 (projected by card 2.2: 4 instruments per unit graded A where Dukascopy lists them, 2h/4h follow once graded)",
+   "pr": "",
+   "counted": 104968,
+   "per_day": 8397.4
+  },
+  {
+   "id": "GOLD-TIER",
+   "kind": "organic",
+   "title": "gold 2010-17: lift the 27 non-A months (14 C close_vs_ref 0.95-0.957, 13 B range2_extremes) by a second graded minute source (HistData XAUUSD 2009+, if independent of Dukascopy) or a quant ruling that feature-lookback months need B, not A; ceiling = untiered - T2",
+   "gain": {
+    "gold/1m": 2112,
+    "gold/5m": 1676,
+    "gold/15m": 1471,
+    "gold/30m": 1207,
+    "gold/1h": 1203,
+    "gold/4h": 481,
+    "gold/1d": 298,
+    "gold/1w": 208
+   },
+   "training_gain": "",
+   "effort_days": 3.0,
+   "signoff": "quant",
+   "p_deliver": 0.4,
+   "basis": "measured",
+   "owner": "data-engineer",
+   "due": "2026-12-04",
+   "status": "not started; delegated 2026-11-26",
+   "pr": "",
+   "counted": 8656,
+   "per_day": 1154.1
+  },
+  {
+   "id": "BROKER-M1",
+   "kind": "organic",
+   "title": "broker MT5 M1 forward capture (D-1 fallback ii): gold judge rows from 2026-10-01 at card 2.2 per-day rates, about 65 trading days to 2026-12-31 if the months grade",
+   "gain": {
+    "gold/1m:judge": 230,
+    "gold/5m:judge": 171,
+    "gold/15m:judge": 127,
+    "gold/30m:judge": 84,
+    "gold/1h:judge": 65
+   },
+   "training_gain": "",
+   "effort_days": 0.5,
+   "signoff": "quant",
+   "p_deliver": 0.7,
+   "basis": "projected",
+   "owner": "data-engineer + sre",
+   "due": "2026-12-31",
+   "status": "capture running (PR #471/#477); first grade after the November freeze",
+   "pr": "",
+   "counted": 677,
+   "per_day": 947.8
+  },
+  {
+   "id": "DEEP-DAILY",
+   "kind": "organic",
+   "title": "deep daily history in a pre-learn window no read has touched: gold 1978-2002 (raw/daily/xauusd_daily_1978_present), XAG, index and energy daily from 1990 (free: FRED, Yahoo, Stooq) graded against a second daily source; T0 close-to-close labels at 1d/1w (projected by card 2.2, hold 10 / 20 days)",
+   "gain": {
+    "gold/1d": 630,
+    "gold/1w": 315,
+    "index_energy_b/1d": 1200,
+    "index_energy_b/1w": 600,
+    "metals_crosses_b/1d": 450,
+    "metals_crosses_b/1w": 225
+   },
+   "training_gain": "",
+   "effort_days": 5.0,
+   "signoff": "quant + evaluator (new window)",
+   "p_deliver": 0.6,
+   "basis": "projected",
+   "owner": "data-engineer",
+   "due": "2026-12-09",
+   "status": "not started; delegated 2026-11-26",
+   "pr": "",
+   "counted": 3420,
+   "per_day": 410.4
+  },
+  {
+   "id": "HEADS",
+   "kind": "other",
+   "title": "multi-horizon heads (dl-v1 16 heads per bar) and 1d/1w labels decided on the 4h grid",
+   "gain": {},
+   "training_gain": "more targets per event; n_eff counted once per event (uniqueness)",
+   "effort_days": 0.5,
+   "signoff": "",
+   "p_deliver": 1.0,
+   "basis": "projected",
+   "owner": "data-engineer",
+   "due": "2026-11-26",
+   "status": "built (dl-v1)",
+   "pr": "",
+   "counted": 0,
+   "per_day": 0.0
+  },
+  {
+   "id": "TF-2h",
+   "kind": "organic",
+   "title": "2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe)",
+   "gain": {},
+   "training_gain": "",
+   "effort_days": 0.5,
+   "signoff": "",
+   "p_deliver": 1.0,
+   "basis": "measured",
+   "owner": "data-engineer",
+   "due": "2026-11-26",
+   "status": "code done; PR open",
+   "pr": "data/tf-2h-bar-rule",
+   "counted": 0,
+   "per_day": 0.0
+  },
+  {
+   "id": "A1-offsets",
+   "kind": "synthetic",
+   "title": "aug-v1 A1 dense offset (phase) rows: training rows only, weight 1/P, purged with their real span",
+   "gain": {},
+   "training_gain": "x1.5 magnitude, x1.86-2.13 sign information (ml-8 measured); counted 0 by card 2.2 until power accounting (SYNTH-ml item 2) is signed",
+   "effort_days": 0.5,
+   "signoff": "quant",
+   "p_deliver": 1.0,
+   "basis": "projected",
+   "owner": "data-engineer + ml-researcher",
+   "due": "2026-12-04",
+   "status": "factory supports --phases; awaiting quant sign",
+   "pr": "",
+   "counted": 0,
+   "per_day": 0.0
+  },
+  {
+   "id": "A3-bagging",
+   "kind": "synthetic",
+   "title": "aug-v1 A3 stationary-bootstrap bagging (training only)",
+   "gain": {},
+   "training_gain": "variance reduction only; 0 n_eff",
+   "effort_days": 1.0,
+   "signoff": "quant",
+   "p_deliver": 1.0,
+   "basis": "projected",
+   "owner": "ml-researcher",
+   "due": "2027-01-15",
+   "status": "after the H-103 A1/A2 read",
+   "pr": "",
+   "counted": 0,
+   "per_day": 0.0
+  },
+  {
+   "id": "A4-generative",
+   "kind": "synthetic",
+   "title": "GAN/diffusion rows",
+   "gain": {},
+   "training_gain": "none counted; only if A3 passes",
+   "effort_days": 5.0,
+   "signoff": "quant",
+   "p_deliver": 1.0,
+   "basis": "projected",
+   "owner": "ml-researcher",
+   "due": "after the A3 verdict",
+   "status": "not scheduled",
+   "pr": "",
+   "counted": 0,
+   "per_day": 0.0
   }
  ]
 }
