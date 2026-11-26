@@ -92,9 +92,15 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      - A spike bar is displaced whole, open to close, by a random sign.
      - Tightness looks for the bar-just-inside failure on the 8 CI seeds first, then on the rest of the 32, because
        the seed that binds L can be any of them.
-     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`, floor sha256
-       b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166. A test pins this sha, so the floor changes
-       only together with this ADR.
+     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`.
+       floor sha256 a220592dd6700d67e0a0bb3c450d9319cdef2d414c9767a4b4ce5150fca3b845 (2h added 2026-11-26, quant
+       verdict on #485; was b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166). A test pins this sha,
+       so the floor changes only together with this ADR.
+     - 2h (TF-2h, PR #485), quant closing text: "2h lookbacks for every per-tf column are measured by
+       `column_lookback.measure` (two perturbations, 32 seeds; the no-shrink floor fixture gains 2h). The X6
+       structural bounds at 2h use r = 2: (LV_WINDOW + 1)·2 and (LV_RETEST + LV_WINDOW + 1)·2. The all-phase X6 tail
+       test includes 2h." Measured 2026-11-26: every int-declared column measures its declared value at 2h;
+       sess_high_dist_atr 92, sess_low_dist_atr 91.
      - A declared lookback below the floor needs a marker in `registry.COLUMN_LOOKBACK_REREVIEW` (code review LOW-3
        on #478):
        - the marker carries a "PR #N" or "ADR NNNN" reference;

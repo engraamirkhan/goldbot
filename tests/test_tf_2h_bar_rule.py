@@ -77,3 +77,16 @@ def test_incremental_2h_matches_batch(m1):
 
 def test_price_action_names_2h_spaced_bars(m1):
     assert decision_tf(pd.DatetimeIndex(resample_bars(m1, "2h")["ts_utc"])) == "2h"
+
+
+def test_every_served_column_has_a_2h_lookback():
+    """Quant verdict on #485: column_lookback(c, "2h") resolves for every SR_FEATURES column (d1_ columns read their
+    base column's 1d lookback in daily bars), so a 2h read passes the ADR 0104 4 tier check instead of failing closed.
+    X6 (PR #484) adds its own 2h bounds with r = 2 when it lands."""
+    from goldbot.features.registry import column_lookback
+    from goldbot.research.self_retrain import FEATURES as SR_FEATURES
+    for c in SR_FEATURES:
+        if c.startswith("d1_"):
+            assert column_lookback(c[3:], "1d") >= 1
+        else:
+            assert column_lookback(c, "2h") >= 1, c

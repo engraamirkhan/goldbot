@@ -114,8 +114,10 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
     "min_since_newyork_open": 1,     # session
     "session_id": 1,                 # session
     # session_zones
-    "sess_high_dist_atr": {"1m": 491, "5m": 100, "15m": 97, "30m": 89, "1h": 90, "4h": 91, "1d": 90, "1w": 90},
-    "sess_low_dist_atr": {"1m": 467, "5m": 99, "15m": 96, "30m": 98, "1h": 97, "4h": 91, "1d": 91, "1w": 91},
+    "sess_high_dist_atr": {"1m": 491, "5m": 100, "15m": 97, "30m": 89, "1h": 90, "2h": 92, "4h": 91, "1d": 90,
+                           "1w": 90},
+    "sess_low_dist_atr": {"1m": 467, "5m": 99, "15m": 96, "30m": 98, "1h": 97, "2h": 91, "4h": 91, "1d": 91,
+                          "1w": 91},
     "adx14": 125,                    # trend_strength
     "donchian_pos_20": 20,           # trend_strength
     "tsmom_score": 481,              # tsmom

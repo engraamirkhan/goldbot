@@ -49,7 +49,7 @@ SCALE_BARS = 1_000
 BOUND = 0.01
 
 
-FREQ = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1D", "1w": "7D"}
+FREQ = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "2h": "2h", "4h": "4h", "1d": "1D", "1w": "7D"}
 
 
 @lru_cache(maxsize=None)
