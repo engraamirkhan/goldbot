@@ -553,6 +553,39 @@ def test_the_published_state_is_empty_until_a_candidate_was_queued(tmp_path):
     assert _actions(eng, "exploration:")
 
 
+def test_a_published_state_that_raises_publishes_its_error_and_the_state_risk_and_orders_writes_still_happen(
+        tmp_path, monkeypatch, caplog):
+    """Trading-safety L1 of #463: a failure in the scoring counts never skips write_engine_state, _save_risk_state
+    or _save_orders (like `_throttle_state`, it publishes `error`)."""
+    eng, _pb = _pass(tmp_path, [_arm("a")], on=True)
+    assert eng.exploration is not None and eng.exploration.shadow_scorer is not None
+    monkeypatch.setattr(eng.exploration.shadow_scorer, "jobs", None)          # .qsize() raises AttributeError
+    assert shadow_scoring.published(eng) == {"shadow_scoring": {"error": "AttributeError"}}
+    written: list[str] = []
+    store = eng.state_store
+    write = store.write_engine_state
+
+    def spy_write(payload: dict, **k: Any) -> Any:
+        written.append("state")
+        assert payload["shadow_scoring"] == {"error": "AttributeError"}
+        return write(payload, **k)
+
+    monkeypatch.setattr(store, "write_engine_state", spy_write)
+    def spy(name: str) -> Any:
+        orig = getattr(eng, name)
+
+        def run() -> Any:
+            written.append(name)
+            return orig()
+        return run
+
+    for name in ("_save_risk_state", "_save_orders"):
+        monkeypatch.setattr(eng, name, spy(name))
+    eng._write_state()
+    assert written == ["state", "_save_risk_state", "_save_orders"]
+    assert any("shadow scoring state not published" in r.getMessage() for r in caplog.records)
+
+
 # ------------------------------------------------------------------------------------------------ the demo gate
 # Owner 2026-11-25: served models may gate DEMO exploration entries, with a randomised 10 % of model-rejected
 # candidates still taken (ADR 0098 section 3); then "before deploying, the models should be trained": shipped OFF on
@@ -747,7 +780,7 @@ def test_the_one_row_design_and_score_equal_the_frame_design_and_score_bit_for_b
                           intercept=0.3, tau=0.5)
     feats: dict[str, float | None] = {f: float(v) for f, v in zip(sr.FEATURES, rng.normal(size=len(sr.FEATURES)))}
     feats["rsi14"], feats["ret_4"], feats["adx14"] = 61.0, None, math.inf
-    feats["bb_z_20"] = math.nan
+    feats["bb_z_20"], feats["ret_16"] = math.nan, -math.inf
     del feats["hour_utc"]
     feats["not_an_input"] = 3.0
     for side in (1, -1):

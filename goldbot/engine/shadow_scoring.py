@@ -615,13 +615,18 @@ def _open(sc: ShadowScorer, candidate_id: str, why: str) -> GateVerdict | None:
 
 def published(eng: Engine) -> dict[str, Any]:
     """For the engine state file: the gold book's scoring counts, the models served and refused, and the last failure
-    while it is recent. Nothing until a candidate was queued."""
-    ex = getattr(getattr(eng, "primary", None), "exploration", None) or getattr(eng, "exploration", None)
-    sc: ShadowScorer | None = getattr(ex, "shadow_scorer", None)
-    if sc is None:
-        return {}
-    out: dict[str, Any] = {**sc.counts, "queued": sc.jobs.qsize(), "frames": len(sc.frames),
-                           "models": sum(len(m) for m in sc.models.values()), "refused_models": len(sc.problems)}
-    if sc.error is not None and sc.error_at is not None and time.time() - sc.error_at <= ERROR_WINDOW_S:
-        out |= {"last_error": sc.error, "last_error_at": float(sc.error_at)}
-    return {"shadow_scoring": out}
+    while it is recent. Nothing until a candidate was queued. Never raises (trading-safety L1 of #463): a failure
+    publishes `error`, like `_throttle_state`, and never skips the state, risk or orders write."""
+    try:
+        ex = getattr(getattr(eng, "primary", None), "exploration", None) or getattr(eng, "exploration", None)
+        sc: ShadowScorer | None = getattr(ex, "shadow_scorer", None)
+        if sc is None:
+            return {}
+        out: dict[str, Any] = {**sc.counts, "queued": sc.jobs.qsize(), "frames": len(sc.frames),
+                               "models": sum(len(m) for m in sc.models.values()), "refused_models": len(sc.problems)}
+        if sc.error is not None and sc.error_at is not None and time.time() - sc.error_at <= ERROR_WINDOW_S:
+            out |= {"last_error": sc.error, "last_error_at": float(sc.error_at)}
+        return {"shadow_scoring": out}
+    except Exception as exc:                  # noqa: BLE001 - reporting only
+        log.exception("shadow scoring state not published")
+        return {"shadow_scoring": {"error": type(exc).__name__}}
