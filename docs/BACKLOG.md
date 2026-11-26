@@ -152,6 +152,7 @@ today (90, 105, 142, 175, 187, 212-217, 235, 237-243, 247, 251, 252, 254, 255) w
 | 271 | Daily-context inputs need 100 daily bars: engine memory gives ~80 (sr + zoo new spec) | Research (ML) · new spec for sr and zoo, quant review | S | proposed |
 | 272 | Multi-timeframe learning mtf-v1: history-pretrained, live-updated models on 1m-1w (H-102) | Research (ML) · build lanes after quant signature | L | proposed |
 | 273 | Power-first Q3 follow-ups: clone arms on count-only cards, Q1 source field, unguarded scripts | research | S | proposed |
+| 274 | fs-v1 serve gate: promotion of fs-v1-trained models calls serve_ready | Learning (promotion) · ADR 0103 | S | proposed (owner: implementer; due before the first sr-v3 promotion) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1871,6 +1872,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - **N2, clone arms on count-only cards.** `PowerCard.arms: int = Field(1, ge=1)`, with a validator that requires `learn_uniqueness` when arms > 1 or more than one timeframe is pooled. H-101 keeps its signed verdict. Test: a 2-arm count-only card is invalid.
   - **N3, Q1 provenance.** `rho_day_le_60m_source: str | None`, required when the value is below 0.25 (the RD lane's measurement record, ADR 0085 item 4). Test: 0.05 with no source fails at load.
   - **N4, unguarded scripts.** None of the 20 scripts in `holdout_guard.UNGUARDED` runs until it calls `refuse`/`cut` or windows.py. The RD checklist carries the rule, and each script leaves the list once it is guarded (the test enforces both).
+- **274. fs-v1 serve gate: promotion of fs-v1-trained models calls serve_ready.** Value: a model trained on fs-v1 history rows at 4h/1d/1w, or reading d1_* columns at any tf, would be served inputs that differ from its training rows (deployed 90k-minute memory: d1_atr_ratio_14_100 and d1_rv_ratio NaN, d1_slope_ema20 short-window; at 4h also tsmom_score, atr_ratio_14_100, vol_tercile). ADR 0103 (quant C4) bars promotion until the deployed path matches. Acceptance: promotion of any model whose training rows come from fs-v1 calls `feature_store.serve_ready(tf, columns, parity_json)` and refuses on False; test: a 4h fs-v1 model with no parity report is not promoted. Owner: implementer. Due: before the first sr-v3 promotion.
 
 ## Needs the owner
 Only money, going live and sizing stay here (owner rule; CLAUDE.md). Everything else is decided by the program
