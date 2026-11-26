@@ -550,6 +550,12 @@ gates:                               # design: Roadmap gates and stop rule (gold
   paper_min_days: 182                # PROPOSED: owner sign-off required. Roadmap Phase 2 duration "6 months" as a minimum
   paper_expectancy_within: 0.5       # "expectancy within 50% of backtest" (no more than 50% below)
   paper_fills_within: 0.3            # "fills within 30% of target": measured slippage <= 1.3x the modelled slippage
+  # ADR 0106 (owner 2026-11-26) goals of record, paper -> tiny live. Stricter only: a looser value is refused at load.
+  # The paper record is re-sized as one real-money account (risk <= 1%/trade incl. spread, 2% daily stop, 15% drawdown
+  # halt, <= 1% of daily volume; research/as_if_sizing.py); below-minimum-lot trades are reported and not counted.
+  paper_min_sharpe: 1.0              # "Live Sharpe ratio above 1.0": as-if daily Sharpe (session days, zero days included) > this
+  paper_max_cost_share: 0.3333333333333333   # "Trading costs under one third of gross profit" (spread + commission + swap)
+  as_if_equity_usd: 1250.0           # as-if real-money equity of the replay (~GBP 1,000): a simulation parameter for promotion reads, not live sizing (PD + CFO 2026-11-26)
   live_min_trades: 300               # ">= 300 live trades"
   live_min_days: 365                 # PROPOSED: owner sign-off required. Roadmap Phase 3 duration "12 months" as a minimum
   live_expectancy_within: 0.4        # "expectancy within 40% of paper"

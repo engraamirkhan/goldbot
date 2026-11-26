@@ -1,4 +1,4 @@
-id: R186
+id: R192
 requirement: 'Model quality of record (ADR 0106 goals "stable across at least 5 random seeds", "profitable when parameters are shifted slightly", "every deep model beats the gradient-boosted baseline out of sample, or it is not deployed"; decision 3 A/B/D vs C; ADR 0109): seed_stability (>= 5 seeds, every seed on the positive pooled edge''s side), param_shift (net mean > 0 at the declared point and +-10/20 % of each parameter, grid fixed before reading), beats_baseline (paired after-cost difference vs a C-family manifest on identical OOS rows, day-block bootstrap p <= 0.05); a fitted registry model created from 2026-11-27 serves only with a manifest that passes require_servable; rule models and older fits exempt'
 status: in review
 code: 'goldbot/research/model_quality.py (`seed_stability`, `shift_grid`, `param_shift`, `beats_baseline`, `servable_reasons`, `require_servable`, `MANIFEST_REQUIRED_FROM`); goldbot/research/model_registry.py `serving_refusal`, `load_for_serving`, `champion_models`, `shadow_models`; goldbot/config.py ModelQualitySettings; settings model_quality'

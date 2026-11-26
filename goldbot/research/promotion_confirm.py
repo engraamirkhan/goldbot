@@ -27,6 +27,9 @@ The panel ruling of 2026-11-15 (quant-reviewer, on docs/research/power-first-gat
 * "net of measured costs at the upper CI": `ConfirmItem.cost_basis` must be "measured_upper_ci".
 * "size from fresh-data effect": `size_basis_mean_r` is the fresh window's mean net R.
 * "registry-K DSR stays REPORTED (with K_eff) but becomes report-only for research/demo promotion".
+* ADR 0106 decision 4 ("Buy-and-hold of the same market over 6+ months, after costs, is added to the random twin"):
+  each read row carries `benchmarks`, the caller's buy-and-hold and random-twin line for the config
+  (research/benchmarks.py `BenchmarkLine`; "not supplied" when none). Report only: it decides nothing here.
 * Count minimums, rule-only path only: the 200-trade minimum becomes MIN_FRESH_N_EFF clustered observations on the
   fresh-data test; a model card still needs the 1,500 candidate / 60 per fold minimums of its learn row.
 """
@@ -35,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
@@ -45,6 +48,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.research.benchmarks import BenchmarkLine
 from goldbot.research.eval2.confirm import _day_count_chunks, _DayBlocks, _p_from, confirm_resamples, holm
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DsrInputs
 from goldbot.research.registry import (
@@ -238,13 +242,15 @@ def _mean_p(units: pd.DataFrame, *, mean_block: float, resamples: int, seed_key:
 
 
 def run_batch(registry: TrialRegistry, batch: Sequence[tuple[ConfirmItem, pd.DataFrame]], *, now: datetime,
-              mean_block: float, agent_id: str, eval2_test_old_families: Collection[str]) -> list[dict[str, Any]]:
+              mean_block: float, agent_id: str, eval2_test_old_families: Collection[str],
+              benchmarks: Mapping[str, BenchmarkLine] | None = None) -> list[dict[str, Any]]:
     """Read one confirm batch ONCE under the registry lock: take the ledger's next slot (alpha_j), refuse the whole
     batch if any window is not fresh or any stamp differs from its pre-registration (nothing read, nothing written,
     no slot spent; `eval2_test_old_families` is required, e.g. `eval2_test_old_families(ledger)`), compute each config's clustered
     p on its fresh units (columns `day`, `net_r` net of measured costs at the upper CI), Holm at alpha_j over the
     batch, and write one PROMOTION_CONFIRM trial row per config. A pass needs the Holm rejection, mean net R > 0 and
-    at least MIN_FRESH_N_EFF clustered observations. The registry-K DSR is reported, never decides."""
+    at least MIN_FRESH_N_EFF clustered observations. The registry-K DSR is reported, never decides. `benchmarks`:
+    config hash -> buy-and-hold beside the random twin (ADR 0106), written on the row, never read here."""
     if not batch:
         raise ValueError("an empty confirm batch")
     with registry.locked():
@@ -280,6 +286,7 @@ def run_batch(registry: TrialRegistry, batch: Sequence[tuple[ConfirmItem, pd.Dat
         rejected = holm([r.p for r in reads], slot.alpha_j)
         out = []
         for (it, _), r, rej in zip(batch, reads, rejected):
+            line = (benchmarks or {}).get(config_hash(it.config)) or BenchmarkLine()
             fails = [w for w, bad in (("Holm did not reject", not rej), ("mean net R <= 0", not r.mean > 0),
                                       (f"clustered n_eff {r.n_eff:.0f} < {MIN_FRESH_N_EFF:.0f}",
                                        r.n_eff < MIN_FRESH_N_EFF)) if bad]
@@ -287,6 +294,7 @@ def run_batch(registry: TrialRegistry, batch: Sequence[tuple[ConfirmItem, pd.Dat
                    "alpha_j": slot.alpha_j, "m_j": m, "resamples": resamples, "source": it.source, "kind": it.kind,
                    "p": r.p, "holm_rejected": bool(rej), "n_trades": r.n, "n_eff": r.n_eff, "mean_r": r.mean,
                    "size_basis_mean_r": r.mean, "passed": not fails, "why": "; ".join(fails),
+                   "benchmarks": line.model_dump(mode="json"), "benchmarks_text": line.text(),
                    "stamp": it.stamp.model_dump(), "cost_basis": it.cost_basis, "learn_gates": it.learn_gates,
                    "learn_ref": it.learn_ref,
                    "dsr_report_only": {"dsr": r.dsr, "k": k, "basis": "n_trials_effective (K_eff included)"}}
