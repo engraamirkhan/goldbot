@@ -333,5 +333,12 @@ and demo promotion only. The phase gate, live unlock, real-money confirmation an
   ρ_u,inst and τ_a.
 - The families are box_break_close (MB15, W2), sweep_absorb (MSA15) and session_range_break (GS1). All are retired
   arms, outside sr-v3 and H-102.
-- The values are those of the committed JSON. The rev-3 ladder rows that assumed ρ_inst = 0.1 are void, and the
-  ladder is recomputed mechanically at Stage 0.
+- The values are those of the committed JSON. Families run 2026-11-26:
+  - ρ_u,day ≤ 60 min: gold 0.148, metals 0.137, FX10 0.062, pooled 0.054. The single families sweep_absorb and
+    session_range_break drive these; the pooled families read ≤ 0.022 and the grid ≤ 0.010. The bound open for the
+    quant is in docs/research/rho-measurement-2026-11.md section 2.
+  - Day-mean ρ_u,inst (≤ 60 min): FX10 0.443, pooled 0.397.
+  - Vs gold: XAG 0.885-1.0, FX10 0.256-0.350.
+  - τ_a, pooled body: 0.041 / 0.055 / 0.063 R, so λ_a = 820 / 441 / 341.
+- The shipped `rho_day_le_60m` stays 0.25.
+- The rev-3 ladder rows that assumed ρ_inst = 0.1 are void, and the ladder is recomputed mechanically at Stage 0.
