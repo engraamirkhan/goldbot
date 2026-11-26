@@ -292,6 +292,17 @@ def test_ship_manifest_has_sha_and_cutovers_and_verify_catches_drift(tmp_path: P
         ship.collect(tmp_path / "empty")
 
 
+# exact tracked data-suffix files allowed outside the fixture dirs, each with its reason (never a directory)
+DATA_FILE_ALLOWLIST: dict[str, str] = {
+    "docs/research/rho-measurement-2026-11-cells.csv.gz":
+        "aggregate ICC statistics only (counts, point, lo95/hi95), no prices or bars; code review on PR #466",
+}
+# the only column names the allowlisted D-12 cells file may carry: identifiers of a cell and its aggregate statistics
+RHO_CELL_ID_COLUMNS = {"kind", "class", "key", "source", "geometry", "outcome", "orientation", "band", "head", "tf",
+                       "fold", "column", "days", "weeks", "instruments", "obs", "m_bar_w"}
+RHO_CELL_STATS = {"within_day", "cross_pair", "cross_agg", "between_inst_sd", "vs_gold_pair", "vs_gold_agg"}
+
+
 def test_no_parquet_or_csv_tracked_outside_the_fixture_dirs() -> None:
     """WS-2: the long history (and any data file) never enters git; only small synthetic fixtures are tracked, and
     the output paths are git-ignored so `git add .` cannot pick them up."""
@@ -300,7 +311,7 @@ def test_no_parquet_or_csv_tracked_outside_the_fixture_dirs() -> None:
     tracked = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True).stdout.decode()
     data = [f for f in tracked.split("\0")
             if f.lower().endswith((".parquet", ".csv", ".csv.gz", ".feather", ".arrow", ".bi5", ".xls", ".xlsx"))]
-    assert all(f.startswith(("tests/data/", "tests/fixtures/")) for f in data), data
+    assert all(f.startswith(("tests/data/", "tests/fixtures/")) or f in DATA_FILE_ALLOWLIST for f in data), data
     assert not [f for f in tracked.split("\0") if "daily_long" in f and not f.endswith(".py")]
     outs = ["raw/daily/long/xauusd_daily_long.parquet", "raw/daily/long/manifest.json",
             "raw/daily/xauusd_daily_1978_present.parquet", "raw/daily/_long_cache/yahoo_gcf.json",
@@ -308,3 +319,23 @@ def test_no_parquet_or_csv_tracked_outside_the_fixture_dirs() -> None:
     ignored = subprocess.run(["git", "check-ignore", "--no-index", *outs], cwd=root, capture_output=True,
                              text=True).stdout.split()
     assert sorted(ignored) == sorted(outs)
+
+
+def test_the_allowlisted_data_files_hold_only_aggregate_statistics() -> None:
+    """Each DATA_FILE_ALLOWLIST entry is an exact tracked file (not a directory), and the D-12 cells file's header
+    holds only cell identifiers and aggregate statistic columns (<stat>.point / .lo95 / .hi95): no price, bar or
+    timestamp column can enter under the allowlist."""
+    import csv
+    import gzip
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    tracked = set(subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True,
+                                 check=True).stdout.decode().split("\0"))
+    for path, why in DATA_FILE_ALLOWLIST.items():
+        assert path in tracked and not path.endswith("/") and why, path
+    with gzip.open(root / "docs/research/rho-measurement-2026-11-cells.csv.gz", "rt", newline="") as fh:
+        header = next(csv.reader(fh))
+    stat_cols = {f"{s}.{p}" for s in RHO_CELL_STATS for p in ("point", "lo95", "hi95")}
+    assert header and set(header) <= RHO_CELL_ID_COLUMNS | stat_cols, sorted(set(header) - RHO_CELL_ID_COLUMNS - stat_cols)
+    banned = ("open", "high", "low", "close", "bid", "ask", "price", "ts_utc", "visible_at", "volume", "tick")
+    assert not [c for c in header if any(b in c.lower() for b in banned)], header
