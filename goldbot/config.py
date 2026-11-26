@@ -287,6 +287,10 @@ class SchedulerSettings(_Section):
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+    # ADR 0105 (ii): the reference account's broker M1 (bars_1m_broker, filled by feed_reconcile at 23:20) copied into
+    # raw/broker_m1/ daily, the previous and current month, sha256 per file and a gap log (goldbot/data/broker_capture.py)
+    broker_m1_copy: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", weekdays=[0, 1, 2, 3, 4],
+                                                        max_late_hours=20, run_if_never_run=True)
     # broker ledger (goldbot/ops/ledger.py, finance audit GAP-07/GAP-08): balance snapshot, deposits and withdrawals,
     # positions and balance reconciled with the broker. Every day: the deal history still changes on weekends
     broker_ledger: ScheduleSettings = ScheduleSettings(kind="daily", at="23:25", max_late_hours=20)

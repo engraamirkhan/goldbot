@@ -126,6 +126,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:broker_m1_copy",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:calendar_archive",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -646,6 +651,11 @@
   ],
   [
    "job:broker_ledger",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:broker_m1_copy",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

@@ -385,7 +385,8 @@ def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     db = Database.open(ctx.state_dir, "aux")
     rep = fs.snapshot_pending(db, ctx.store, broker_of={acc.account_id: acc.broker for acc in ctx.accounts},
                               symbol_of=gold_symbols(ctx.accounts), as_of=slot, max_decisions=e.snapshot_max_decisions,
-                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline)
+                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline,
+                              clock=clock)      # the deadline is checked on the clock it was computed from
     rep["coverage_1d"] = fs.coverage(db, since=slot - pd.Timedelta(days=1))
     return rep
 
@@ -1471,6 +1472,20 @@ def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- feed reconcile (D12)
+def broker_m1_copy(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily (ADR 0105 (ii)): the reference account's broker M1 from the store into raw/broker_m1/: the current month,
+    the previous month until it freezes, and every closed month missing or incomplete (sha256 per file, gap log per
+    month; goldbot/data/broker_capture.py). Reads the store only: no broker call, no order path. A missed session day
+    is reported in the result and judged by `learning:broker_m1_capture`; the job fails only when the copy fails."""
+    from goldbot.data import broker_capture as BC
+    months = BC.months_to_copy(slot, raw_dir=BC.RAW_DIR)
+    start = max(BC.CAPTURE_FROM, pd.Period(months[0], freq="M").to_timestamp().tz_localize("UTC"))
+    bars = BC.read_capture(ctx.store, BC.REFERENCE_ACCOUNT, start=start)
+    out = BC.copy_months(bars, slot, months=months, raw_dir=BC.RAW_DIR)
+    out["capture"] = BC.judge_capture(bars, slot)[1]
+    return out
+
+
 def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily (design: Data architecture, D12/D20): per enabled account, the engine's tick-built 1m bars against the
     broker's own M1 over the last day (goldbot/data/crossfeed.py) -> dq_events, bars_1m_broker, state/reconcile_<acc>.json."""
@@ -2097,6 +2112,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "broker_m1_copy": broker_m1_copy,             # ADR 0105 (ii): reference broker M1 -> raw/broker_m1 (read-only)
     "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup

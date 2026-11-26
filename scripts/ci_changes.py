@@ -23,6 +23,7 @@ RUNTIME_DOCS = (
     "docs/ROADMAP.md",         # goldbot/telegram/digest.py reads the owner decision queue
     "docs/RUNBOOK.md",         # test_us_calendar.py (a file with integration tests) reads it
     "docs/data/",              # scripts/research/data_sufficiency.py renders and --check reads the sufficiency table
+    "docs/decisions/0105-gold-grade-served-tiers.md",   # scripts/dukascopy_gold_grade.py writes its v2.2 result block
 )
 
 

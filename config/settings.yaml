@@ -214,6 +214,7 @@ scheduler:
   backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py); after tick_record_winter, whose ticks.job_budget_s bounds it
   restore_drill:    { kind: weekly,  at: "10:00", weekday: 6, max_late_hours: 30 }      # Sunday: restore latest to a temp dir and verify
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
+  broker_m1_copy:   { kind: daily,   at: "23:55", weekdays: [0, 1, 2, 3, 4], max_late_hours: 20, run_if_never_run: true }   # ADR 0105 (ii): reference broker M1 (bars_1m_broker) -> raw/broker_m1/, sha256 per file, gap log; a missed session day fails it
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day; re-pulls broker M1 holes over 7 days
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
