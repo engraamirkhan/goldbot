@@ -73,8 +73,8 @@ def main() -> int:
         htf_s = time.perf_counter() - t1
         for _, tf, y in jobs:
             for ph in phases:
-                if ph and F.tf_seconds(tf) >= F.tf_seconds("1d"):
-                    continue
+                if ph and (ph * 60 >= F.tf_seconds(tf) or F.tf_seconds(tf) >= F.tf_seconds("1d")):
+                    continue                    # no offset inside this bar (code review L1)
                 t = time.perf_counter()
                 rows = F.build_year(m, instrument=inst, tf=tf, year=y, cache_dir=a.cache, htf=htf, phase=ph)
                 s = time.perf_counter() - t

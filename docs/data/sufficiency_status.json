@@ -1,10 +1,11 @@
 {
- "as_of": "2026-11-26",
+ "card_dated": "2026-11-26",
+ "counted_by": "sr-v3 card rev 2 section 2.2 (outcome-blind; gold untiered until D-1)",
  "cells": [
   {
    "cell": "gold/1m",
    "verdict": "SHORT",
-   "projected": "SUFFICIENT",
+   "projected": "UNMEASURED (D-1)",
    "n_eff_learn": 7328,
    "n_eff_judge": 7085,
    "need_train": 4300,
@@ -45,7 +46,7 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
@@ -67,7 +68,7 @@
   {
    "cell": "gold/5m",
    "verdict": "SHORT",
-   "projected": "SUFFICIENT",
+   "projected": "UNMEASURED (D-1)",
    "n_eff_learn": 5443,
    "n_eff_judge": 5263,
    "need_train": 4300,
@@ -108,7 +109,7 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
@@ -130,7 +131,7 @@
   {
    "cell": "gold/15m",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "UNMEASURED (D-1)",
    "n_eff_learn": 4054,
    "n_eff_judge": 3919,
    "need_train": 4300,
@@ -171,7 +172,7 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
@@ -179,7 +180,7 @@
     },
     {
      "gap": "learn n_eff 4,054 < 4,300 for a 10-input block (max 9 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 8,108) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -201,7 +202,7 @@
   {
    "cell": "gold/30m",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "UNMEASURED (D-1)",
    "n_eff_learn": 2683,
    "n_eff_judge": 2594,
    "need_train": 4300,
@@ -242,7 +243,7 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
@@ -250,7 +251,7 @@
     },
     {
      "gap": "learn n_eff 2,683 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,366) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -272,7 +273,7 @@
   {
    "cell": "gold/1h",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 2071,
    "n_eff_judge": 2002,
    "need_train": 4300,
@@ -313,19 +314,19 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 2,071 < 4,300 for a 10-input block (max 4 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 4,142 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     }
    ],
    "requirement": {
@@ -343,7 +344,7 @@
   {
    "cell": "gold/2h",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 1035,
    "n_eff_judge": 1001,
    "need_train": 4300,
@@ -392,23 +393,23 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 1,035 < 4,300 for a 10-input block (max 2 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 2,070 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 1,001 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -430,7 +431,7 @@
   {
    "cell": "gold/4h",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 414,
    "n_eff_judge": 400,
    "need_train": 4300,
@@ -471,23 +472,23 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 414 < 4,300 for a 10-input block (max 0 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 828 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 400 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -509,7 +510,7 @@
   {
    "cell": "gold/1d",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 207,
    "n_eff_judge": 200,
    "need_train": 4300,
@@ -550,23 +551,23 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 207 < 4,300 for a 10-input block (max 0 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 414 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 200 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -588,7 +589,7 @@
   {
    "cell": "gold/1w",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 104,
    "n_eff_judge": 100,
    "need_train": 4300,
@@ -629,23 +630,23 @@
     },
     {
      "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 104 < 4,300 for a 10-input block (max 0 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 208 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 100 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -700,7 +701,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -755,7 +756,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -810,7 +811,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -865,7 +866,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -873,7 +874,7 @@
     },
     {
      "gap": "learn n_eff 4,174 < 4,300 for a 10-input block (max 9 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 8,348) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -928,7 +929,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -936,7 +937,7 @@
     },
     {
      "gap": "learn n_eff 3,221 < 4,300 for a 10-input block (max 7 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 6,442) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -958,7 +959,7 @@
   {
    "cell": "fx10/2h",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 1611,
    "n_eff_judge": 1547,
    "need_train": 4300,
@@ -999,19 +1000,19 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
     },
     {
-     "gap": "learn n_eff 1,611 < 4,300 for a 10-input block (max 3 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 3,222 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     }
    ],
    "requirement": {
@@ -1029,7 +1030,7 @@
   {
    "cell": "fx10/4h",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 644,
    "n_eff_judge": 619,
    "need_train": 4300,
@@ -1062,23 +1063,23 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
     },
     {
-     "gap": "learn n_eff 644 < 4,300 for a 10-input block (max 1 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 1,288 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (1) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 619 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -1100,7 +1101,7 @@
   {
    "cell": "fx10/1d",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 322,
    "n_eff_judge": 309,
    "need_train": 4300,
@@ -1133,23 +1134,23 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
     },
     {
-     "gap": "learn n_eff 322 < 4,300 for a 10-input block (max 0 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 644 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 309 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -1171,7 +1172,7 @@
   {
    "cell": "fx10/1w",
    "verdict": "SHORT",
-   "projected": "SHORT",
+   "projected": "INFEASIBLE",
    "n_eff_learn": 161,
    "n_eff_judge": 155,
    "need_train": 4300,
@@ -1204,23 +1205,23 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
     },
     {
-     "gap": "learn n_eff 161 < 4,300 for a 10-input block (max 0 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 322 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
     },
     {
      "gap": "judge n_eff 155 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -1242,13 +1243,21 @@
   {
    "cell": "metals_crosses_b/1m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1275,7 +1284,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1288,6 +1297,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1305,13 +1322,21 @@
   {
    "cell": "metals_crosses_b/5m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1338,7 +1363,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1351,6 +1376,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1368,13 +1401,21 @@
   {
    "cell": "metals_crosses_b/15m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1401,7 +1442,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1414,6 +1455,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1431,13 +1480,21 @@
   {
    "cell": "metals_crosses_b/30m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1464,7 +1521,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1477,6 +1534,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1494,13 +1559,21 @@
   {
    "cell": "metals_crosses_b/1h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1527,7 +1600,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1540,6 +1613,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1557,13 +1638,21 @@
   {
    "cell": "metals_crosses_b/2h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
      "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
@@ -1598,7 +1687,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1611,6 +1700,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1628,13 +1725,21 @@
   {
    "cell": "metals_crosses_b/4h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1661,7 +1766,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1674,6 +1779,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-mc"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1724,7 +1837,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1787,7 +1900,7 @@
     },
     {
      "gap": "no dense labels for FX10 and metals/crosses",
-     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close)",
+     "plan": "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-16",
      "blocks": true,
@@ -1817,13 +1930,21 @@
   {
    "cell": "index_energy_b/1m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 8332,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1850,7 +1971,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -1863,6 +1984,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1880,13 +2009,21 @@
   {
    "cell": "index_energy_b/5m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 6189,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1913,7 +2050,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -1926,6 +2063,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -1943,13 +2088,21 @@
   {
    "cell": "index_energy_b/15m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 4609,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -1976,7 +2129,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -1989,6 +2142,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -2006,13 +2167,21 @@
   {
    "cell": "index_energy_b/30m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 3051,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -2039,7 +2208,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2052,6 +2221,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -2069,13 +2246,21 @@
   {
    "cell": "index_energy_b/1h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 2355,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -2102,7 +2287,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2115,6 +2300,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -2132,13 +2325,21 @@
   {
    "cell": "index_energy_b/2h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 1177,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
      "plan": "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change",
@@ -2173,7 +2374,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2186,6 +2387,14 @@
      "due": "2026-11-28",
      "blocks": true,
      "item": "COUNT-ie"
+    },
+    {
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -2203,13 +2412,21 @@
   {
    "cell": "index_energy_b/4h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 471,
+   "projected": "n/a: B is daily-only",
+   "n_eff_learn": 0,
+   "n_eff_judge": 0,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
+    {
+     "gap": "B months carry close-to-close labels and daily features only: no intraday rows load",
+     "plan": "intraday rows need A months: D-14 second source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
+     "owner": "data-engineer",
+     "due": "2026-12-09",
+     "blocks": true,
+     "item": "B-DAILY"
+    },
     {
      "gap": "fs-v1 feature store not merged",
      "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
@@ -2236,7 +2453,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2251,12 +2468,12 @@
      "item": "COUNT-ie"
     },
     {
-     "gap": "judge n_eff 471 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
-     "owner": "quant-reviewer + data-engineer",
-     "due": "2026-12-11",
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
      "blocks": true,
-     "item": "POWER"
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -2307,7 +2524,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2323,7 +2540,7 @@
     },
     {
      "gap": "judge n_eff 235 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -2378,7 +2595,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2394,7 +2611,7 @@
     },
     {
      "gap": "judge n_eff 118 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
      "blocks": true,
@@ -2449,7 +2666,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2504,7 +2721,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2559,7 +2776,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2614,7 +2831,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2669,7 +2886,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2732,7 +2949,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2787,7 +3004,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2842,7 +3059,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
@@ -2897,7 +3114,7 @@
     },
     {
      "gap": "no dense labels for index and energy",
-     "plan": "dense label factory, index + energy (B close-to-close)",
+     "plan": "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
      "owner": "data-engineer + implementer",
      "due": "2026-12-21",
      "blocks": true,
