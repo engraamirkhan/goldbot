@@ -742,7 +742,7 @@ def booked(ledger: Path, read_id: str, frozen_spec_hash: str) -> dict[str, Any]:
     """The read-once ledger row (`windows.READS_LEDGER`, written before the read by `windows.record_read_once`) whose
     key is `read_id`, for a confirm or test_old window, with `ref.spec_hash` = the frozen spec hash. Else raises."""
     p = Path(ledger)
-    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    rows = WN.read_ledger(p)
     hit = [r for r in rows if r.get("key") == read_id and r.get("window") in (WN.Window.CONFIRM.value,
                                                                                WN.Window.TEST_OLD.value)]
     if not hit:
@@ -753,27 +753,28 @@ def booked(ledger: Path, read_id: str, frozen_spec_hash: str) -> dict[str, Any]:
 
 
 def _consumptions(ledger: Path, read_id: str) -> list[dict[str, Any]]:
-    p = Path(ledger)
-    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    rows = WN.read_ledger(ledger)
     return [r for r in rows if r.get("type") == "consumption" and r.get("id") == read_id]
 
 
 def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str,
             keys: Mapping[str, str]) -> dict[str, Any]:
     """Quant C-4: every `load_labels` under a booked read appends a consumption row (id, columns, label spec hash,
-    keys, ts). The first consumption fixes the columns, the spec hash and the keys; a later load under the same id
-    with any of them different raises."""
-    row = {"type": "consumption", "id": read_id, "columns": list(columns), "label_spec_hash": label_spec_hash,
+    keys, ts). The first consumption fixes the columns (compared as a set: `sorted(columns)`), the spec hash and the
+    keys (one instrument, tf and year set per booked id); a later load under the same id with any of them different
+    raises. Read, check and append run under an exclusive lock with one O_APPEND write and fsync (code review LOW-A),
+    so two concurrent first loads cannot both be first."""
+    row = {"type": "consumption", "id": read_id, "columns": sorted(columns), "label_spec_hash": label_spec_hash,
            "keys": dict(sorted(keys.items()))}
-    prior = _consumptions(ledger, read_id)
-    if prior:
-        first = prior[0]
-        for f in ("columns", "label_spec_hash", "keys"):
-            if first.get(f) != row[f]:
-                raise PermissionError(f"read {read_id!r} was first consumed with other {f}: a booked read is fixed by "
-                                      "its first load (quant C-4)")
-    with open(ledger, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({**row, "ts": pd.Timestamp.now(tz="UTC").isoformat()}) + "\n")
+    with WN.locked_ledger(ledger) as fd:
+        prior = _consumptions(ledger, read_id)
+        if prior:
+            first = prior[0]
+            for f in ("columns", "label_spec_hash", "keys"):
+                if (sorted(first.get(f) or []) if f == "columns" else first.get(f)) != row[f]:
+                    raise PermissionError(f"read {read_id!r} was first consumed with other {f}: a booked read is fixed "
+                                          "by its first load (quant C-4)")
+        WN.append_row(fd, {**row, "ts": pd.Timestamp.now(tz="UTC").isoformat()})
     return row
 
 
