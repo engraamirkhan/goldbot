@@ -34,7 +34,7 @@ ORDER = ("supervisor", "engine", "drift-review", "bridge", "bridge-order-lane", 
          "preflight", "revoke-sessions", "mail-test", "owner-history", "health", "positions", "shadow-report", "fill-count",
          "broker-history-depth", "observe", "ruin", "m1-backfill", "findings", "monthly-report",
          "perf-report", "sizing-feasibility", "bridge-smoke", "tv-ideas", "ledger",
-         "daily-review", "repair-lost-record", "autodisc-register")
+         "daily-review", "repair-lost-record", "autodisc-register", "rollback-model")
 
 
 def test_the_registry_lists_every_command_in_the_old_dispatcher_order():
