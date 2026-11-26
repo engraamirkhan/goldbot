@@ -65,8 +65,29 @@ def test_requires_python_allows_only_3_11_and_uv_lock_agrees():
 
 
 def test_locked_versions_skip_the_project_itself_and_normalise_names():
-    assert ce.locked_versions(LOCK) == {"numpy": "2.4.6", "pyyaml": "6.0.3", "pandas": "3.0.1", "mypy": "1.20.0",
-                                        "pywin32": "311"}
+    assert ce.locked_versions(LOCK) == {"numpy": ("2.4.6",), "pyyaml": ("6.0.3",), "pandas": ("3.0.1",),
+                                        "mypy": ("1.20.0",), "pywin32": ("311",)}
+
+
+TWO_TORCH = LOCK + """
+[[package]]
+name = "torch"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "torch"
+version = "2.15.0+cpu"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+"""
+
+
+def test_a_package_locked_at_one_version_per_platform_accepts_any_of_them_and_refuses_another():
+    # the dl group locks torch from PyPI on macOS and from the PyTorch CPU index (+cpu) on Linux
+    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0"}, (3, 11)) == []
+    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0+cpu"}, (3, 11)) == []
+    out = ce.problems(TWO_TORCH, {**GOOD, "torch": "2.14.0"}, (3, 11))
+    assert out and "2.14.0" in out[0] and "2.15.0+cpu" in out[0] and "2.15.0 " in out[0] + " "
 
 
 def test_a_matching_environment_has_no_problems():

@@ -5,6 +5,15 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-26 SEQ-1 outcome-free 8-dim embedding (quant R-c: self-supervised next-window-bar pretext, refit per
+  outer fold on purged rows, embargo = TCN window + H, A8 parity, 5-seed CKA stability) as the primary path, SEQ-1
+  label head (shadow-only, own card), RL-X1 fitted-Q exits, size-v1 sizing scaffold and agg-v1 AdaHedge (ML plan items 12, 15, 17;
+  ADR 0106 families A, D, G; ADR 0107). History code only, frozen artifacts with a sha, never live, no K booked, no
+  label read: `learn_labels.load_learn` is the single route (learn 2010-17, train, phase 0, no booked read) and stays
+  sealed until ADR 0085 A4 records the tiers sha (PR #482). torch is the optional `dl` group (`uv sync --extra dl`,
+  CPU wheels; Linux from the PyTorch CPU index); scripts/check_env.py now accepts a package locked once per platform.
+  Run logs rebuild exactly (`run_log`). Open: quant ruling on the validation stop (ADR 0107 1), the GBT keep from the
+  tabular trainer for SEQ-1's paired D, a runner script for the first real fit.
 - **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
     `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.
