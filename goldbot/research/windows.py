@@ -32,8 +32,12 @@ read once, winner only (`windows.allow_test_old_for`, CONFIRM-SEEN rule)".
 """
 from __future__ import annotations
 
+import fcntl
 import json
-from collections.abc import Iterable, Mapping
+import logging
+import os
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -43,6 +47,8 @@ import pandas as pd
 
 from goldbot.data.holdout_guard import HOLDOUT_START, HoldoutSealed
 from goldbot.data.release import BAR_FILE_PREFIX, read_bar_files
+
+log = logging.getLogger(__name__)
 
 
 class Window(StrEnum):
@@ -191,19 +197,70 @@ READ_ONCE_FAMILIES: dict[str, frozenset[Window]] = {
 READS_LEDGER = "window_reads.jsonl"     # beside the research registry (state/), never committed
 
 
+class LedgerCorrupt(ValueError):
+    """A read ledger line before the last one does not parse: the ledger is refused, never guessed around."""
+
+
+def parse_ledger(text: str, *, where: str = "ledger") -> list[dict[str, Any]]:
+    """The rows of a JSONL read ledger. Every newline-terminated line must parse (`LedgerCorrupt` otherwise); at
+    most one unterminated final line (a writer that died mid-write) is tolerated, left out and reported (code review
+    LOW-B on PR #472)."""
+    parts = text.split("\n")
+    torn = parts.pop()                      # "" when the text ends with a newline
+    rows = []
+    for i, line in enumerate(parts):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise LedgerCorrupt(f"{where}: line {i + 1} does not parse: {exc}") from None
+    if torn.strip():
+        log.warning("%s: an unterminated final line (%d bytes) was left out: a torn write", where, len(torn))
+    return rows
+
+
+def read_ledger(path: Path | str) -> list[dict[str, Any]]:
+    p = Path(path)
+    return parse_ledger(p.read_text(encoding="utf-8"), where=str(p)) if p.exists() else []
+
+
+@contextmanager
+def locked_ledger(path: Path | str) -> Iterator[int]:
+    """An O_APPEND descriptor on the ledger under an exclusive flock, for read-check-append (LOW-A). A torn final
+    line is moved to `<ledger>.torn` and cut before anything is appended, so it never becomes a middle line."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        data = p.read_bytes()
+        if data and not data.endswith(b"\n"):
+            keep = data.rfind(b"\n") + 1
+            with open(p.with_name(p.name + ".torn"), "ab") as fh:
+                fh.write(data[keep:] + b"\n")
+            os.ftruncate(fd, keep)
+            log.warning("%s: a torn final line (%d bytes) moved to %s.torn", p, len(data) - keep, p.name)
+        yield fd
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def append_row(fd: int, row: Mapping[str, Any]) -> None:
+    """One row, one os.write on the O_APPEND descriptor, then fsync."""
+    os.write(fd, (json.dumps(row, default=str) + "\n").encode("utf-8"))
+    os.fsync(fd)
+
+
 def reads_of(ledger: Path | str, family: str) -> set[Window]:
     """The read-once windows `family` has already read according to `ledger` (a missing ledger holds none)."""
-    p = Path(ledger)
-    if not p.exists():
-        return set()
-    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    rows = read_ledger(ledger)
     return {Window(r["window"]) for r in rows if r.get("family") == family}
 
 
 def _rows_of(ledger: Path, family: str, window: Window) -> list[dict[str, Any]]:
-    if not ledger.exists():
-        return []
-    rows = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()]
+    rows = read_ledger(ledger)
     return [r for r in rows if r.get("family") == family and r.get("window") == window.value]
 
 
@@ -220,15 +277,14 @@ def record_read_once(ledger: Path | str, family: str, window: Window | str, *, r
     if w not in READ_ONCE_FAMILIES.get(family, frozenset()):
         raise ValueError(f"{family!r} has no read-once registration for {w.value} (windows.READ_ONCE_FAMILIES)")
     p = Path(ledger)
-    prior = _rows_of(p, family, w)
-    status = "started"
-    if prior:
-        resumable = (len(prior) == 1 and resume_key is not None and prior[0].get("key") == resume_key)
-        if not resumable:
-            raise AlreadyRead(f"{family!r} already read {w.value}: read once (one resume by the same run only)")
-        status = "resumed"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    row = {"family": family, "window": w.value, "status": status, "key": resume_key,
-           "ts": pd.Timestamp.now(tz="UTC").isoformat(), "ref": dict(ref)}
-    with open(p, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, default=str) + "\n")
+    with locked_ledger(p) as fd:            # read, check and append under one exclusive lock (LOW-A, LOW-B)
+        prior = _rows_of(p, family, w)
+        status = "started"
+        if prior:
+            resumable = (len(prior) == 1 and resume_key is not None and prior[0].get("key") == resume_key)
+            if not resumable:
+                raise AlreadyRead(f"{family!r} already read {w.value}: read once (one resume by the same run only)")
+            status = "resumed"
+        row = {"family": family, "window": w.value, "status": status, "key": resume_key,
+               "ts": pd.Timestamp.now(tz="UTC").isoformat(), "ref": dict(ref)}
+        append_row(fd, row)
