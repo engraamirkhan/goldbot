@@ -7,12 +7,24 @@ Statuses: `challenger` (shadow only) -> `champion` (traded) -> `previous` (the c
 kept so it can be restored if the new champion trips its alarm in the first two weeks) -> `retired`. Artefacts are
 pickles under models/<family>/<agent_id>-<timestamp>.pkl; the registry stores each file's SHA-256 and refuses to load a file that does not
 match, so a corrupted or swapped artefact can never reach the engine.
+
+ADR 0106 decision 7 ("any past model can be rebuilt exactly from its logged data version, settings, seed and code
+sha") and goal "every deep model beats the gradient-boosted baseline out of sample, or it is not deployed": every
+entry stores the id of its run manifest (research/run_manifest.py, kept in models/manifests/) and its model family.
+`load_for_serving` is the engine's loader (`champion_models`, `shadow_models`): a fitted model created on or after
+model_quality.MANIFEST_REQUIRED_FROM is refused without a manifest that passes model_quality.require_servable; a refused
+model is left out (the engine then proposes nothing for that agent), never served. Rule models (ADR 0038) are not
+fitted and need none; older fitted entries keep serving (ADR 0109). `rollback-model <agent>` (`rollback_main`) restores
+the previous champion in one command.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import logging
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,8 +33,12 @@ from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.features.registry import live_feature_check
+from goldbot.research import run_manifest as rm
 from goldbot.research.model import MetaLabelModel
+from goldbot.research.model_quality import MANIFEST_REQUIRED_FROM, ModelFamily, ModelRefused, servable_reasons
 from goldbot.research.rule_model import RuleModel
+
+log = logging.getLogger("goldbot.model_registry")
 
 Status = Literal["challenger", "champion", "previous", "retired"]
 
@@ -42,6 +58,8 @@ class ModelEntry(Record):
     promoted_utc: UtcTimestamp | None = None
     notes: list[str] = Field(default_factory=list)
     recalibrations: list[dict[str, Any]] = Field(default_factory=list)    # minor versions: only the calibrator changed
+    manifest_id: str | None = None    # run manifest in models/manifests/ (None: a rule model or a pre-manifest fit)
+    model_family: ModelFamily | None = None    # ADR 0106 decision 3, from the manifest
 
 
 class ModelRegistry:
@@ -52,6 +70,7 @@ class ModelRegistry:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "registry.json"
+        self.manifests = self.root / "manifests"
         raw = json.loads(self.path.read_text()) if self.path.exists() else []
         self.entries: list[ModelEntry] = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
 
@@ -83,18 +102,50 @@ class ModelRegistry:
             raise TypeError(f"{entry.artefact} is not a MetaLabelModel or a RuleModel")
         return model
 
-    def champion_models(self) -> dict[str, Any]:
-        """agent_id -> champion model."""
-        out = {}
-        for aid in self.agent_ids():
-            ch = self.champion(aid)
-            if ch is not None:
-                out[aid] = self.load(ch)
+    def serving_refusal(self, entry: ModelEntry) -> str | None:
+        """Why `entry` may not serve, or None. Reads the artefact's type (a rule model needs no manifest)."""
+        if entry.manifest_id is None:
+            if entry.created_utc < MANIFEST_REQUIRED_FROM or isinstance(self.load(entry), RuleModel):
+                return None
+            return (f"{entry.version}: a fitted model with no run manifest (trained on or after "
+                    f"{MANIFEST_REQUIRED_FROM:%Y-%m-%d}; ADR 0106 decision 7)")
+        try:
+            m = rm.load(entry.manifest_id, self.manifests)
+        except rm.ManifestError as exc:
+            return f"{entry.version}: {exc}"
+        if m.artifact_sha256 != entry.sha256 and not entry.recalibrations:
+            return f"{entry.version}: its manifest describes another artefact"
+        reasons = servable_reasons(m, lookup=lambda i: rm.load(i, self.manifests))
+        return f"{entry.version}: " + "; ".join(reasons) if reasons else None
+
+    def load_for_serving(self, entry: ModelEntry) -> Any:
+        """The checked artefact, or ModelRefused when the serving rule refuses it."""
+        why = self.serving_refusal(entry)
+        if why is not None:
+            raise ModelRefused(why)
+        return self.load(entry)
+
+    def _served(self, entries: list[ModelEntry]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for e in entries:
+            try:
+                out[e.version] = self.load_for_serving(e)
+            except ModelRefused as exc:
+                log.warning("model refused for serving: %s", exc)
         return out
 
+    def champion_models(self) -> dict[str, Any]:
+        """agent_id -> champion model, for the champions the serving rule admits."""
+        champs = [ch for aid in self.agent_ids() if (ch := self.champion(aid)) is not None]
+        served = self._served(champs)
+        return {e.agent_id: served[e.version] for e in champs if e.version in served}
+
     def shadow_models(self) -> dict[str, tuple[str, Any]]:
-        """version -> (agent_id, model) for every champion and challenger: what the shadow book paper-trades."""
-        return {e.version: (e.agent_id, self.load(e)) for e in self.entries if e.status in ("champion", "challenger")}
+        """version -> (agent_id, model) for every champion and challenger the serving rule admits: what the shadow
+        book paper-trades."""
+        live = [e for e in self.entries if e.status in ("champion", "challenger")]
+        served = self._served(live)
+        return {e.version: (e.agent_id, served[e.version]) for e in live if e.version in served}
 
     # ------------------------------------------------------------------ changes
     def ensure_rule_challenger(self, *, family: str, agent_id: str, now: UtcTimestamp | None = None) -> ModelEntry | None:
@@ -106,8 +157,17 @@ class ModelRegistry:
                                    notes=["rule model (ADR 0038): p = rule fired, uncalibrated; shadow only"])
 
     def add_challenger(self, model: MetaLabelModel | RuleModel, *, family: str, agent_id: str, backtest: dict[str, Any],
-                       now: UtcTimestamp | None = None, notes: list[str] | None = None) -> ModelEntry:
+                       now: UtcTimestamp | None = None, notes: list[str] | None = None,
+                       manifest: rm.RunManifest | None = None) -> ModelEntry:
+        """Store `model` as a challenger. `manifest`: the run that fitted it, recorded over these exact pickled bytes
+        (run_manifest.record(artifact=pickle.dumps(model), ...)); it is copied into models/manifests/."""
         live_feature_check(list(model.feature_names))      # a challenger shadow-trades on live bars
+        data = pickle.dumps(model)
+        if manifest is not None:
+            if manifest.artifact_sha256 != hashlib.sha256(data).hexdigest():
+                raise ValueError(f"manifest {manifest.manifest_id[:12]} was recorded for another artefact "
+                                 f"({manifest.artifact_sha256[:12]}), not this model's pickle")
+            rm.store(manifest, self.manifests)
         now = now or pd.Timestamp.now("UTC")
         version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
         n = 1
@@ -115,11 +175,12 @@ class ModelRegistry:
             version, n = f"{agent_id}-{now:%Y%m%dT%H%M%S}-{n}", n + 1
         rel = Path(family) / f"{version}.pkl"
         (self.root / family).mkdir(parents=True, exist_ok=True)
-        data = pickle.dumps(model)
         (self.root / rel).write_bytes(data)
         e = ModelEntry(version=version, family=family, agent_id=agent_id, status="challenger", created_utc=now,
                        feature_version=model.feature_version, feature_names=list(model.feature_names),
-                       artefact=str(rel), sha256=hashlib.sha256(data).hexdigest(), backtest=backtest, notes=notes or [])
+                       artefact=str(rel), sha256=hashlib.sha256(data).hexdigest(), backtest=backtest, notes=notes or [],
+                       manifest_id=manifest.manifest_id if manifest else None,
+                       model_family=manifest.family if manifest else None)
         self.entries.append(e)
         self._save()
         return e
@@ -190,3 +251,31 @@ class ModelRegistry:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps([e.model_dump(mode="json") for e in self.entries], indent=1))
         tmp.replace(self.path)
+
+
+def rollback_main(argv: list[str] | None = None) -> int:
+    """`python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT] [--models DIR]`: restore the agent's
+    previous champion in one command (ADR 0106 decision 7, "every change is reversible"). Refused (exit 2, nothing
+    changed) when there is no previous champion or when the serving rule would refuse it. The engine picks the
+    restored champion up at its next model reload or restart."""
+    ap = argparse.ArgumentParser(prog="rollback-model", description=rollback_main.__doc__)
+    ap.add_argument("agent_id")
+    ap.add_argument("--reason", default="manual rollback")
+    ap.add_argument("--models", default=None, help="model registry folder (default: research.models_dir)")
+    a = ap.parse_args(argv)
+    if a.models is None:
+        from goldbot.config import load_settings
+        a.models = load_settings().research.models_dir
+    reg = ModelRegistry(a.models)
+    prev = reg.by_agent(a.agent_id, "previous")
+    if not prev:
+        print(f"rollback-model: no previous champion for {a.agent_id}; nothing changed", file=sys.stderr)
+        return 2
+    why = reg.serving_refusal(prev[-1])
+    if why is not None:
+        print(f"rollback-model: the previous champion would not serve ({why}); nothing changed", file=sys.stderr)
+        return 2
+    cur = reg.champion(a.agent_id)
+    restored = reg.restore_previous(a.agent_id, f"rollback-model: {a.reason}")
+    print(f"rollback-model: {a.agent_id} champion {cur.version if cur else '-'} -> {restored.version}")
+    return 0

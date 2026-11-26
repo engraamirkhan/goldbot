@@ -1,0 +1,477 @@
+"""Run manifests of ADR 0106 (goldbot/research/run_manifest.py): every training run records its data version, settings
+hash, seeds, code sha, uv.lock hash and scaler fit end; the model registry stores the manifest id with every artefact
+and refuses to serve a fitted model without one; `rebuild` reproduces an artefact byte-identical or fails loudly; the
+monthly walk-forward job writes manifests and never promotes; `rollback-model` restores the previous champion."""
+from __future__ import annotations
+
+import ast
+import json
+import os
+import pickle
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from goldbot.research import model_quality as mq
+from goldbot.research import monthly_walkforward as mwf
+from goldbot.research import run_manifest as rm
+from goldbot.research.model import MetaLabelModel
+from goldbot.research.model_registry import ModelRegistry, rollback_main
+from goldbot.research.rule_model import RuleModel
+
+ROOT = Path(__file__).resolve().parents[1]
+T_END = pd.Timestamp("2024-12-31 21:00", tz="UTC")
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+def git_repo(path: Path) -> Path:
+    """A committed checkout with a uv.lock and one tracked source file."""
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q")
+    (path / "uv.lock").write_text("version = 1\n")
+    (path / "trainer.py").write_text("X = 1\n")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "init")
+    return path
+
+
+def manifest_fields(**over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {"model": "test:gbt", "family": "C", "artifact": b"artifact-bytes",
+                            "data_version": "dv-" + "a" * 61, "settings": {"num_leaves": 4, "rounds": 5},
+                            "seeds": [1, 2, 3, 4, 5], "train_end": T_END, "scaler_fit_end": T_END,
+                            "results": {"edge": 0.1}}
+    base.update(over)
+    return base
+
+
+def _rows(path: Path, n: int = 400, seed: int = 0) -> Path:
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n, 3))
+    y = (X[:, 0] + 0.5 * X[:, 1] + rng.normal(0, 0.5, n) > 0).astype(int)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"x1": X[:, 0], "x2": X[:, 1], "x3": X[:, 2], "y": y}).to_csv(path, index=False)
+    return path
+
+
+# ---------------------------------------------------------------------------------------------- the manifest
+def test_a_recorded_manifest_carries_data_version_settings_hash_seeds_code_sha_lock_hash_and_scaler_fit_end(
+        tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    m = rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
+    assert m.data_version == "dv-" + "a" * 61
+    assert m.settings_hash == rm.settings_hash({"rounds": 5, "num_leaves": 4})       # key order does not matter
+    assert m.seeds == [1, 2, 3, 4, 5]
+    assert m.code_sha == _git(repo, "rev-parse", "HEAD") and m.code_dirty is False
+    assert m.uv_lock_hash == rm.file_sha256(repo / "uv.lock")
+    assert m.scaler_fit_end == T_END and m.train_end == T_END
+    assert m.artifact_sha256 == rm.sha256_bytes(b"artifact-bytes")
+    assert (tmp_path / "m" / f"{m.manifest_id}.json").exists()
+    assert rm.load(m.manifest_id, root=tmp_path / "m") == m
+
+
+def test_a_manifest_whose_scaler_saw_rows_after_the_train_end_is_refused(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    with pytest.raises(ValueError, match="scaler_fit_end"):
+        rm.record(**manifest_fields(scaler_fit_end=T_END + pd.Timedelta(minutes=1)), root=tmp_path / "m", repo=repo)
+
+
+def test_a_manifest_without_a_seed_is_refused(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    with pytest.raises(ValueError, match="seed"):
+        rm.record(**manifest_fields(seeds=[]), root=tmp_path / "m", repo=repo)
+
+
+def test_settings_that_are_not_plain_json_are_refused_rather_than_stringified(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    with pytest.raises(rm.ManifestError, match="settings"):
+        rm.record(**manifest_fields(settings={"t": pd.Timestamp("2024-01-01")}), root=tmp_path / "m", repo=repo)
+    with pytest.raises(rm.ManifestError, match="settings"):
+        rm.record(**manifest_fields(settings={"x": float("nan")}), root=tmp_path / "m", repo=repo)
+
+
+def test_a_non_finite_result_is_stored_as_null(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    m = rm.record(**manifest_fields(results={"auc": float("nan"), "n": 3}), root=tmp_path / "m", repo=repo)
+    assert m.results == {"auc": None, "n": 3}
+
+
+def test_a_manifest_file_edited_after_recording_is_refused_on_load(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    m = rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
+    f = tmp_path / "m" / f"{m.manifest_id}.json"
+    doc = json.loads(f.read_text())
+    doc["seeds"] = [1, 2, 3, 4, 6]
+    f.write_text(json.dumps(doc))
+    with pytest.raises(rm.ManifestError, match="does not match"):
+        rm.load(m.manifest_id, root=tmp_path / "m")
+
+
+def test_recording_outside_a_git_checkout_or_without_a_lock_file_fails_loudly(tmp_path: Path) -> None:
+    (tmp_path / "plain").mkdir()
+    with pytest.raises(rm.ManifestError, match="git"):
+        rm.record(**manifest_fields(), root=tmp_path / "m", repo=tmp_path / "plain")
+    repo = git_repo(tmp_path / "repo")
+    (repo / "uv.lock").unlink()
+    with pytest.raises(rm.ManifestError, match="uv.lock"):
+        rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
+
+
+def test_a_dirty_tree_is_recorded_as_dirty_and_never_served(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    (repo / "trainer.py").write_text("X = 2\n")
+    m = rm.record(**manifest_fields(quality=[mq.seed_stability({s: 0.1 for s in range(1, 6)})]),
+                  root=tmp_path / "m", repo=repo)
+    assert m.code_dirty is True
+    with pytest.raises(mq.ModelRefused, match="dirty"):
+        mq.require_servable(m, lookup=lambda i: rm.load(i, root=tmp_path / "m"))
+
+
+def test_an_untracked_file_does_not_make_the_tree_dirty(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    (repo / "state.json").write_text("{}")
+    assert rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo).code_dirty is False
+
+
+def test_the_hook_api_is_one_call_from_a_trainer() -> None:
+    """The trainers of IF-1/IF-2 call `run_manifest.record(...)` (or `fit_and_record`) once per fit; the names they
+    rely on are pinned here."""
+    assert {"record", "fit_and_record", "load", "rebuild", "BuildSpec", "RunManifest"} <= set(rm.__all__)
+    assert {"seed_stability", "param_shift", "beats_baseline", "require_servable"} <= set(mq.__all__)
+
+
+# ---------------------------------------------------------------------------------------------- rebuild
+@pytest.mark.parametrize(("builder", "settings"), [
+    ("tests.rebuild_builders:tiny_lightgbm", {"num_leaves": 7, "rounds": 12}),
+    ("tests.rebuild_builders:tiny_mlp", {"hidden": 6, "max_iter": 60, "weight_decay": 1e-3}),
+])
+def test_rebuild_reproduces_the_artifact_byte_identical(tmp_path: Path, builder: str, settings: dict[str, Any]) -> None:
+    repo = git_repo(tmp_path / "repo")
+    _rows(tmp_path / "data" / "rows.csv")
+    art, m = rm.fit_and_record(builder, model="t", family="C", data_version="dv1", data_root=tmp_path / "data",
+                               data_files=["rows.csv"], settings=settings, seeds=[7, 8, 9, 10, 11],
+                               train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
+    assert m.builder == builder and m.data_files == {"rows.csv": rm.file_sha256(tmp_path / "data" / "rows.csv")}
+    assert rm.sha256_bytes(art) == m.artifact_sha256
+    assert rm.rebuild(m, repo=repo, data_root=tmp_path / "data") == m.artifact_sha256
+
+
+def _recorded(tmp_path: Path, builder: str = "tests.rebuild_builders:tiny_lightgbm") -> tuple[Path, rm.RunManifest]:
+    repo = git_repo(tmp_path / "repo")
+    _rows(tmp_path / "data" / "rows.csv")
+    _, m = rm.fit_and_record(builder, model="t", family="C", data_version="dv1", data_root=tmp_path / "data",
+                             data_files=["rows.csv"], settings={"num_leaves": 7, "rounds": 3}, seeds=[1, 2, 3, 4, 5],
+                             train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
+    return repo, m
+
+
+def test_rebuild_refuses_a_changed_lock(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path)
+    (repo / "uv.lock").write_text("version = 2\n")
+    _git(repo, "commit", "-qam", "bump")
+    with pytest.raises(rm.RebuildRefused, match="uv.lock"):
+        rm.rebuild(m, repo=repo, data_root=tmp_path / "data")
+
+
+def test_rebuild_refuses_a_dirty_tree(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path)
+    (repo / "trainer.py").write_text("X = 3\n")
+    with pytest.raises(rm.RebuildRefused, match="dirty"):
+        rm.rebuild(m, repo=repo, data_root=tmp_path / "data")
+
+
+def test_rebuild_refuses_another_commit_and_names_the_one_to_check_out(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path)
+    (repo / "trainer.py").write_text("X = 4\n")
+    _git(repo, "commit", "-qam", "change")
+    with pytest.raises(rm.RebuildRefused, match=m.code_sha[:12]):
+        rm.rebuild(m, repo=repo, data_root=tmp_path / "data")
+
+
+def test_rebuild_refuses_a_changed_data_file(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path)
+    _rows(tmp_path / "data" / "rows.csv", seed=1)
+    with pytest.raises(rm.RebuildRefused, match="rows.csv"):
+        rm.rebuild(m, repo=repo, data_root=tmp_path / "data")
+
+
+def test_rebuild_refuses_a_manifest_recorded_without_a_builder(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    m = rm.record(**manifest_fields(), root=tmp_path / "m", repo=repo)
+    with pytest.raises(rm.RebuildRefused, match="builder"):
+        rm.rebuild(m, repo=repo, data_root=tmp_path)
+
+
+def test_rebuild_reports_a_mismatch_when_the_output_differs(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path, builder="tests.rebuild_builders:drifting")
+    with pytest.raises(rm.RebuildMismatch, match=m.artifact_sha256[:12]):
+        rm.rebuild(m, repo=repo, data_root=tmp_path / "data")
+
+
+def test_the_rebuild_script_exits_0_on_identical_1_on_mismatch_and_2_when_refused(tmp_path: Path) -> None:
+    script = ROOT / "scripts" / "research" / "rebuild_model.py"
+    repo, m = _recorded(tmp_path)
+
+    def run(manifest_id: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, str(script), manifest_id, "--manifests", str(tmp_path / "m"),
+                               "--repo", str(repo), "--data-root", str(tmp_path / "data")],
+                              capture_output=True, text=True, cwd=ROOT,
+                              env={**os.environ, "PYTHONPATH": str(ROOT)})    # the test builders live in tests/
+    ok = run(m.manifest_id)
+    assert ok.returncode == 0, ok.stderr
+    assert m.artifact_sha256 in ok.stdout
+    _, drift = rm.fit_and_record("tests.rebuild_builders:drifting", model="t", family="C", data_version="dv1",
+                                 data_root=tmp_path / "data", data_files=["rows.csv"], settings={}, seeds=[1],
+                                 train_end=T_END, scaler_fit_end=T_END, root=tmp_path / "m", repo=repo)
+    mismatch = run(drift.manifest_id)
+    assert mismatch.returncode == 1 and "does not match" in mismatch.stderr
+    (repo / "trainer.py").write_text("dirty\n")
+    refused = run(m.manifest_id)
+    assert refused.returncode == 2 and "dirty" in refused.stderr
+
+
+def test_the_rebuild_script_accepts_a_registry_version(tmp_path: Path) -> None:
+    repo, m = _recorded(tmp_path)
+    reg = ModelRegistry(tmp_path / "models")
+    model = RuleModel(rule="box_break")
+    data = pickle.dumps(model)
+    m2 = rm.record(**manifest_fields(artifact=data, builder=m.builder, data_files=m.data_files,
+                                     settings=m.settings, seeds=m.seeds),
+                   root=tmp_path / "models" / "manifests", repo=repo)
+    e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m2)
+    assert rm.resolve(e.version, models_dir=tmp_path / "models") == m2
+    assert rm.resolve(m2.manifest_id, models_dir=tmp_path / "models") == m2
+
+
+# ---------------------------------------------------------------------------------------------- the registry
+FIT_AT = pd.Timestamp("2026-12-01 10:00", tz="UTC")
+
+
+def _servable_manifest(tmp_path: Path, repo: Path, data: bytes, **over: Any) -> rm.RunManifest:
+    q = [mq.seed_stability({s: 0.1 for s in range(1, 6)})]
+    return rm.record(**manifest_fields(artifact=data, quality=q, **over), root=tmp_path / "models" / "manifests",
+                     repo=repo)
+
+
+def test_every_registry_entry_stores_the_manifest_id_and_model_family(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    model = MetaLabelModel(feature_names=["x"])
+    m = _servable_manifest(tmp_path, repo, pickle.dumps(model))
+    e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m, now=FIT_AT)
+    assert e.manifest_id == m.manifest_id and e.model_family == "C"
+    again = ModelRegistry(tmp_path / "models").get(e.version)
+    assert again.manifest_id == m.manifest_id
+    assert set(ModelRegistry(tmp_path / "models").shadow_models()) == {e.version}
+
+
+def test_add_challenger_refuses_a_manifest_of_another_artefact(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    m = _servable_manifest(tmp_path, repo, b"some other bytes")
+    with pytest.raises(ValueError, match="artefact"):
+        reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, manifest=m)
+    assert reg.entries == []
+
+
+def test_add_challenger_copies_a_manifest_recorded_elsewhere_into_the_registry(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    model = MetaLabelModel(feature_names=["x"])
+    m = rm.record(**manifest_fields(artifact=pickle.dumps(model)), root=tmp_path / "elsewhere", repo=repo)
+    reg = ModelRegistry(tmp_path / "models")
+    reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m)
+    assert rm.load(m.manifest_id, root=tmp_path / "models" / "manifests") == m
+
+
+def test_a_fitted_model_trained_after_the_cutoff_without_a_manifest_is_refused_for_serving(tmp_path: Path) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
+    assert "no run manifest" in (reg.serving_refusal(e) or "")
+    with pytest.raises(mq.ModelRefused, match="no run manifest"):
+        reg.load_for_serving(e)
+    assert reg.shadow_models() == {}
+    reg.promote(e.version, now=FIT_AT)
+    assert reg.champion_models() == {}
+    assert isinstance(reg.load(e), MetaLabelModel)            # the plain checksummed load (backups, recalibration) still works
+
+
+def test_a_legacy_fitted_entry_from_before_the_cutoff_still_serves(tmp_path: Path) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    before = mq.MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=before)
+    assert reg.serving_refusal(e) is None and set(reg.shadow_models()) == {e.version}
+
+
+def test_a_rule_model_is_not_a_fitted_model_and_serves_without_a_manifest(tmp_path: Path) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    e = reg.ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT)
+    assert e is not None and reg.serving_refusal(e) is None
+
+
+def test_a_deep_model_without_a_baseline_win_is_refused_by_the_registry(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    model = MetaLabelModel(feature_names=["x"])
+    m = _servable_manifest(tmp_path, repo, pickle.dumps(model), family="A")
+    e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m, now=FIT_AT)
+    assert "baseline" in (reg.serving_refusal(e) or "")
+    assert reg.shadow_models() == {}
+
+
+def test_a_missing_manifest_file_refuses_the_entry(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    reg = ModelRegistry(tmp_path / "models")
+    model = MetaLabelModel(feature_names=["x"])
+    m = _servable_manifest(tmp_path, repo, pickle.dumps(model))
+    e = reg.add_challenger(model, family="box_break", agent_id="bb", backtest={}, manifest=m, now=FIT_AT)
+    (tmp_path / "models" / "manifests" / f"{m.manifest_id}.json").unlink()
+    assert "manifest" in (reg.serving_refusal(e) or "")
+
+
+# ---------------------------------------------------------------------------------------------- rollback-model
+def _two_champions(tmp_path: Path) -> tuple[ModelRegistry, str, str]:
+    reg = ModelRegistry(tmp_path / "models")
+    a = reg.ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT)
+    assert a is not None
+    reg.promote(a.version, now=FIT_AT)
+    b = reg.add_challenger(RuleModel(rule="box_break"), family="box_break", agent_id="bb", backtest={},
+                           now=FIT_AT + pd.Timedelta(days=7))
+    reg.promote(b.version, now=FIT_AT + pd.Timedelta(days=7))
+    return reg, a.version, b.version
+
+
+def test_rollback_model_restores_the_previous_champion_in_one_command(tmp_path: Path) -> None:
+    _, first, second = _two_champions(tmp_path)
+    code = rollback_main(["bb", "--models", str(tmp_path / "models"), "--reason", "drill"])
+    assert code == 0
+    reg = ModelRegistry(tmp_path / "models")
+    champ = reg.champion("bb")
+    assert champ is not None and champ.version == first
+    assert reg.get(second).status == "retired" and any("rollback-model: drill" in n for n in reg.get(second).notes)
+
+
+def test_rollback_model_refuses_an_agent_without_a_previous_champion(tmp_path: Path,
+                                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    a = reg.ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT)
+    assert a is not None
+    reg.promote(a.version, now=FIT_AT)
+    assert rollback_main(["bb", "--models", str(tmp_path / "models")]) == 2
+    assert "no previous champion" in capsys.readouterr().err
+    assert ModelRegistry(tmp_path / "models").get(a.version).status == "champion"
+
+
+def test_rollback_model_refuses_a_previous_champion_that_would_not_serve(tmp_path: Path,
+                                                                         capsys: pytest.CaptureFixture[str]) -> None:
+    reg = ModelRegistry(tmp_path / "models")
+    old = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
+    reg.promote(old.version, now=FIT_AT)
+    new = reg.add_challenger(RuleModel(rule="box_break"), family="box_break", agent_id="bb", backtest={},
+                             now=FIT_AT + pd.Timedelta(days=1))
+    reg.promote(new.version, now=FIT_AT + pd.Timedelta(days=1))
+    assert rollback_main(["bb", "--models", str(tmp_path / "models")]) == 2
+    assert "would not serve" in capsys.readouterr().err
+    assert ModelRegistry(tmp_path / "models").get(new.version).status == "champion"
+
+
+def test_rollback_model_is_a_registered_ops_command() -> None:
+    from goldbot.ops.commands.registry import find
+    assert find("rollback-model") is not None
+
+
+# ---------------------------------------------------------------------------------------------- monthly walk-forward
+def test_the_monthly_walkforward_row_runs_on_the_first_of_the_month_at_a_fixed_utc_time() -> None:
+    from goldbot.config import load_settings
+    from goldbot.ops.jobs import JOBS
+    s = load_settings().scheduler.monthly_walkforward
+    assert s.kind == "monthly" and s.day == 1 and s.weekday is None and s.at == "04:30"
+    assert "monthly_walkforward" in JOBS
+
+
+def _trainer_ok(*, window_end: pd.Timestamp, manifests_root: Path, repo: Path) -> list[rm.RunManifest]:
+    return [rm.record(**manifest_fields(train_end=window_end - pd.Timedelta(hours=1),
+                                        scaler_fit_end=window_end - pd.Timedelta(hours=1),
+                                        schedule="monthly_walkforward"), root=manifests_root, repo=repo)]
+
+
+def test_the_monthly_run_trains_on_data_before_the_month_writes_a_manifest_and_never_promotes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = git_repo(tmp_path / "repo")
+    monkeypatch.setattr(ModelRegistry, "promote", lambda *a, **k: pytest.fail("the monthly job promoted"))
+    monkeypatch.setattr(ModelRegistry, "restore_previous", lambda *a, **k: pytest.fail("the monthly job restored"))
+    seen: dict[str, Any] = {}
+
+    def trainer(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        seen["window_end"] = window_end
+        return _trainer_ok(window_end=window_end, manifests_root=manifests_root, repo=repo)
+    monkeypatch.setitem(sys.modules, "fake_trainers", type(sys)("fake_trainers"))
+    sys.modules["fake_trainers"].monthly = trainer      # type: ignore[attr-defined]
+    out = mwf.run(pd.Timestamp("2027-01-01 04:30", tz="UTC"), trainers=["fake_trainers:monthly"],
+                  manifests_root=tmp_path / "m")
+    assert seen["window_end"] == pd.Timestamp("2027-01-01", tz="UTC")
+    assert out["trained"] == 1 and out["errors"] == {}
+    mid = out["manifests"]["fake_trainers:monthly"][0]
+    assert rm.load(mid, root=tmp_path / "m").schedule == "monthly_walkforward"
+
+
+def test_a_manifest_past_the_window_or_off_schedule_fails_the_monthly_job(tmp_path: Path,
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = git_repo(tmp_path / "repo")
+
+    def peeks(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        return [rm.record(**manifest_fields(train_end=window_end, scaler_fit_end=window_end,
+                                            schedule="monthly_walkforward"), root=manifests_root, repo=repo)]
+
+    def adhoc(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        return [rm.record(**manifest_fields(artifact=b"x", train_end=window_end - pd.Timedelta(days=1),
+                                            scaler_fit_end=window_end - pd.Timedelta(days=1)),
+                          root=manifests_root, repo=repo)]
+    mod = type(sys)("fake_trainers2")
+    mod.peeks, mod.adhoc = peeks, adhoc              # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_trainers2", mod)
+    with pytest.raises(mwf.MonthlyRunFailed) as ei:
+        mwf.run(pd.Timestamp("2027-01-01 04:30", tz="UTC"), trainers=["fake_trainers2:peeks", "fake_trainers2:adhoc"],
+                manifests_root=tmp_path / "m")
+    msg = str(ei.value)
+    assert "train_end" in msg and "schedule" in msg
+
+
+def test_one_failing_trainer_never_skips_another(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = git_repo(tmp_path / "repo")
+    calls: list[str] = []
+
+    def boom(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        calls.append("boom")
+        raise RuntimeError("no data")
+
+    def ok(*, window_end: pd.Timestamp, manifests_root: Path) -> list[rm.RunManifest]:
+        calls.append("ok")
+        return _trainer_ok(window_end=window_end, manifests_root=manifests_root, repo=repo)
+    mod = type(sys)("fake_trainers3")
+    mod.boom, mod.ok = boom, ok                      # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_trainers3", mod)
+    with pytest.raises(mwf.MonthlyRunFailed, match="no data"):
+        mwf.run(pd.Timestamp("2027-02-01 04:30", tz="UTC"), trainers=["fake_trainers3:boom", "fake_trainers3:ok"],
+                manifests_root=tmp_path / "m")
+    assert calls == ["boom", "ok"]
+    assert len(list((tmp_path / "m").glob("*.json"))) == 1
+
+
+def test_with_no_trainer_configured_the_run_says_so_instead_of_reporting_a_refit() -> None:
+    out = mwf.run(pd.Timestamp("2026-12-01 04:30", tz="UTC"), trainers=[], manifests_root=Path("unused"))
+    assert out["trained"] == 0 and "no trainer" in out["note"]
+
+
+def test_the_monthly_module_holds_no_promotion_path() -> None:
+    tree = ast.parse((ROOT / "goldbot" / "research" / "monthly_walkforward.py").read_text())
+    names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | \
+            {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert not names & {"promote", "restore_previous", "ModelRegistry", "set_status", "_set_status"}

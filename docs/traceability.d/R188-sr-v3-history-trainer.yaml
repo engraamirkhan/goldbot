@@ -1,4 +1,4 @@
-id: R185
+id: R188
 requirement: 'sr-v3 history trainer (card 2.3, 3.3-3.6, 5.1, 5.4; SYNTH-ml items 3, 10; ADR 0106 model quality): label-blind Stage 0 Riley ladder with level/served orders and the Q2 tie rule; walk-forward fit of L-cw, G-cw (GBT baseline), HB, AVG and the D-40 prior on learn 2010-17 with a gap; deterministic artifacts; training report with paired D vs GBT, 5 seeds, parameter shift, buy-and-hold; byte-exact rebuild from the run log'
 status: implemented (fixtures only; first real run blocked on PR #482 A4 and PR #484 X6)
 code: goldbot/research/sr_v3.py; goldbot/research/learners.py; goldbot/research/sr_v3_train.py; goldbot/research/sr_v3_serve.py; scripts/research/train_sr_v3.py; docs/decisions/0108-sr-v3-trainer-learners.md
