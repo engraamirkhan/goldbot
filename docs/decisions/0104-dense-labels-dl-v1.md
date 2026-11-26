@@ -58,20 +58,31 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      - holds under a day: sum over session days of S_d / (1 + (max(S_d, 1) - 1) x 0.25);
      - holds of a day or more: sum of u.
 4. **Tiers.** A row's tier is the worst r11 tier over the months below.
-   - **Usability rule (quant C-3 / R-a on #472, verbatim):** "A row is usable only if every session month its served
-     inputs read, its decision month and its label horizon are usable under the template rule. The input lookback
-     is computed at read time from the requested column set: `load_labels(columns=...)` is required for judge and
-     train reads. The lookback is the maximum over those columns of the registry `lookback` of the feature producing
-     them (a test holds each registry lookback ≥ the 1 %-weight horizon of any EWM it uses), in decision bars × 7/5
-     below 1w. If any `d1_` column is requested, the d1 context lookback (`ctx_lookback_days`) is added. The 800-bar
-     fs-v1 window start stays provenance only. The column set is the unit's served or level-order prefix, fixed
-     label-blind at Stage 0, so the rule is mechanical. `skeleton` counts are reported per column set (core-6,
-     core-12, P30). Fixed 2026-11-26, before any label read."
+   - **Usability rule (quant C-3 / R-a on #472 and its re-verify, verbatim).** "A row is usable only if every
+     session month its served inputs read, its decision month and its label horizon are usable under the template
+     rule. The input lookback is computed at read time from the requested column set: `load_labels(columns=...)` is
+     required for judge and train reads. The input lookback is the maximum over the requested columns of each
+     column's own lookback: the oldest bar whose perturbation can change the column by ≥ 1 % of the weight an EWM
+     puts on it, in decision bars × 7/5 below 1w. For a `d1_` column, the same in daily bars × 7/5 replaces the fixed
+     `ctx_lookback_days`. Per-column lookbacks are declared in the registry, and a truncation test proves each one:
+     perturbing every bar older than the declared lookback changes the column by less than that bound, and
+     perturbing the bar just inside does not. Fixed 2026-11-26, before any label read. Counts are re-run under it.
+     The 800-bar fs-v1 window start stays provenance only. The column set is the unit's served or level-order prefix,
+     fixed label-blind at Stage 0, so the rule is mechanical. `skeleton` counts are reported per column set (core-6,
+     core-12, P30)." If gold P30 is still about 0, that is the answer: the ladder stops before the emptying column,
+     and nothing is dropped by hand.
    - **How it is implemented:**
-     - The d1 context term is the longer of `ctx_lookback_days` and the producing context feature's registry
-       lookback in days × 7/5. It applies only on tfs that carry the d1 context (below 1d).
-     - `tests/test_feature_lookback_ewm.py` raised four registry lookbacks to their 1 %-weight EWM horizon:
-       `atr` 200 → 459, `moving_averages` 300 → 461, `microstructure` 50 → 63, `gaps` 20 → 63.
+     - `goldbot.features.registry.COLUMN_LOOKBACKS` declares every fs-v1 column's lookback in decision bars, per tf
+       where it differs (session-anchored columns). It is additive: the feature-level `lookback` keeps its meaning,
+       and the engine reads neither.
+     - `goldbot/research/column_lookback.py` defines and measures the lookbacks.
+       - Fixture: 8 seeded synthetic series of 4,000 bars per tf, with seed-varied session clocks.
+       - Perturbation: the bars older than L are replaced by a 3x-volatility path joined at the junction.
+       - Bound: 1 % of the column's own standard deviation over the last 1,000 bars.
+     - `tests/test_column_lookbacks.py` proves each declared lookback at every tf (290 cases): the declared lookback
+       passes, and one bar less fails on some seed.
+     - `tests/test_feature_lookback_ewm.py` keeps the feature-level lookbacks at or above their 1 %-weight EWM
+       horizon.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
@@ -86,6 +97,9 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
 5. **Reads.** `load_labels` reads only the partitions whose key equals `label_key(parts)`: the current fs-v1
    partition key, the minutes' sha256 and `minutes_to_utc` (quant C-2, code review LOW-4). Several candidates with no
    key to choose by raise.
+   - Every load under a `booked_read` appends a consumption row (id, columns, label spec hash, keys, ts) to the
+     ledger. The first consumption fixes the columns, the spec hash and the keys. A later load under the same id
+     with any of them different raises (quant C-4).
    - It refuses:
      - a read without tiers or without `columns`;
      - a sealed store;
