@@ -5,6 +5,14 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-26 ADR 0085 A4 records the D-1 served tiers file `tiers_served_r11-v2.1.csv` (sha256 ff653ea7…, rule blob
+  c6f283d7), using the quant's text R-b on #472 verbatim.
+  - `dense_labels.RECORDED_TIERS_SHA256` now holds it, which unseals learn-window label reads only.
+  - Confirm and test_old reads still need a booked read id (ADR 0104 C-1).
+  - w2-point and h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+  - The gold learn supply in `config/data/sufficiency.yaml` is now the measured core-12 T2 n_eff:
+    5,226 · 3,846 · 2,707 · 1,643 · 1,067 · 0 (2h) · 123 · 0 · 0.
+  - No label value was read.
 - 2026-11-26 ADR 0106 decision 2: the owner's real-money limits are in the RiskGate as code constants
   (`goldbot/risk/real_money.py`, `Final`, no settings key): 1 % a trade with its round trip (`rm_risk_per_trade`), each
   entry sized down to what is left of the day's 2 % after the loss so far and the open risk (`rm_daily_projected` below
