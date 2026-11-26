@@ -474,3 +474,12 @@ findings:
     source: finance reconciliation 2026-11-22 (one icm-probe Brent short of 2026-11-04 filled with no recorded close; a
       small residual absorbed by the daily check's tolerance); also relabel the October cost probes executed on icm-demo
     check: {fn: manual, params: {}}
+
+  - id: SRE-BROKER-M1-EROFS
+    title: The scheduler can write raw/broker_m1 on the brain (broker_m1_copy no longer fails with EROFS; October copy written)
+    owner: sre
+    severity: high
+    due: 2026-11-27
+    source: cycle 2026-11-26 06:21 UTC health (FAIL job:broker_m1_copy, learning:broker_m1_copy after the 35da0698 deploy);
+      repo unit fixed in fix/scheduler-raw-write, the brain needs the unit drop-in + scheduler restart (deploy does not reinstall units)
+    check: {fn: manual, params: {}}
