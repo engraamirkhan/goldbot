@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from goldbot.data.holdout_guard import HOLDOUT_START
+from goldbot.data import holdout_guard
 
 TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 HOLD_MIN = {"1m": 60, "5m": 240, "15m": 480, "30m": 960, "1h": 1380}
@@ -41,6 +41,13 @@ UNITS: dict[str, tuple[tuple[str, ...], dict[str, tuple[str, str]]]] = {
                        {"learn": ("2018-01", "2021-12"), "judge": ("2022-01", "2025-09"),
                         "card_confirm": ("2018-01", "2025-09")}),
 }
+
+
+def drop_holdout_months(t: pd.DataFrame) -> pd.DataFrame:
+    """Only the sealed holdout months (2025-10..2026-09) go; forward months (2026-10 on) stay countable, so a
+    fallback-(ii) trigger counted with this tool reads its graded days (quant F-1 on #469)."""
+    t = t[~holdout_guard.in_holdout(pd.PeriodIndex(t['month'], freq='M').to_timestamp().tz_localize('UTC'))]
+    return t
 
 
 def per_day(tf: str) -> float:
@@ -78,7 +85,7 @@ def main() -> int:
     ap.add_argument("--tiers", type=Path, required=True)
     a = ap.parse_args()
     t = pd.read_csv(a.tiers, dtype={"month": str})
-    t = t[t["month"] < HOLDOUT_START.strftime("%Y-%m")]        # no sealed month is ever counted (holdout guard)
+    t = drop_holdout_months(t)
     res = counts(t)
     print(json.dumps({"tiers_sha256": hashlib.sha256(a.tiers.read_bytes()).hexdigest(), "method_check": {
         "gold_learn_2070_days": [n_eff(2070, 1, tf) for tf in TFS],

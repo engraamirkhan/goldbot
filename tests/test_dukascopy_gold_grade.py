@@ -252,3 +252,19 @@ def test_a_control_pair_reads_the_same_as_a_candidate_pair() -> None:
     b, _, _ = A.lagged(A.b_star, h, d, 0.01)
     a, _, _ = A.lagged(A.a_share, h, d, 0.01)
     assert ctrl["b"] == b and ctrl["a"] == a
+
+
+def test_counts_drop_only_holdout_months_and_keep_forward_months() -> None:
+    """Quant F-1 on #469: the holdout (2025-10..2026-09) is dropped, the forward window (2026-10 on) is counted."""
+    C = _load_research("sufficiency_counts")
+    t = pd.DataFrame({"key": ["XAUUSD"] * 4, "month": ["2025-09", "2025-10", "2026-09", "2026-10"],
+                      "tier": ["A"] * 4, "days": [20, 21, 22, 23]})
+    assert list(C.drop_holdout_months(t)["month"]) == ["2025-09", "2026-10"]
+
+
+def test_d13_drops_holdout_days_only() -> None:
+    R = _load_research("d13_independent_rank")
+    days = pd.DatetimeIndex(["2025-09-30", "2025-10-01", "2026-09-30", "2026-10-01"])
+    from goldbot.data import holdout_guard
+    assert list(~holdout_guard.in_holdout(days)) == [True, False, False, True]
+    assert R.holdout_guard is holdout_guard
