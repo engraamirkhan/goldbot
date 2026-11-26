@@ -517,3 +517,12 @@ findings:
     source: trading-safety sign-off of PR 491 (64bf4372); due before any unlock_live on icm-live or vantage-live, whichever
       comes first; check in goldbot/ops/checks/engine.py reading the reason the engine writes to its state file
     check: {fn: manual, params: {}}
+
+  - id: ADR0106-PROMOTION
+    title: Promotion and the paper gate read ADR 0106 (paired vs live 30-60 days, as-if real-money sizing, Sharpe above 1, beats buy-and-hold, costs under a third)
+    owner: implementer
+    severity: high
+    due: 2026-12-11
+    source: ADR 0106 gap map 2026-11-26 lane 2 (OC2, OC5, GP1-GP3, GO2, GO3); follow-ups - jobs._decide_challengers builds
+      the paired and as-if reads (today every challenger waits), lane 1 ADV into `run.py gates`
+    check: {fn: manual, params: {}}

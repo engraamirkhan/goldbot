@@ -2066,8 +2066,10 @@ Usually there is nothing wrong. An engine proposes an entry for an agent only wh
 
 1. The agent has a **champion** model in `models\registry.json`. Champions appear only through the gates: the
    Saturday retrain makes a challenger, it shadow-trades for at least 4 weeks **and** 40 trades, and is promoted
-   only if shadow Sharpe > 0.8 and within 0.5 of backtest, hit rate within one standard error, drawdown under
-   1.5x backtest (`goldbot/research/promotion.py`). With no champion the engine never proposes for that agent.
+   only if shadow Sharpe > 1.0 (ADR 0106; was 0.8) and within 0.5 of backtest, hit rate within one standard error,
+   drawdown under 1.5x backtest, and (ADR 0106) it beats the live model paired by session day over 30-60 days after
+   costs on as-if real-money sizing (`goldbot/research/promotion.py`). Until the Saturday job supplies those reads,
+   a challenger waits and then expires. With no champion the engine never proposes for that agent.
 2. The agent is **live** in the population (the Saturday `tournament` promotes from shadow to live only after
    at least 60 shadow trades and a deflated-Sharpe gate). See the **Agents** tab.
 3. A candidate fires on a completed bar, the probability clears breakeven plus 2 points after costs, and the

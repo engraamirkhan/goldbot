@@ -1,5 +1,5 @@
 id: M22
-requirement: 'Promotion: "shadow Sharpe within 0.5 of backtest and above 0.8", "hit rate within one binomial SE", "drawdown under 1.5x backtest", "turnover within 30% of the champion"'
-status: implemented
-code: goldbot/research/promotion.py:21-24, 54-75
+requirement: 'Promotion: "shadow Sharpe within 0.5 of backtest and above 0.8" (ADR 0106: above 1.0), "hit rate within one binomial SE", "drawdown under 1.5x backtest", "turnover within 30% of the champion"'
+status: implemented (superseded by ADR 0106, R185)
+code: 'goldbot/research/promotion.py `evaluate_promotion`. Superseded by ADR 0106 (R185): the Sharpe floor is above 1.0 (was 0.8) and the challenger must also beat the live model paired by session day after costs on as-if real-money sizing; the other gates are unchanged'
 test: tests/test_cov_research.py::test_gate_boundaries; ::test_sharpe_shortfall_and_turnover_boundaries; tests/test_costs_promotion_registry.py::test_each_gate_blocks_promotion
