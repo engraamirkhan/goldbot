@@ -129,6 +129,12 @@ def _as_matrix(X: np.ndarray, p: int) -> np.ndarray:
     return np.where(np.isinf(M), np.nan, M)
 
 
+def _rowdot(Z: np.ndarray, coef: np.ndarray) -> np.ndarray:
+    """Z·coef per row with a per-row summation, so a one-row batch gives the same bits as that row in any batch (a
+    BLAS matrix-vector product may block differently by batch size: row parity failed on Linux runners)."""
+    return (Z * coef).sum(axis=1)
+
+
 def medians(X: np.ndarray) -> np.ndarray:
     """Per-column median of the finite training values (0 where a column has none)."""
     M = _as_matrix(X, np.asarray(X).shape[1] if np.asarray(X).ndim == 2 else 1)
@@ -236,7 +242,7 @@ class LcwArtifact(FrozenRecord):
         p = len(self.columns)
         M = _as_matrix(X, p)
         lv = np.array([self.levels.get(str(i), 0.0) for i in np.asarray(instrument)])
-        lin = self._z(M) @ np.asarray(self.coef) if p else np.zeros(len(M))
+        lin = _rowdot(self._z(M), np.asarray(self.coef)) if p else np.zeros(len(M))
         return (self.intercept + lv) + lin
 
     def value_row(self, x: np.ndarray, instrument: str) -> float:
@@ -434,7 +440,7 @@ class HbArtifact(FrozenRecord):
                 continue
             Z = np.where(np.isnan(M[m]), np.asarray(self.impute[cell]), M[m])
             Z = (Z - np.asarray(self.center[cell])) / np.asarray(self.scale[cell])
-            out[m] = self.intercept[cell] + Z @ np.asarray(self.coef[cell])
+            out[m] = self.intercept[cell] + _rowdot(Z, np.asarray(self.coef[cell]))
         return out
 
     def value_row(self, x: np.ndarray, instrument: str, tf: str) -> float:

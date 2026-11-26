@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.data import holdout_guard
 from goldbot.research import learners as L
 from goldbot.research import sr_v3 as V
 from goldbot.research import sr_v3_train as T
@@ -86,6 +87,9 @@ def save_collected(col: T.Collected, out: Path) -> None:
 
 def load_collected(out: Path) -> T.Collected:
     b = json.loads((out / "collected.json").read_text())
+    sample = pd.read_parquet(out / "sample.parquet")
+    holdout_guard.refuse(sample, what=f"sr-v3 tree sample {out}", col="decision_utc")
+    holdout_guard.refuse(sample, what=f"sr-v3 tree sample {out} (label horizon)", col="horizon_end_utc")
     pri = {}
     for y, d in b["priors"].items():
         acc = T.PriorAcc()
@@ -95,7 +99,7 @@ def load_collected(out: Path) -> T.Collected:
                        lcw={int(y): {k: L.Moments(**m) for k, m in d.items()} for y, d in b["lcw"].items()},
                        hb={int(y): {(k.split("|")[0], k.split("|")[1]): L.Moments(**m) for k, m in d.items()}
                            for y, d in b["hb"].items()},
-                       priors=pri, sample=pd.read_parquet(out / "sample.parquet"), pi=float(b["pi"]),
+                       priors=pri, sample=sample, pi=float(b["pi"]),
                        n_rows=int(b["n_rows"]))
 
 
