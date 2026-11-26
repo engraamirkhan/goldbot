@@ -202,3 +202,15 @@ candidate passes the precondition (broker MT5 terminals hold about 3 months of M
 CME GC is refused). **Source choice (i): none.** Nothing is graded against a second source. The served tiers, the A16
 manifest and gold's n_eff stay as they are. **D-1 goes to fallback (ii):** the pre-registered forward window from
 2026-10-01, above. The holdout is never confirm.
+
+**Forexite closed (quant C2, verbatim).** Forexite is closed for D-1 and the 2018-25 confirm window: single use; a later documentation of its price field does not reopen it, and its (a)/(b*) figures are never cited as independence evidence.
+
+**(ii) broker capture (quant C3, verbatim).** Broker MT5 M1 capture from 2026-10-01 runs now and then daily (copy_rates_range to raw/, sha256 per file, gaps logged); a month without a complete capture grades C. MT5 bars are Bid-built for CFD symbols (MetaQuotes documentation, cited): price field documented; the broker reference must pass (a)-(c) per month before it grades.
+- Capture state, 2026-11-26. The traded broker's M1 is captured daily on the ops host by the scheduler's
+  `feed_reconcile` (copy_rates_range through the read-only bridge into `bars_1m_broker`). `scripts/broker_m1_capture.py`
+  copies it into raw/broker_m1/<account>/ with a sha256 per month file and a gap log.
+- Citation: MetaTrader 5 Help, "Charts" (metatrader5.com/en/terminal/help/charts_analysis/charts, fetched
+  2026-11-26): "Bid prices are used for constructing charts."
+- First copy, 2026-10-01..2026-11-25 23:19 UTC:
+  - icm-demo: 54,964 minutes; every gap is the daily 63-min break.
+  - vantage-demo: 55,011 minutes; every gap is the daily 62-min break, plus one 1-minute hole on 2026-10-01 at 05:00.

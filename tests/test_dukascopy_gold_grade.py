@@ -201,3 +201,42 @@ def test_forexite_converter_is_berlin_time_minus_one_minute() -> None:
     A = _load_research("gold_second_source_admission")
     t = A.forexite_to_utc(pd.Series(pd.to_datetime(["2019-01-10 12:01", "2019-07-10 12:01"])))
     assert [str(x) for x in t] == ["2019-01-10 11:00:00+00:00", "2019-07-10 10:00:00+00:00"]
+
+
+def test_a_candidate_off_its_documented_grid_is_refused_before_any_statistic() -> None:
+    import pytest
+    A = _load_research("gold_second_source_admission")
+    calls: list[str] = []
+    mp = pytest.MonkeyPatch()
+    for name in ("coverage", "clock_offset", "a_share", "b_star"):
+        mp.setattr(A, name, lambda *a, _n=name, **k: calls.append(_n))
+    ts = pd.date_range("2019-03-04 10:00", periods=50, freq="min", tz="UTC")
+    cand = pd.Series(1300.0 + np.arange(50) * 0.1, index=ts)              # a 0.1 grid
+    duk = pd.Series(1300.0 + np.arange(50) * 0.013, index=ts)
+    with pytest.raises(A.InputsWrong, match="documented tick 0.01, observed 0.1: inputs wrong, not run"):
+        A.candidate_year(cand, duk, 2019, 0.01, 0.10)
+    mp.undo()
+    assert calls == []
+
+
+def test_a_one_minute_shifted_copy_reads_as_the_same_feed() -> None:
+    A = _load_research("gold_second_source_admission")
+    rng = np.random.default_rng(3)
+    ts = pd.date_range("2019-03-04 00:00", periods=3000, freq="min", tz="UTC")
+    d = pd.Series(np.round(1300 + np.cumsum(rng.integers(-3, 4, len(ts))) * 0.01, 2), index=ts)
+    copy = d.copy()
+    copy.index = pd.DatetimeIndex(copy.index) - pd.Timedelta(minutes=1)                   # the same feed, stamped 1 min early
+    b0, _ = A.b_star(copy, d, 0.01)
+    b, _, per = A.lagged(A.b_star, copy, d, 0.01)
+    a, _, _ = A.lagged(A.a_share, copy, d, 0.01)
+    assert b0 is not None and b0 < 0.5 and b == 1.0 and per[1] == 1.0 and a == 1.0
+
+
+def test_controls_are_invalid_when_a_negative_year_is_missing() -> None:
+    A = _load_research("gold_second_source_admission")
+    neg = {y: {"b": 0.05} for y in A.NEG_YEARS}
+    pos = {y: {"b": 0.999} for y in A.POS_YEARS}
+    syn = {y: {"b": 1.0} for y in A.POS_YEARS}
+    assert A.controls_valid(neg, pos, syn)
+    del neg[2014]
+    assert not A.controls_valid(neg, pos, syn)

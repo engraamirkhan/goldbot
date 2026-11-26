@@ -14,6 +14,11 @@ consecutive common minutes where at least one series moved. (a) = the share of U
 in both series on the coarser grid. Converter (documented "GMT+1", EU summer time per the ruling): local stamps as
 Europe/Berlin -> UTC, then -1 min (close stamp -> open stamp). Coverage: share of Dukascopy session days (>= 60 % of
 1,380 minutes) on which the candidate holds >= 60 % of Dukascopy's minutes; short below 0.95.
+Review rules (PR #469, for runs after 2026-11-26; the Forexite run is not repeated):
+* grid (quant C1): the candidate grid per year is max(tick_of(candidate), tick_of(dukascopy)); a candidate whose
+  observed grid differs from its documented grid is refused before any statistic ("inputs wrong, not run");
+* lags (code LOW 2): (a) and (b*) are the maximum over candidate shifts of -2..+2 minutes;
+* controls (code LOW 3): every negative-control year 2010-18 must be present, else the controls are invalid.
 
     uv run python scripts/research/gold_second_source_admission.py [--raw raw] [--out ~/tmp/dgrade/admission.json]
 """
@@ -25,6 +30,7 @@ import hashlib
 import io
 import json
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -154,6 +160,63 @@ def coverage(cand: pd.Series, duk: pd.Series) -> tuple[float | None, int, int]:
     return float(ok.mean()), int(ok.sum()), len(sess)
 
 
+LAGS_MIN = (-2, -1, 0, 1, 2)     # code review LOW 2: the clock check accepts +-1 min, so a copy shifted 1 min must
+#                                 still read as the same feed: (a) and (b*) are the maximum over these lags
+
+
+def lagged(stat: Callable[[pd.Series, pd.Series, float], tuple[float | None, int]], x: pd.Series, y: pd.Series,
+           tick: float) -> tuple[float | None, int, dict[int, float | None]]:
+    """(max over LAGS_MIN of stat(x shifted by k minutes, y), its count, the value per lag)."""
+    per: dict[int, float | None] = {}
+    best: tuple[float | None, int] = (None, 0)
+    for k in LAGS_MIN:
+        xs = x.copy()
+        xs.index = pd.DatetimeIndex(xs.index) + pd.Timedelta(minutes=k)
+        v, n = stat(xs, y, tick)
+        per[k] = v
+        if v is not None and (best[0] is None or v > best[0]):
+            best = (v, n)
+    return best[0], best[1], per
+
+
+class InputsWrong(Exception):
+    """The candidate's observed grid is not its documented grid (quant C1): nothing is computed."""
+
+
+def candidate_grid(documented: float, cand: pd.Series, duk: pd.Series) -> float:
+    """max(tick_of(candidate), tick_of(dukascopy)) for the year; refuses when the candidate's observed grid differs from
+    the documented one, BEFORE any statistic exists."""
+    observed = tick_of(cand)
+    if not np.isclose(observed, documented, rtol=1e-9, atol=0.0):
+        raise InputsWrong(f"documented tick {documented:g}, observed {observed:g}: inputs wrong, not run")
+    return max(observed, tick_of(duk))
+
+
+def controls_valid(neg: dict[int, dict[str, object]], pos: dict[int, dict[str, object]],
+                   syn: dict[int, dict[str, object]]) -> bool:
+    """Positive and synthetic controls pass, and every negative-control year 2010-18 is present (code review LOW 3: a
+    missing HistData year must not let the bound fall back to 0.10 silently)."""
+    neg_ok = set(neg) == set(NEG_YEARS) and all(neg[y].get("b") is not None for y in NEG_YEARS)
+    return (neg_ok and set(pos) == set(POS_YEARS) and set(syn) == set(POS_YEARS)
+            and all(v["b"] is not None and float(str(v["b"])) >= POS_MIN for v in pos.values())
+            and all(v["b"] is not None and float(str(v["b"])) >= SYN_MIN for v in syn.values()))
+
+
+def candidate_year(f: pd.Series, d: pd.Series, year: int, documented: float, bound: float) -> dict[str, object]:
+    """One candidate year: the grid check first (refuses before any statistic), then coverage, clock, (a), (b*)."""
+    t = candidate_grid(documented, f, d)
+    cov, ok_days, sess = coverage(f, d)
+    off, corr = clock_offset(f, d, year) if len(f) > 1000 else (None, None)
+    av, ah, a_lags = lagged(a_share, f, d, t)
+    bv, bn, b_lags = lagged(b_star, f, d, t)
+    return {"minutes": len(f), "coverage": cov, "covered_days": ok_days, "session_days": sess,
+            "clock_offset_min": off, "clock_corr": corr, "a": av, "a_hours": ah, "a_by_lag": a_lags, "b": bv,
+            "b_moved": bn, "b_by_lag": b_lags, "tick": t,
+            "pass": bool(cov is not None and cov >= COVER_MIN and off is not None
+                         and abs(off) <= R11["clock_offset_max_min"] and av is not None and av < A_MAX
+                         and bv is not None and bv < bound)}
+
+
 def clock_offset(cand: pd.Series, duk: pd.Series, year: int) -> tuple[int | None, float | None]:
     h = duk.groupby(pd.DatetimeIndex(duk.index).floor("h")).last()
     ref = pd.DataFrame({"ts_utc": h.index, "close": h.to_numpy(), "spread": np.nan})
@@ -175,9 +238,14 @@ def main() -> int:
         a.out.write_text(json.dumps(out, indent=1, default=str))
 
     # ---- 1. controls first
-    neg, pos, syn = {}, {}, {}
+    neg: dict[int, dict[str, object]] = {}
+    pos: dict[int, dict[str, object]] = {}
+    syn: dict[int, dict[str, object]] = {}
     for y in NEG_YEARS:
         d, h = dukascopy(a.raw, y), histdata(a.raw, y)
+        if not len(d) or not len(h):
+            print("neg", y, "missing", flush=True)
+            continue                              # a missing year invalidates the controls (controls_valid)
         t = max(tick_of(d), tick_of(h))
         neg[y] = {"b": b_star(h, d, t)[0], "moved": b_star(h, d, t)[1], "tick": t}
         print("neg", y, neg[y], flush=True)
@@ -191,10 +259,9 @@ def main() -> int:
         bs, ns = b_star(shifted, d, max(own, FOREXITE_TICK))
         syn[y] = {"b": bs, "moved": ns}
         print("pos", y, pos[y], "syn", syn[y], flush=True)
-    neg_vals = [v["b"] for v in neg.values() if v["b"] is not None]
-    bound = B_MAX if all(v < B_MAX for v in neg_vals) else max(neg_vals)
-    valid = (all(v["b"] is not None and v["b"] >= POS_MIN for v in pos.values())
-             and all(v["b"] is not None and v["b"] >= SYN_MIN for v in syn.values()))
+    neg_vals = [float(str(v["b"])) for v in neg.values() if v["b"] is not None]
+    bound = B_MAX if neg_vals and all(v < B_MAX for v in neg_vals) else max(neg_vals, default=B_MAX)
+    valid = controls_valid(neg, pos, syn)
     out["controls"] = {"negative_2010_18": neg, "positive_2019_25": pos, "synthetic_plus_37c": syn, "b_bound": bound,
                        "valid": valid}
     write()                                       # the controls are on disk before any candidate number exists
@@ -204,17 +271,15 @@ def main() -> int:
     for y in POS_YEARS:
         d = dukascopy(a.raw, y)
         f, files = forexite(zips, y)
-        t = max(FOREXITE_TICK, tick_of(d))
-        cov, ok_days, sess = coverage(f, d)
-        off, corr = clock_offset(f, d, y) if len(f) > 1000 else (None, None)
-        av, ah = a_share(f, d, t)
-        bv, bn = b_star(f, d, t)
-        cand[y] = {"files": files, "minutes": len(f), "coverage": cov, "covered_days": ok_days, "session_days": sess,
-                   "clock_offset_min": off, "clock_corr": corr, "a": av, "a_hours": ah, "b": bv, "b_moved": bn,
-                   "tick": t, "observed_tick": tick_of(f) if len(f) else None,
-                   "pass": bool(cov is not None and cov >= COVER_MIN and off is not None
-                                and abs(off) <= R11["clock_offset_max_min"] and av is not None and av < A_MAX
-                                and bv is not None and bv < bound)}
+        try:
+            cand[y] = {"files": files, **candidate_year(f, d, y, FOREXITE_TICK, bound)}
+        except InputsWrong as exc:
+            out["candidate"] = {"name": "forexite (ASCII MetaStock 1m files)", "refused": str(exc), "year": y}
+            out["admitted"] = False
+            out["not_admitted_because"] = [str(exc)]
+            write()
+            print(str(exc))
+            return 2
         print("forexite", y, cand[y], flush=True)
     measures = all(v["pass"] for v in cand.values())
     out["candidate"] = {"name": "forexite (ASCII MetaStock 1m files)", "years": cand,
