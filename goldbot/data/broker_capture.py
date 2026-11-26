@@ -36,6 +36,7 @@ from typing import Any
 
 import pandas as pd
 
+from goldbot.data import holdout_guard
 from goldbot.data.cme_holidays import cme_metals_holidays
 from goldbot.data.crossfeed import BACKFILL_MAX
 
@@ -86,7 +87,9 @@ def day_minutes(bars: pd.DataFrame, day: dt.date) -> int:
 
 def read_capture(store: Any, account: str = REFERENCE_ACCOUNT, start: pd.Timestamp = CAPTURE_FROM) -> pd.DataFrame:
     b = store.read(TABLE, source=account, symbol=SYMBOL, start=start)
-    return b if b is not None else pd.DataFrame(columns=["ts_utc"])
+    b = b if b is not None else pd.DataFrame(columns=["ts_utc"])
+    holdout_guard.refuse(b, what="broker_m1 capture (ADR 0105 (ii))")    # forward minutes only (issue #473)
+    return b
 
 
 def gaps(ts: pd.Series) -> list[dict[str, object]]:

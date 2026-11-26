@@ -2496,6 +2496,8 @@ The gold confirm forward window grades Dukascopy against icm-demo's own M1 (`bar
   after that is logged in rewrites.jsonl). A crash between the Parquet replace and the SHA256SUMS write leaves exactly
   this mismatch: delete that month's file (`raw/broker_m1/icm-demo/icm-demo_m1_<YYYY-MM>.parquet`) and let the next
   `broker_m1_copy` run rewrite it (after day 8 the rewrite is logged with its new sha256).
+* After a back-fill in days 6-7 of a new month (an `m1-backfill` that reaches the previous month), run
+  `broker_m1_copy` before day 8, so the frozen copy carries the back-filled minutes.
 * After a restore: raw/ is not in the backup. Rebuild raw/broker_m1 from the restored store by letting the job run, or
   run `broker_m1_copy` by hand. A frozen month that is rewritten gets a new sha256 and a rewrites.jsonl entry, and a
   grade uses only the sha recorded in its tiers rows. No fallback-(ii) grade reads a month before day 8

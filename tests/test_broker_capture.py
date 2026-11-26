@@ -144,3 +144,11 @@ def test_a_day7_backfill_is_in_the_frozen_day8_copy_and_a_day6_grade_is_refused(
     path, sha8 = BC.frozen_copy_for_grade("2026-10", day8, raw_dir=tmp_path)
     assert hole in set(pd.to_datetime(pd.read_parquet(path)["ts_utc"], utc=True)) and sha8 != sha5
     assert not (tmp_path / "icm-demo" / "rewrites.jsonl").exists()        # rewritten before the freeze: no entry
+
+
+def test_read_capture_refuses_holdout_rows() -> None:
+    from goldbot.data.holdout_guard import HoldoutSealed
+    sealed = pd.DataFrame({"ts_utc": [pd.Timestamp("2026-09-30 12:00", tz="UTC")], "bid_close": [1.0]})
+    with pytest.raises(HoldoutSealed):
+        BC.read_capture(_Store(sealed))
+    assert len(BC.read_capture(_Store(_bars("2026-11-25", 5)))) == 5
