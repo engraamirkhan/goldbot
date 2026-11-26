@@ -112,12 +112,15 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        - the tightness half does not apply. Over-declaring costs warm-up and embargo, never a leaked bar.
        `column_lookback` gains an optional fixture length `n` (default 4,000, unchanged for fs-v1), because the X6
        level columns read up to 8,880 bars at 1m. The #478 no-shrink guard applies to the X6 declarations.
-       - **X6 adoption moment: `X6_ADOPTED_UTC` = 2026-11-26T10:45:00+00:00** (`price_action_x6.X6_ADOPTED_UTC`, frozen;
-         the push applying the #484 code review). The card rev 7 legitimacy test
-         (`tests/test_price_action_x6.py::test_no_sr_v3_label_read_existed_when_x6_was_adopted`) fails only on an sr-v3
-         row of the read-once or dl-v1 consumption ledger dated before it, or with no parseable `ts`. A row counts as
-         sr-v3 when its `family`, `id` or `key` field names sr-v3 or H-103; free text never counts. sr-v3 rows from
-         Stage 0 on pass (code review MEDIUM-1 / LOW-1 on #484).
+       - **Guard instant (quant L2 on #484, verbatim):** "The guard instant is `X6_MERGED_UTC`, the committer time of the merge commit that lands this amendment on main. It is set by a one-line follow-up commit immediately after merge, and the test then fails on any sr-v3 consumption or read-once row dated before it, or with no parseable ts. Until that follow-up lands, no sr-v3 label value is read (trainer instruction, recorded here)."
+         - The constant is `price_action_x6.X6_MERGED_UTC`. Until the follow-up sets it, it is None, and the
+           legitimacy test (`tests/test_price_action_x6.py::test_no_sr_v3_label_read_existed_when_x6_merged`) fails
+           closed on every sr-v3 row.
+         - A row counts as sr-v3 when its `family`, `id` or `key` field names sr-v3 or H-103; free text never counts
+           (code review LOW-1).
+         - sr-v3 rows dated at or after the merge time pass (code review MEDIUM-1).
+         - The guard sees learn-window reads only once `load_labels` writes a consumption row for every label-value
+           read (quant L1). That change lands in PR #482 and must merge before any sr-v3 label read.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
