@@ -10,7 +10,12 @@ met extends the phase rather than being waived". Its thresholds, verbatim from t
   passed. ADR 0106 (owner 2026-11-26) adds the goals of record, "2-3 months of paper trading meeting these targets
   before real money" (the 182-day minimum stays, stricter): `as_if_real_money` (the paper record re-sized as one
   real-money account under 1 % risk / 2 % daily stop / 15 % drawdown / 1 % of daily volume breaches nothing, and at least
-  `paper_min_trades` trades could be sized: below the minimum lot they are reported and not counted),
+  `paper_min_trades` trades could be sized: below the minimum lot they are reported and not counted).
+  The as-if read sizes at the stricter of ADR 0106's 1 % and `risk.risk_per_trade` (the rate the record is held to at
+  full size; trading-safety ruling on #490). Tiny-live's `risk.risk_per_trade_tiny_live` is a phase-in throttle, not
+  the rate the strategy is judged on: at it, on the as-if equity, few gold trades clear the minimum lot. The same
+  replay at the tiny-live rate is reported as `as_if_tiny_live` (report only, never decides), so the owner sees before
+  recording the gate how many trades the tiny-live RiskGate would refuse. Then
   `paper_sharpe` (as-if daily Sharpe above 1.0), `beats_buy_and_hold` ("Beats buy-and-hold of the same market over 6+
   months, after costs": the as-if return over the paper window above every traded instrument's buy-and-hold net of a
   round trip and the swap, research/benchmarks.py) and `paper_cost_share` ("Trading costs under one third of gross
@@ -933,6 +938,8 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     limits = AsIfLimits.stricter(settings.risk)      # trading-safety F1: the stricter of ADR 0106 and the rails
     as_if = as_if_real_money(inputs, equity=cfg.as_if_equity_usd, adv_usd=adv_usd or {}, limits=limits)
     small = as_if_real_money(inputs, equity=AS_IF_MIN_EQUITY_USD, adv_usd=adv_usd or {}, limits=limits)
+    tl = as_if_real_money(inputs, equity=cfg.as_if_equity_usd, adv_usd=adv_usd or {},
+                          limits=limits.at_tiny_live(settings.risk))     # the source guard keeps risk fields out of here
     no_adv = sorted({i.symbol for i in inputs} - set(adv_usd or {}))
     d0 = opportunity_day(pd.DatetimeIndex([paper_start]))[0].date() if paper_start is not None else None
     d1 = opportunity_day(pd.DatetimeIndex([now]))[0].date()
@@ -940,6 +947,11 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     cs = cost_share(mapped, as_if, imputer)
     items += [
         _as_if_item(as_if, unmapped, cfg, small, no_adv),
+        GateItem(name="as_if_tiny_live", met=True, required=False,
+                 evidence=f"at {tl.per_trade:.2%} risk on ${cfg.as_if_equity_usd:,.0f} (the tiny-live rate, no "
+                          f"minimum-lot exception) {tl.n_sized} of {tl.n_trades} trades could be sized; the tiny-live RiskGate "
+                          f"refuses the rest",
+                 need="report only: tiny-live trades at this rate; funding and the tiny-live rate are the owner's decisions"),
         GateItem(name="paper_sharpe", met=sharpe is not None and sharpe > cfg.paper_min_sharpe,
                  evidence=f"as-if daily Sharpe {_fmt(sharpe, '.2f')} (the lower of naive and Lo 2002 lags 1-{LO_LAGS}) "
                           "over the session days since backtest_to_paper",

@@ -178,3 +178,30 @@ def test_the_paper_sharpe_is_the_lower_of_naive_and_lo_2002_so_autocorrelation_c
     # a series the Lo formula cannot annualise (alternating signs: its denominator is not positive) fails closed
     alt = {d: (0.001 if i % 2 else -0.0005) for i, d in enumerate(grid)}
     assert gates_phase.daily_sharpe(alt, grid[0], grid[-1]) is None
+
+
+# ------------------------------------------------------------------------------------------------ the rate (safety ruling)
+def test_the_as_if_item_sizes_at_risk_per_trade_never_above_it(tmp_path):
+    """Trading-safety ruling on #490: the required as-if read sizes at the stricter of ADR 0106's 1 % and
+    `risk.risk_per_trade`, never above it."""
+    state, trials = full_state(tmp_path)
+    rep = report(state, trials)
+    assert item_of(rep, "paper_to_tiny_live", "as_if_real_money").met
+    assert f"sized at <= {min(0.01, SETTINGS.risk.risk_per_trade):.2%}" in \
+        item_of(rep, "paper_to_tiny_live", "as_if_real_money").evidence
+    paper = [t for t in gates_phase.load_closed_trades(state)[0] if t.mode == "demo"]
+    inputs, _, _ = gates_phase.as_if_inputs(paper, gates_phase.CostImputer.from_settings(SETTINGS))
+    from goldbot.research.as_if_sizing import AsIfLimits, as_if_real_money
+    replay = as_if_real_money(inputs, equity=CFG.as_if_equity_usd, adv_usd=ADV,
+                              limits=AsIfLimits.stricter(SETTINGS.risk))
+    assert all(t.risk_frac <= SETTINGS.risk.risk_per_trade + 1e-12 for t in replay.trades if t.status == "sized")
+
+
+def test_the_tiny_live_read_is_reported_and_never_decides_the_gate(tmp_path):
+    state, trials = full_state(tmp_path)
+    rep = report(state, trials)
+    it = item_of(rep, "paper_to_tiny_live", "as_if_tiny_live")
+    assert it.met and not it.required and "report only" in it.need
+    assert f"at {SETTINGS.risk.risk_per_trade_tiny_live:.2%} risk" in it.evidence
+    assert "0 of 150 trades could be sized" in it.evidence          # $1.25 at 0.1 % sizes no 0.01-lot $5 stop
+    assert paper_gate(rep).met                                       # the gate is decided without it

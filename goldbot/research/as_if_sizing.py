@@ -74,6 +74,10 @@ class AsIfLimits(FrozenRecord):
         return (f"{self.risk_per_trade:.2%}/trade, {self.daily_stop:.0%} daily stop, {weekly}{self.dd_halt:.0%} "
                 f"drawdown, {RM_MAX_ADV_SHARE:.0%} of daily volume")
 
+    def at_tiny_live(self, risk: RiskSettings) -> AsIfLimits:
+        """The same limits at the tiny-live per-trade rate (trading-safety ruling on #490: reported, never decides)."""
+        return self.model_copy(update={"risk_per_trade": min(self.risk_per_trade, risk.risk_per_trade_tiny_live)})
+
     @classmethod
     def stricter(cls, risk: RiskSettings) -> AsIfLimits:
         return cls(risk_per_trade=min(RM_MAX_RISK_PER_TRADE, risk.risk_per_trade),
@@ -131,6 +135,11 @@ class AsIfReport(FrozenRecord):
     daily: dict[date, float]                 # session day of the exit -> realised P&L over the day-start balance
     trades: list[AsIfTrade]
     shas_by_day: dict[date, list[str]] = Field(default_factory=dict)   # session day of entry -> scoring shas sized
+
+    @property
+    def per_trade(self) -> float:
+        """The per-trade risk fraction the replay sized at."""
+        return self.limits.risk_per_trade
 
     @property
     def clean(self) -> bool:
