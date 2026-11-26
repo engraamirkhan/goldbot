@@ -83,22 +83,32 @@ OVER_1PCT: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = {
 }
 
 
+FIXED_LOT = {"min_lot_risk_cap", "pilot"}          # the lot is fixed: nothing to size down, so refused
+
+
 @pytest.mark.parametrize("name", sorted(OVER_1PCT))
-def test_a_real_money_entry_risking_more_than_1_percent_with_its_round_trip_is_refused_under_every_profile(name):
+def test_no_real_money_entry_risks_more_than_1_percent_with_its_round_trip_under_any_profile(name):
+    """Sized down to 1 % minus the expected round trip (review L2), or refused where the lot is fixed."""
     lim, it, st = OVER_1PCT[name]
+    equity = st.get("equity") or 10_000.0
     d = _check(_limits(**lim), _intent(**it), _state(**st))
-    assert not d.allowed and d.reasons == ["rm_risk_per_trade"], d
+    if name in FIXED_LOT:
+        assert not d.allowed and d.reasons == ["rm_risk_per_trade"], d
+    else:
+        assert d.allowed and d.risk_amount + d.cost_amount <= 0.01 * equity + 1e-9, d
     # the same trade on demo is decided exactly as before: allowed, at more than 1 %
     demo = _check(_limits(real_money=False, **lim), _intent(**it), _state(**st))
-    assert demo.allowed and demo.risk_amount + demo.cost_amount > 0.01 * (st.get("equity") or 10_000.0)
+    assert demo.allowed and demo.risk_amount + demo.cost_amount > 0.01 * equity
 
 
-def test_exactly_1_percent_at_the_stop_with_no_round_trip_is_allowed_and_1_01_percent_is_not():
+def test_the_sizing_target_is_capped_at_1_percent_minus_the_expected_round_trip():
     lim: dict[str, Any] = dict(risk_per_trade=0.0101, max_risk_per_trade=0.05)
     at = _check(_limits(**lim))
     assert at.allowed and at.lots == 0.25 and at.risk_amount == pytest.approx(100.0) and at.cost_amount == 0.0
-    over = _check(_limits(**lim), _intent(cost_atr=0.01))
-    assert not over.allowed and over.reasons == ["rm_risk_per_trade"]
+    # $0.04 an oz round trip on a $4 stop: the target is 1 % x 4 / 4.04, so 0.24 lot ($96 + $0.96), not a refusal
+    d = _check(_limits(**lim), _intent(cost_atr=0.01))
+    assert d.allowed and d.lots == 0.24 and d.risk_amount + d.cost_amount <= 100.0
+    assert _check(_limits(real_money=False, **lim), _intent(cost_atr=0.01)).lots == 0.25      # demo as before
 
 
 def test_the_default_real_money_profile_still_trades_well_inside_1_percent():
@@ -111,7 +121,10 @@ def test_a_2_percent_day_refuses_every_entry_until_the_next_risk_day_even_after_
     gate = RiskGate(_limits(daily_cap=0.05))                # a profile that raised the daily cap to 5 %
     st = _state(equity=9_800.0)                             # realised + open loss = 2 % of the day start
     d = gate.check(_intent(), st, NOW)
-    assert not d.allowed and "rm_daily_stop" in d.reasons and st.rm_daily_stop
+    assert not d.allowed and "rm_daily_stop" in d.reasons   # refused on the read itself
+    gate.rm_read(st)
+    gate.rm_read(st)                                        # two agreeing account reads latch it
+    assert st.rm_daily_stop
     st.equity = 10_150.0                                    # the open positions recover the same day
     assert "rm_daily_stop" in gate.account_reasons(st, NOW)
     assert gate.check(_intent(), st, NOW).reasons == ["rm_daily_stop"]
@@ -139,13 +152,33 @@ def test_an_entry_is_sized_down_to_what_is_left_of_the_2_percent_day_with_open_r
     assert demo.allowed and demo.lots == 0.24                                   # 1 % of 9,850, not capped
 
 
-def test_the_daily_stop_is_set_by_the_stage_step_the_engine_runs_at_every_account_refresh():
+def test_the_daily_stop_latches_only_on_two_agreeing_comparable_reads():
+    """Review M1 (ADR 0016: "one disagreeing read never trips"): a zero, invalid or unconfirmed equity read, or a
+    single read at 2 %, never latches the day; an entry check never counts as a read; a read below resets the count."""
     gate = RiskGate(_limits())
     st = _state(equity=9_799.0)
     gate.stage_step(st)
-    assert st.rm_daily_stop
+    gate.check(_intent(), st, NOW)
+    gate.rm_read(st)
+    assert not st.rm_daily_stop                             # one read
+    gate.rm_read(st)
+    assert st.rm_daily_stop                                 # the second agreeing read
+    for bad in (dict(equity=0.0), dict(equity=9_700.0, equity_unconfirmed=True),
+                dict(equity=9_700.0, margin_used=float("nan"))):
+        b = _state(**bad)
+        gate.rm_read(b)
+        gate.rm_read(b)
+        assert not b.rm_daily_stop, bad
+    s3 = _state(equity=9_790.0)
+    gate.rm_read(s3)
+    s3.equity = 9_900.0
+    gate.rm_read(s3)                                        # a read below 2 %: the count starts again
+    s3.equity = 9_790.0
+    gate.rm_read(s3)
+    assert not s3.rm_daily_stop
     st2 = _state(equity=9_801.0)                            # 1.99 %: not reached
-    gate.stage_step(st2)
+    gate.rm_read(st2)
+    gate.rm_read(st2)
     assert not st2.rm_daily_stop and "rm_daily_stop" not in gate.account_reasons(st2)
 
 
@@ -218,10 +251,12 @@ def test_the_account_refresh_latches_and_saves_the_daily_stop_and_a_restart_keep
     assert not eng.state.rm_daily_stop
     pb.eq = 9_790.0                                         # 2.1 % down on the day
     eng._refresh_account(tick(1))
+    assert not eng.state.rm_daily_stop                      # one read never latches (review M1)
+    eng._refresh_account(tick(2))
     assert eng.state.rm_daily_stop and '"rm_daily_stop": true' in (tmp_path / "risk_icm-live.json").read_text()
     pb.eq = 10_050.0                                        # recovered, then a restart the same day
     again = engine(pb)
-    again._refresh_account(tick(2))
+    again._refresh_account(tick(3))
     assert again.state.rm_daily_stop
     assert "rm_daily_stop" in again.gate.account_reasons(again.state, NOW)
 
@@ -248,6 +283,38 @@ def test_a_demo_account_with_its_stages_off_is_not_halted_at_15_percent():
     gate = RiskGate(_limits(real_money=False, dd_stage1=1.0, dd_stage2=1.0, dd_stage1_clear=1.0))
     st = _state(equity=8_000.0, day_start_equity=8_000.0, week_start_equity=8_000.0)
     assert gate.stage_step(st) == Stage.NORMAL and gate.halt_at() == 1.0
+
+
+def test_a_demo_registered_unlimited_account_on_a_real_terminal_gets_every_real_money_limit():
+    """Review H1: real money is also what the terminal itself reports (`AccountState.terminal_trade_mode`, from the
+    account refresh), whatever the registry says: no ADR 0097 freeze, the 15 % halt, the volume rule."""
+    gate = RiskGate(RiskLimits(demo_unlimited=True, probe_only=True, dd_stage1=1.0, dd_stage2=1.0))
+    st = _state(terminal_trade_mode="real", equity=8_500.0, day_start_equity=8_500.0, week_start_equity=8_500.0)
+    assert gate.real_money(st=st) and not gate.unlimited(st=st)
+    assert gate.stage_step(st) == Stage.HALTED
+    ok = _state(terminal_trade_mode="real")
+    d = gate.check(_intent(), ok, NOW)
+    assert not d.allowed and d.reasons == ["rm_volume_unknown"]
+    paper = _state(terminal_trade_mode=None)                # the paper broker reports no terminal: not real money
+    assert gate.check(_intent(), paper, NOW).allowed and not gate.real_money(st=paper)
+
+
+def test_the_real_money_caps_sit_beside_the_standing_limits_and_the_stricter_wins():
+    """#490 condition: 0.5 % a trade, the 2 % daily and 5 % weekly caps and the 8 % / 12 % stages stay; ADR 0106's
+    1 % / 2 % / 15 % only bind where they are stricter."""
+    gate = RiskGate(_limits())                              # settings defaults, real money
+    d = gate.check(_intent(), _state(), NOW)
+    assert d.allowed and d.risk_amount == pytest.approx(48.0)          # 0.5 % (0.12 lot), never raised to 1 %
+    assert "weekly_cap" in gate.account_reasons(_state(equity=9_500.0, day_start_equity=9_500.0))
+    st = _state(equity=9_150.0, day_start_equity=9_150.0, week_start_equity=9_150.0)
+    assert gate.stage_step(st) == Stage.SIZE_DOWN                       # 8.5 %: the 8 % stage
+    assert gate.halt_at() == 0.12                                       # 12 % first
+    live = engine_limits(load_settings(), acc_mod.load_accounts(logins=False)["icm-live"])
+    s = load_settings().risk
+    assert live.max_risk_per_trade <= min(s.risk_per_trade * 2, rm.RM_MAX_RISK_PER_TRADE)
+    assert live.risk_per_trade <= s.risk_per_trade and live.daily_cap <= min(s.daily_cap, rm.RM_DAILY_STOP)
+    assert live.weekly_cap <= s.weekly_cap and live.dd_stage1 == s.drawdown_stage1
+    assert RiskGate(live).halt_at() == min(s.drawdown_stage2, rm.RM_DD_HALT)
 
 
 def test_a_real_money_account_is_never_unlimited():
@@ -285,6 +352,15 @@ def test_the_committed_reference_file_loads_and_refuses_until_the_data_team_fill
         assert "XAUUSD" not in refs
 
 
+def test_a_reference_dated_in_the_future_or_aged_past_its_limit_is_unknown_at_the_order():
+    """Review L1: the age is judged at every real-money entry, on the gate's clock, not only at engine start."""
+    future = _adv(1e12, as_of=TODAY + dt.timedelta(days=1))
+    assert _check(_limits(adv_reference=future)).reasons == ["rm_volume_unknown"]
+    old = _adv(1e12, as_of=TODAY - dt.timedelta(days=rm.ADV_MAX_AGE_DAYS + 1))
+    assert _check(_limits(adv_reference=old)).reasons == ["rm_volume_unknown"]
+    assert _check(_limits(adv_reference=_adv(1e12, as_of=TODAY - dt.timedelta(days=30)))).allowed
+
+
 def test_a_reference_without_its_source_or_date_is_refused_at_load():
     with pytest.raises(ValidationError):
         rm.AdvReference(adv_notional=1e9, currency="USD", source="", as_of=TODAY)
@@ -299,6 +375,9 @@ def test_a_stale_or_unreadable_reference_file_gives_no_reference(tmp_path):
         "XAGUSD": {"adv_notional": 1e10, "currency": "USD", "source": "CME SI", "as_of": "2026-11-01"}}}))
     refs = rm.load_adv_reference(f, today=TODAY)
     assert set(refs) == {"XAGUSD"}                           # older than ADV_MAX_AGE_DAYS: dropped (fail closed)
+    f.write_text(yaml.safe_dump({"instruments": {"XAUUSD": {"adv_notional": 5e10, "currency": "USD", "source": "x",
+                                                            "as_of": "2026-12-01"}}}))
+    assert rm.load_adv_reference(f, today=TODAY) == {}       # dated after today: refused
     f.write_text("instruments: [not, a, map")
     assert rm.load_adv_reference(f, today=TODAY) == {}
     assert rm.load_adv_reference(tmp_path / "missing.yaml", today=TODAY) == {}
@@ -403,3 +482,40 @@ def test_only_engine_limits_sets_the_real_money_flag_and_the_reference_volume():
         if hits:
             bad[rel] = hits
     assert not bad
+
+
+# ---------------------------------------------------------------- startup: a live engine without the limits refuses
+@pytest.mark.parametrize("mode, terminal, money, paper, refused", [
+    ("live", "real", False, False, True),        # a live account whose limits lost the flag
+    ("live", None, False, False, True),          # unknown terminal: the registry alone decides
+    ("demo", "real", False, False, True),        # any terminal that is not demo
+    ("demo", "contest", False, False, True),
+    ("live", "real", True, False, False),
+    ("demo", "demo", False, False, False),
+    ("live", "real", False, True, False),        # the paper stand-in trades no money
+])
+def test_an_engine_start_without_the_real_money_limits_on_a_non_demo_account_is_refused(mode, terminal, money, paper,
+                                                                                        refused):
+    from types import SimpleNamespace
+
+    from goldbot.ops.services.engine import real_money_start_problem
+    acc = SimpleNamespace(account_id="x", mode=mode, is_live=mode == "live")
+    info = SimpleNamespace(trade_mode=terminal) if terminal is not None else None
+    why = real_money_start_problem(acc, info, RiskLimits(real_money=money), paper=paper)
+    assert (why is not None) == refused
+    if refused:
+        assert "ADR 0106" in (why or "")
+
+
+def test_a_failed_startup_check_starts_the_engine_winding_down_with_the_limits_forced_on():
+    """Both ways (review H1): a live account, or any terminal that is not demo, without the flag starts with every
+    entry refused (`wind_down`: `account_disabled`) and the real-money limits on; exits keep running."""
+    import inspect
+
+    from goldbot.ops.services import engine as svc
+    src = inspect.getsource(svc._run_engine)
+    call = "real_money_start_problem(acc, info, limits, paper=paper)"
+    i = src.index(call)
+    assert src.index("limits = policy.defaults") < i < src.index("eng = Engine(")
+    block = src[i:i + 900]
+    assert "wind_down = True" in block and '"real_money": True' in block and "policy.defaults" in block

@@ -23,9 +23,9 @@ NOW = pd.Timestamp("2026-10-30 10:00", tz="UTC")
 GBP_PER_USD = 0.7508
 PRICE = 4014.84
 RULES = PilotRules(enabled=True, adr=55, pilot_id="icm-live-adr55", start_utc=pd.Timestamp("2026-10-29", tz="UTC"),
-                   leverage_cap=500, weekly_cap_frac=0.25, weekend_flat=True)
+                   leverage_cap=500, weekend_flat=True)
 # ADR 0055's rails 1, 2 and 4 as the gate's fields (superseded by ADR 0106; see the module docstring)
-ADR55_RISK_FRAC, ADR55_DAILY_FRAC = 0.125, 0.25
+ADR55_RISK_FRAC, ADR55_DAILY_FRAC, ADR55_WEEKLY_FRAC = 0.125, 0.25, 0.25
 STOP_GBP = 0.01 * 100 * 3.5 * GBP_PER_USD            # a $3.50 stop at 0.01 lot: £2.63
 TRIP_GBP = 0.05 * 3.5 * 0.01 * 100 * GBP_PER_USD     # its round trip: £0.13
 
@@ -36,7 +36,7 @@ def _limits(pilot: PilotRules | None = RULES, **kw: Any) -> RiskLimits:
     base: dict[str, Any] = dict(risk_per_trade=0.001, min_lot_risk_cap=None, daily_loss_limit_abs=6.25)
     if pilot is not None:
         base.update(pilot=pilot, max_positions=1, max_risk_per_trade=ADR55_RISK_FRAC,
-                    daily_cap=ADR55_DAILY_FRAC, weekly_cap=pilot.weekly_cap_frac, leverage_cap=pilot.leverage_cap,
+                    daily_cap=ADR55_DAILY_FRAC, weekly_cap=ADR55_WEEKLY_FRAC, leverage_cap=pilot.leverage_cap,
                     dd_stage1=1.0, dd_stage2=1.0, dd_stage1_clear=1.0)
     return RiskLimits(**{**base, **kw})
 
@@ -149,7 +149,8 @@ def test_the_6_25_gbp_daily_limit_refuses_an_entry_that_could_end_the_day_past_i
 
 
 def test_the_pilot_weekly_cap_is_25_percent_and_the_standing_5_percent_elsewhere():
-    """ADR 0055 amendment: `pilot.weekly_cap_frac` 0.25 (£12.50 at £50) replaces the 5% weekly cap on the pilot only."""
+    """ADR 0055 amendment: a 25 % weekly cap (£12.50 at £50) on the gate's field (restored to 5 % in the block since,
+    ADR 0106 review L3; tests/test_pilot_account.py)."""
     st = _state(equity=47.0, day_start_equity=47.0, week_start_equity=50.0)     # 6% down this week
     assert _check(st=st).allowed
     d = _check(st=_state(equity=37.5, day_start_equity=37.5, week_start_equity=50.0))   # 25% down

@@ -1818,6 +1818,20 @@ any single trade losing more than the weekly cap (5% of equity). A breach makes 
 caps and kill switch keep working as before. The design says the project stops: send `/halt` (or press Halt on the
 dashboard) and review before doing anything else.
 
+**Real-money limits (ADR 0106, in code, `goldbot/risk/real_money.py`).** On every live account, and on any account
+whose terminal reports a real login, the RiskGate also applies the owner's limits beside the standing ones (the
+stricter wins): 1 % a trade with its round trip, the rest of the day's 2 % per entry and a stop for the rest of the day
+once two account reads reach 2 % (kept across restarts, cleared at 00:00 UTC), a halt at 15 % at the latest (12 %
+first), and each order within 1 % of the instrument's reference daily volume (`config/data/adv_reference.yaml`; a
+missing or stale figure refuses every real-money entry, `rm_volume_unknown`). An engine that starts on such an
+account without them forces them on and winds down (entries refused, exits run): read the journal line and fix the
+config before restarting.
+
+**Withdraw from a real-money account only when it is flat, then re-arm.** A withdrawal on real money never lowers the
+day, week or high-water marks (ADR 0042), so 2 % of the balance latches the day, 8 % sizes down, 12 % is a confirmed
+halt that flattens the account and needs your TOTP re-arm, and 15 % refuses entries. Close every position first,
+withdraw, then re-arm on the dashboard (or `/rearm`) so the mark starts from the new balance.
+
 Live trading is locked in two independent places, and **both** must agree:
 
 1. **The phase gate file** `C:\goldbot\state\phase_state.json` must list the gate `paper_to_tiny_live` in

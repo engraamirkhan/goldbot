@@ -195,6 +195,12 @@ Decided by the trading-safety reviewer under the owner's delegation. The unlock 
     the latest.
   Rail 3 (`leverage_cap` 500, the terminal's own leverage when lower) and every absolute term (0.01 lot, $4 stop,
   £3.12 a trade, £6.25 a day, £25 or 30 entries, one position, 15m only) stand: each is only ever tighter.
+- **Weekly cap restored to 5 %** (PD + CFO, on the ADR 0106 trading-safety review, L3): ADR 0106 sets no weekly limit,
+  so the earlier amendment's 25 % (`weekly_cap_frac`) would have stood; it is a tightening back to the standing 5 %
+  (`PILOT_MAX_WEEKLY_FRAC`, config/accounts.yaml icm-live).
+- **The new caps sit beside the standing ones; the stricter wins.** 0.5 % a trade (0.1 % tiny-live), the 2 % daily and
+  5 % weekly caps and the 8 % / 12 % stages are unchanged; ADR 0106's 1 % / 2 % / 15 % / 1 %-of-volume bind only where
+  they are stricter (the 12 % halt still fires first).
 - **Where it is enforced.** `goldbot/risk/real_money.py` holds the four figures as code constants; the RiskGate applies
   them after every pilot rule on a real-money account (`RiskLimits.real_money`, set by `engine_limits` for a live
   account's real terminal). `PilotRules` refuses at load a block with `max_risk_frac` above 1 %, `daily_cap_frac`

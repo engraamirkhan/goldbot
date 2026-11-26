@@ -1981,6 +1981,7 @@ class Engine:
         books.after_refresh(self, tick, now)    # more than one book: its terms and rules, the account's exposure
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         self.cfg.approval_mode = auto_entry.lock(self, owner_mode or self._account_approval, acc)   # ADR 0036 lock
+        st.terminal_trade_mode = getattr(acc, "trade_mode", None)    # ADR 0106 review H1: real money by the terminal
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         pilot.refresh(self, acc, now)        # ADR 0055: the live pilot's record and stop from the deals (engine/pilot.py)
         stage = st.stage
@@ -1990,7 +1991,8 @@ class Engine:
                 self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
             # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
             self._save_risk_state_now("the stage change")
-        elif st.rm_daily_stop != self._rm_daily_stop_saved:
+        self.gate.rm_read(st)               # ADR 0106: two agreeing account reads at 2 % latch the day (review M1)
+        if st.rm_daily_stop != self._rm_daily_stop_saved:
             # ADR 0106: the 2% stop survives a restart at once, whichever check latched it (a failed save retries here)
             if self._save_risk_state_now("the real-money daily stop"):
                 self._rm_daily_stop_saved = st.rm_daily_stop
@@ -2032,7 +2034,7 @@ class Engine:
         if st.stage == Stage.HALTED or hwm <= 0:
             return False
         dd = 1 - acc.equity / hwm
-        halt = self.gate.halt_at()          # dd_stage2; on real money never above ADR 0106's 15%
+        halt = self.gate.halt_at(st)        # dd_stage2; on real money never above ADR 0106's 15%
         if dd >= halt:
             self._reread_account = False
             if self._stage2_pending_since is not None or self._equity_corroborated(acc, hwm):

@@ -865,9 +865,9 @@ accounts:
       max_risk_frac: 0.01             # ADR 0106: 1% (was 0.125, ADR 0055)
       daily_cap_frac: 0.02            # ADR 0106: 2%, latched for the day (was 0.25)
       drawdown_stages: true           # ADR 0106: the stages run, 15% halts (was false)
-      # ADR 0055 amendment (trading-safety rulings): the weekly cap 25% (£12.50 at £50) instead of 5%, and every
-      # position closed at the Friday cut, winners too
-      weekly_cap_frac: 0.25
+      # ADR 0055 amendment: every position closed at the Friday cut, winners too; its weekly 25% is restored to the
+      # standing 5% (ADR 0106 trading-safety review L3, PD + CFO)
+      weekly_cap_frac: 0.05
       weekend_flat: true
     # BACKLOG 135, PD decision on the trading-safety review of 49335812: a live account takes entries only while its
     # bridge's order lane is up (/health order_lane: separate); exits work without it. Its drill: RUNBOOK "Order lane"

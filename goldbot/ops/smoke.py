@@ -153,6 +153,8 @@ STATE_SOURCES: dict[str, str] = {
     "other_group_notional": "none: an XAUUSD-only state",
     "exposure_unknown": "false: an XAUUSD-only state values its book through open_lots / open_notional",
     "rm_daily_stop": "risk_<account>.json rm_daily_stop (ADR 0106; absent = not latched)",
+    "rm_day_reads": "0: the smoke makes one read; the engine counts its own (ADR 0106 review M1)",
+    "terminal_trade_mode": "account_info().trade_mode, the terminal's own report (ADR 0106 review H1)",
 }
 
 
@@ -515,6 +517,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         terminal_account_changed=False,   # the smoke stops before this unless verify_terminal_account passed (S1)
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id), pilot=None, broker_leverage=None,
         group_notional=None, other_group_notional=None, exposure_unknown=False, rm_daily_stop=risk["rm_daily_stop"],
+        rm_day_reads=0, terminal_trade_mode=getattr(info, "trade_mode", None),
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)

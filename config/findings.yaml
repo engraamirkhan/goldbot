@@ -499,3 +499,12 @@ findings:
     due: 2026-12-04
     source: ADR 0106 decision 2 ("order size <= about 1 % of the asset's daily volume"); config/data/adv_reference.yaml placeholder from lane 1 (XAUUSD from the COMEX GC reference)
     check: {fn: file_text, params: {patterns: ["config/data/adv_reference.yaml"], regex: "adv_notional: null", expect: absent}}
+
+  - id: ADR0106-ROLLBACK-FLOOR
+    title: A live host never rolls back to a release without the ADR 0106 real-money limits (a rollback floor for live engines)
+    owner: sre
+    severity: high
+    due: 2026-12-11
+    source: trading-safety review of PR 491 (M3); the auto-rollback watcher can restore an older release that ignores the
+      risk file's rm_daily_stop and has no real-money limits; needed before any live account is enabled
+    check: {fn: manual, params: {}}

@@ -16,6 +16,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     on; icm-live now 0.01 / 0.02 / true). At 1 % the £50 pilot cannot trade (needs about £280); ADR 0055 amended.
   - `config/data/adv_reference.yaml` is a placeholder (XAUUSD `adv_notional: null`): every real-money entry is refused
     until the data engineer fills it with source and date (finding ADV-REFERENCE-XAUUSD). No live account is enabled.
+  - Trading-safety review of #491: real money also by the terminal's own report (`AccountState.terminal_trade_mode`,
+    a real login under a demo id gets every limit and no ADR 0097 freeze); the day latches only on two agreeing
+    comparable account reads; the ADV reference's age is judged at every entry; on real money the sizing target leaves
+    room for the round trip (1 % is a ceiling, not a refusal); the pilot weekly cap is back to 5 %; an engine start
+    without the limits on a live or real-terminal account forces them on and winds down (exits run). RUNBOOK: withdraw
+    from a real-money account only when flat, then re-arm. Rollback floor for live hosts: finding ADR0106-ROLLBACK-FLOOR.
 - 2026-11-26 Column lookbacks: two perturbations and a locked read ledger. This is the quant sign-off follow-up of #472
   and must land before the A4 unseal.
   - Lookbacks: each declared column lookback is now the larger of two truncation tests: (i) a continuous 3×-vol path,

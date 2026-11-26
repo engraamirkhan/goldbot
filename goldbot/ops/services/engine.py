@@ -296,6 +296,20 @@ def disabled_wind_down(acc: Account, broker: Any) -> bool:
     return True
 
 
+def real_money_start_problem(acc: Any, info: Any, limits: RiskLimits, *, paper: bool) -> str | None:
+    """ADR 0106 (fail closed): why an engine must not start, or None. An account that may move real money (accounts.yaml
+    `mode: live`, or a terminal reporting anything but demo) must start with the owner's real-money limits on
+    (`RiskLimits.real_money`, set by `engine_limits`); a limits path that lost the flag would trade without them. The
+    paper stand-in moves no money and is not judged."""
+    if paper:
+        return None
+    term = getattr(info, "trade_mode", None) if info is not None else None
+    if (getattr(acc, "is_live", False) or term not in (None, "demo")) and not limits.real_money:
+        return (f"real-money limits not in force for {acc.account_id} (mode {acc.mode}, terminal {term or 'unknown'}): "
+                "the RiskGate must apply ADR 0106's limits before any entry")
+    return None
+
+
 def start_refused(acc: Account, why: str, info: Any = None) -> NoReturn:
     """A start check failed (approval ids, the engine lock, no broker, a wrong terminal account, symbol terms). An
     enabled account ends through `refuse_start` (startup_error written, restarted); a disabled one through
@@ -593,6 +607,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     boot_id, boot_at = uuid.uuid4().hex, pd.Timestamp.now("UTC")     # this start's id on every row it writes
     settings = load_settings()
     bridge = accounts.bridge_endpoint(account_id)
+    info: Any = None                                       # the terminal's account read (None: the paper stand-in)
     verify: Callable[[Any], str | None] | None = None      # R1: the start check, run again on every account read
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -642,6 +657,14 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
     limits = policy.defaults
+    # ADR 0106 (review H1, both ways): a live account or a terminal that is not demo never trades without the owner's
+    # real-money limits. A start that finds them off forces them on and winds down: every entry refused
+    # (`account_disabled`), exits keep running; the journal and the decision log say why
+    if why := real_money_start_problem(acc, info, limits, paper=paper):
+        log.error("%s: %s; starting wound down (entries refused, exits run) with the real-money limits forced on",
+                  account_id, why)
+        policy.defaults = limits = limits.model_copy(update={"real_money": True, "adv_reference": {}})
+        wind_down = True
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"

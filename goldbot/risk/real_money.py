@@ -91,9 +91,9 @@ def load_adv_reference(path: Path = ADV_REFERENCE_FILE, *, today: dt.date | None
             continue
         if ref.adv_notional is None or ref.as_of is None:
             continue
-        if (today - ref.as_of).days > ADV_MAX_AGE_DAYS:
-            log.warning("reference daily volume of %s is from %s, older than %d days: unknown", sym, ref.as_of,
-                        ADV_MAX_AGE_DAYS)
+        if not fresh(ref, today):
+            log.warning("reference daily volume of %s is dated %s: in the future or older than %d days: unknown", sym,
+                        ref.as_of, ADV_MAX_AGE_DAYS)
             continue
         out[str(sym)] = ref
     return out
@@ -121,10 +121,16 @@ def trade_risk_exceeded(risk_amount: float, cost_amount: float, equity: float) -
     return risk_amount + max(0.0, cost_amount) > RM_MAX_RISK_PER_TRADE * equity * (1 + 1e-9)
 
 
-def volume_known(ref: AdvReference | None, currency: str) -> bool:
-    """A usable reference in the order's quote currency (else the gate refuses `rm_volume_unknown`)."""
+def fresh(ref: AdvReference, today: dt.date) -> bool:
+    """Review L1: dated no later than `today` and no older than ADV_MAX_AGE_DAYS on it."""
+    return ref.as_of is not None and 0 <= (today - ref.as_of).days <= ADV_MAX_AGE_DAYS
+
+
+def volume_known(ref: AdvReference | None, currency: str, today: dt.date) -> bool:
+    """A usable reference in the order's quote currency, fresh on the gate's clock (`today`), else the gate refuses
+    `rm_volume_unknown`. Judged at every real-money entry, so a reference ages out on the running engine too."""
     return ref is not None and ref.adv_notional is not None and math.isfinite(ref.adv_notional) \
-        and ref.currency.upper() == currency.strip().upper()
+        and ref.currency.upper() == currency.strip().upper() and fresh(ref, today)
 
 
 def volume_exceeded(notional: float, ref: AdvReference) -> bool:

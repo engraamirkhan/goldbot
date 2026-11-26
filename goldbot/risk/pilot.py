@@ -21,7 +21,8 @@ account only; none is a code path that skips a check.
 
 ADR 0106 decision 2 (the owner's real-money limits, goldbot/risk/real_money.py) supersedes rails 1, 2 and 4: the block
 is refused at load when `max_risk_frac` is above 1 %, `daily_cap_frac` above 2 % or `drawdown_stages` is false, enabled
-or not, and the RiskGate applies the 1 % / 2 % / 15 % limits after every pilot rule anyway. Rail 3 (`leverage_cap`)
+or not, and the RiskGate applies the 1 % / 2 % / 15 % limits after every pilot rule anyway. The amendment's weekly
+cap (25 %) is restored to the standing 5 % (PD + CFO, review L3). Rail 3 (`leverage_cap`)
 and the absolute terms (£3.12, £6.25, £25, 30 entries, 0.01 lot) stand: they are only ever tighter.
 """
 from __future__ import annotations
@@ -46,7 +47,9 @@ PILOT_MAX_LEVERAGE_CAP = 500.0
 # real-money limits. At 1 % the pilot's £3.12 trade needs about £312 of equity; below that the gate refuses it
 PILOT_MAX_RISK_FRAC = RM_MAX_RISK_PER_TRADE
 PILOT_MAX_DAILY_FRAC = RM_DAILY_STOP
-PILOT_MAX_WEEKLY_FRAC = 0.25         # ADR 0055 amendment: £12.50 at £50
+# ADR 0055's amendment allowed 0.25 (£12.50 at £50); restored to the standing 5 % by PD + CFO on the ADR 0106
+# trading-safety review (L3, a tightening)
+PILOT_MAX_WEEKLY_FRAC = 0.05
 
 
 class PilotRules(FrozenRecord):
