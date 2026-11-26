@@ -66,7 +66,8 @@ _BOOT_CHUNK = 500           # draws held in memory at once
 
 # modules on a fit, threshold, select or gate path (each new one adds itself; diagnostics.py must never be here)
 GUARDED_MODULES: tuple[str, ...] = ("goldbot.research.objective", "goldbot.research.baselines",
-                                    "goldbot.research.decision_cost")
+                                    "goldbot.research.decision_cost", "goldbot.research.sr_v3",
+                                    "goldbot.research.learners")
 # users of fit_offset / keep_rule / gate that are NOT on a select or gate path, each with its reason
 UNGUARDED_USERS: dict[str, str] = {
     "goldbot/research/diagnostics.py": "the descriptive battery: fits only for the shuffle check and the canary, "

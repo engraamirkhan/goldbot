@@ -24,6 +24,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     | EURUSD 2010-17 | P30 | 5,644 | 4,247 | 3,214 | 2,191 | 1,734 | 422 | 35 | 0 |
 
     Gold 2003-09 is unchanged.
+- **sr-v3 history trainer is built. It has not run on real labels.** The pipeline is Stage 0 (label-blind Riley
+  ladder, level and served orders, tie rule, λ_a), then walk-forward fits of L-cw, G-cw (GBT baseline), HB and AVG
+  with the D-40 dense prior, then a training report and run log per unit.
+  - CLI: `scripts/research/train_sr_v3.py`. Modules: `goldbot/research/sr_v3.py`, `learners.py`, `sr_v3_train.py` and
+    `sr_v3_serve.py`. Decisions are in ADR 0108.
+  - The CLI refuses to run until PR #484 (X6) is merged, and `load_labels` refuses until A4 is recorded (#482).
 - **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
     `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.

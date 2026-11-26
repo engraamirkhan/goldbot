@@ -1,0 +1,271 @@
+"""The sr-v3 history trainer (goldbot/research/sr_v3_train.py): folds with a gap, past-only normalisation, decision-time
+cost per fold, Stage 0 reads no label, the learner reports, deterministic v0 artifacts, rebuild from the run log, the
+sealed-store refusal, and train/serve parity of the L-cw export."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from goldbot.base import load_record_json
+from goldbot.research import decision_cost as DC
+from goldbot.research import dense_labels as D
+from goldbot.research import learners as L
+from goldbot.research import sr_v3 as V
+from goldbot.research import sr_v3_serve as S
+from goldbot.research import sr_v3_train as T
+from goldbot.research.self_retrain import FEATURES, INPUTS, LogitModel, design, design_row
+
+ROOT = Path(__file__).resolve().parents[2]
+RHO_FILE = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
+
+
+def _frame(inst: str, year: int, *, tf: str = "4h", seed: int = 0, signal: float = 0.25) -> pd.DataFrame:
+    rng = np.random.default_rng(hash((inst, year, seed)) % 2**32)
+    days = pd.bdate_range(f"{year}-01-01", f"{year}-12-31", tz="UTC")
+    bars = pd.DatetimeIndex([d + pd.Timedelta(hours=h) for d in days for h in (2, 10, 18)])
+    n = len(bars)
+    dec = np.repeat(bars, 2)
+    side = np.tile([1, -1], n)
+    X = rng.normal(size=(2 * n, len(V.P30)))
+    X[:, 0] = side
+    gross = signal * X[:, 1] + rng.normal(0, 1.1, 2 * n)
+    base = pd.DataFrame({"decision_utc": dec, "side": side, "max_hold_s": float(V.H_S[tf]), "entry": 1_500.0 + year,
+                         "risk_usd": 12.0, "cost_rt_bp": 0.575})
+    parts = T.cost_parts(base)
+    full = parts["nights_full"].to_numpy()
+    f = pd.DataFrame({"instrument": inst, "tf": tf, "phase": 0, "decision_utc": dec,
+                      "horizon_end_utc": dec + pd.Timedelta(seconds=V.H_S[tf]), "side": side, "gross": gross,
+                      "t0_gross": gross * 0.8 + rng.normal(0, 0.3, 2 * n), "stop": rng.random(2 * n) < 0.4,
+                      "nights_held": np.floor(full * rng.random(2 * n)), "w": rng.uniform(0.1, 0.3, 2 * n),
+                      "entry": 1_500.0 + year, "base_dist": 12.0, "cost_rt_bp": 0.575})
+    f = pd.concat([f, parts[["cost_a", "cost_b", "cost_c", "nights_full"]]], axis=1)
+    for j, c in enumerate(V.P30):
+        if c != "side":
+            f[c] = X[:, j]
+    return f[list(T.ROW_COLS)]
+
+
+def _data(insts: tuple[str, ...] = ("XAUUSD", "EURUSD"), **kw: object) -> T.FrameData:
+    return T.FrameData({(i, "4h", y): _frame(i, y, **kw) for i in insts for y in V.LEARN_YEARS})  # type: ignore[arg-type]
+
+
+def _plan(cols: tuple[str, ...] = V.CORE_6, members: tuple[str, ...] = ("XAUUSD", "EURUSD")) -> T.UnitPlan:
+    return T.UnitPlan(unit="4h", tfs=("4h",), members=members, lcw_columns=cols, first_oof=2012, lam_a=820.0,
+                      design_effect=1.2, stage0={"level": "L3", "judged": True})
+
+
+# ---------------------------------------------------------------------------------------------- folds
+def test_a_training_row_ends_before_the_test_year_minus_the_gap() -> None:
+    g = T.gap("4h")
+    assert g == pd.Timedelta(days=5)
+    start = pd.Timestamp("2014-01-01", tz="UTC")
+    f = pd.DataFrame({"tf": "4h", "horizon_end_utc": [start - g - pd.Timedelta(seconds=1), start - g,
+                                                      start - pd.Timedelta(days=1)]})
+    assert T.train_mask(f, 2014).tolist() == [True, False, False]
+    assert T.gap("1m") == pd.Timedelta(days=1)
+
+
+def test_fold_moments_hold_only_rows_labelled_before_the_gap() -> None:
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    for Y in plan.oof_years:
+        want = sum(int(T.train_mask(data.frame(i, "4h", y), Y).sum()) for i in plan.members for y in V.LEARN_YEARS)
+        assert sum(m.n for m in col.lcw[Y].values()) == want
+    end = T.WN.SPANS[T.WN.Window.LEARN][1]
+    v0 = sum(int((data.frame(i, "4h", y)["horizon_end_utc"] <= end).sum()) for i in plan.members for y in V.LEARN_YEARS)
+    assert sum(m.n for m in col.lcw[2018].values()) == v0
+
+
+def test_normalisation_uses_past_rows_only() -> None:
+    plan = _plan()
+    a = T.collect(_data(), plan, seed=T.SEEDS[0])
+    late = dict(_data().frames)
+    for i in plan.members:
+        f = late[(i, "4h", 2017)].copy()
+        f[list(V.P30[1:])] = f[list(V.P30[1:])] * 3 + 5
+        late[(i, "4h", 2017)] = f
+    b = T.collect(T.FrameData(late), plan, seed=T.SEEDS[0])
+    for Y in (2012, 2015, 2017):
+        fa = L.lcw_from_moments(a.lcw[Y], a.impute[:6], plan.lcw_columns, lam=540, lam_a=820, design_effect=1.2)
+        fb = L.lcw_from_moments(b.lcw[Y], b.impute[:6], plan.lcw_columns, lam=540, lam_a=820, design_effect=1.2)
+        assert L.artifact_sha(fa) == L.artifact_sha(fb)
+    assert np.array_equal(a.impute, b.impute)
+
+
+def test_cost_per_fold_is_decision_cost_cost_x_with_that_folds_priors() -> None:
+    f = _frame("XAUUSD", 2013)
+    labels = f.assign(arm="XAUUSD:4h:T2", max_hold_s=float(V.H_S["4h"]), risk_usd=12.0, entry=1_500.0 + 2013,
+                      label_exit_utc=f["decision_utc"] + pd.Timedelta(hours=30),
+                      barrier_hit=np.where(f["stop"], "stop", "time"), template="T2")
+    acc = T.PriorAcc()
+    acc.add(f.assign(nights_held=DC.nights_held(labels)))
+    pri = acc.priors(pd.Timestamp("2015-01-01", tz="UTC"))
+    ref = DC.priors(labels, before=pd.Timestamp("2015-01-01", tz="UTC"))
+    assert pri.p_stop == pytest.approx(ref.p_stop) and pri.night_share == pytest.approx(ref.night_share)
+    want = DC.cost_x(labels, ref)
+    assert np.allclose(T.cost_of(f, pri), want)
+    rows = labels.assign(gross_r_raw=f["gross"], instrument="XAUUSD", tf="4h")
+    assert np.allclose(D.net_r(rows, ref), O_clip(f["gross"].to_numpy() - T.cost_of(f, pri)))
+
+
+def O_clip(x: np.ndarray) -> np.ndarray:
+    return np.clip(x, -10, 10)
+
+
+# ---------------------------------------------------------------------------------------------- Stage 0
+def test_stage0_reads_no_label_column() -> None:
+    rng = np.random.default_rng(3)
+    dec = pd.date_range("2010-01-04", "2011-12-30", freq="4h", tz="UTC")
+    ev = pd.DataFrame({"instrument": "XAUUSD", "tf": "4h", "phase": 0, "decision_utc": dec, "usable": True,
+                       "u": rng.uniform(0.1, 0.3, len(dec))})
+    with_labels = ev.assign(gross_r_raw=rng.normal(size=len(dec)), barrier_hit="stop")
+    a = T.stage0_counts(ev, years=(2010, 2011))
+    b = T.stage0_counts(with_labels.drop(columns=["gross_r_raw"]), years=(2010, 2011))
+    c = T.stage0_counts(with_labels, years=(2010, 2011))
+    assert a == b == c
+    s0 = T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=RHO_FILE)
+    s1 = T.stage0("4h", ("4h",), {"XAUUSD": with_labels, "EURUSD": with_labels.assign(instrument="EURUSD")},
+                  rho_file=RHO_FILE)
+    assert s0.model_dump() == s1.model_dump()
+    assert s0.rho["gold"].source_sha256 == V.file_sha256(RHO_FILE)
+
+
+def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def boom(*a: object, **k: object) -> None:
+        raise AssertionError("Stage 0 read a label")
+    monkeypatch.setattr(D, "load_labels", boom)
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    assert store.events("XAUUSD", "4h", (2010, 2011)).empty
+
+
+def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: pytest.MonkeyPatch,
+                                                                  tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+
+    def sealed(*a: object, **k: object) -> None:
+        seen.update(k)
+        raise D.SealedStore("sealed")
+    monkeypatch.setattr(D, "load_labels", sealed)
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers)
+    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    with pytest.raises(D.SealedStore):
+        store.frame("XAUUSD", "4h", 2013)
+    assert seen["window"] == T.WN.SPANS[T.WN.Window.LEARN] and seen["purpose"] == "train"
+    assert seen["columns"] == V.P30 and seen.get("booked_read") is None
+
+
+# ---------------------------------------------------------------------------------------------- the unit fit
+@pytest.fixture(scope="module")
+def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    hb = {Y: T.hb_fit(col.hb[Y], {k: col.impute[[V.P30.index(c) for c in T.HB_COLUMNS]] for k in col.hb[Y]},
+                      dict.fromkeys(col.hb[Y], plan.design_effect), {"4h": plan.lam_a}) for Y in col.hb}
+    return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000)
+
+
+def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple) -> None:
+    _, _, res = fitted
+    r = res.report
+    assert set(r["learners"]) == {"L-cw", "G-cw", "HB", "AVG"}
+    for name in ("L-cw", "HB", "AVG"):
+        d = r["learners"][name]["d_vs_gcw"]
+        assert d["n"] > 0 and d["lo90"] <= d["d_per_day"] <= d["hi90"]
+    assert {"L-cw vs G-cw", "L-cw vs HB", "G-cw vs AVG"} <= set(r["paired_d"])
+    assert r["learners"]["L-cw"]["read"]["s"] > 0, "the planted tsmom signal is found out of fold"
+    assert set(r["baselines"]["buy_and_hold"]) == {"XAUUSD", "EURUSD"}
+    assert r["baselines"]["buy_and_hold"]["XAUUSD"]["pct"] < 0.01
+    assert r["learners"]["L-cw"]["twin_s_expectation"] is not None
+
+
+def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitted: tuple) -> None:
+    r = fitted[2].report
+    assert len(r["seed_stability"]["G-cw"]["net_r_per_day"]) == len(T.SEEDS) >= 5
+    h = r["harness"]
+    assert set(h["canaries"]) == {"L-cw", "HB", "G-cw"} and len(h["canaries"]["L-cw"]) == 3
+    assert any(c["recovered"] for c in h["canaries"]["L-cw"])
+    assert {"lambda x0.8", "lambda x1.25"} <= set(h["parameter_shift"]["L-cw"])
+    assert {"learning_rate x0.8", "num_iterations x1.25", "min_child_share x0.8"} <= set(h["parameter_shift"]["G-cw"])
+    assert all("auc_in_band" in v for v in h["shuffle"].values())
+    assert len(h["seed_s"]["G-cw"]) == 5 and h["learning_curve_lcw"][-1]["n"] == h["train_rows"]
+    assert "XAUUSD" in r["levels"] and set(r["levels"]["XAUUSD"]) == {"shrunk", "unshrunk"}
+    assert 0 <= r["v0_keep_share_2015_17"] <= 1
+
+
+def test_v0_artifacts_are_deterministic_and_load(fitted: tuple) -> None:
+    data, plan, res = fitted
+    again = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], harness_rows=5_000)
+    for k in ("L-cw", "B8", "G-cw", "D-40"):
+        assert res.report["artifacts"][k] == again.report["artifacts"][k]
+        assert isinstance(L.load_artifact(res.artifacts[k]), (L.LcwArtifact, L.GcwArtifact, L.DenseArtifact))
+    assert "AVG" in res.artifacts and "HB" in res.artifacts
+
+
+def test_any_model_rebuilds_byte_exactly_from_its_run_log(fitted: tuple, tmp_path: Path) -> None:
+    data, _, res = fitted
+    d = T.write_unit(res, tmp_path)
+    log = json.loads((d / "run_log.json").read_text())
+    assert {"data", "settings", "seeds", "code", "artifacts", "results"} <= set(log)
+    out = T.rebuild(log, data)
+    assert out["match"], out
+    bumped = dict(data.frames)
+    bumped[("XAUUSD", "4h", 2016)] = bumped[("XAUUSD", "4h", 2016)].assign(gross=lambda f: f["gross"] + 0.01)
+    with pytest.raises(ValueError, match="data version"):
+        T.rebuild(log, T.FrameData(bumped))
+    assert (d / "report.md").read_text().startswith("# sr-v3 training report: unit 4h")
+
+
+def test_intercept_only_unit_serves_level_minus_cost() -> None:
+    data, plan = _data(), _plan(cols=())
+    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], harness_rows=5_000)
+    a = L.load_artifact(res.artifacts["L-cw"])
+    assert isinstance(a, L.LcwArtifact) and a.columns == () and set(a.levels) == {"XAUUSD", "EURUSD"}
+    assert "intercept-only" in T.report_md(res.report)
+
+
+# ---------------------------------------------------------------------------------------------- serving parity
+def test_lcw_export_loads_in_shadow_scoring_and_scores_the_engine_vector_identically() -> None:
+    data, plan = _data(), _plan()
+    f = pd.concat([data.frame(i, "4h", y) for i in plan.members for y in (2012, 2013)], ignore_index=True)
+    td = L.TrainData(X=f[list(plan.lcw_columns)].to_numpy(float), columns=plan.lcw_columns,
+                     gross=f["gross"].to_numpy(float), net=f["gross"].to_numpy(float), cost=np.zeros(len(f)),
+                     w=f["w"].to_numpy(float), instrument=f["instrument"].to_numpy(), day=np.zeros(len(f)),
+                     tf=f["tf"].to_numpy(), design_effect=1.0)
+    a = L.fit_lcw(td, lam=540, lam_a=820)
+    lm = load_record_json(LogitModel, S.to_logit_model(a, "XAUUSD").model_dump_json(), source="test")
+    rng = np.random.default_rng(9)
+    for _ in range(25):
+        feats: dict[str, float | None] = {c: float(rng.normal()) for c in FEATURES}
+        feats["atr_ratio_14_100"] = None
+        side = int(rng.choice([1, -1]))
+        x = design_row(feats, side)
+        g = S.gross_row(lm, x)
+        assert lm.score_row(x) == 1.0 / (1.0 + np.exp(-g))
+        p30 = S.p30_row(x)
+        lc = [V.P30.index(c) for c in plan.lcw_columns]
+        assert g == pytest.approx(a.value_row(p30[lc], "XAUUSD"), abs=1e-12)
+        row = pd.DataFrame([{**feats, "side": side}])
+        assert np.allclose(design(row)[list(INPUTS)].to_numpy(float)[0], x, equal_nan=True)
+    assert lm.keep(pd.DataFrame([{c: 0.0 for c in INPUTS}]))[0], "tau 0: the sr-v2 rule keeps (never refuses)"
+
+
+def test_hook_needs_are_listed_for_the_trading_safety_review() -> None:
+    assert any("GATE_SPECS" in n for n in S.ENGINE_HOOK_NEEDS)
+    assert any("fails open" in n for n in S.ENGINE_HOOK_NEEDS)
+
+
+def test_the_cli_refuses_to_run_before_block_x6_merges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "X6_MODULE", tmp_path / "absent.py")
+    with pytest.raises(SystemExit, match="X6"):
+        mod.refuse_before_x6()
