@@ -6,7 +6,7 @@
    "cell": "gold/1m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 5212,
+   "n_eff_learn": 5226,
    "n_eff_judge": 527,
    "need_train": 4300,
    "need_judge": 1109,
@@ -77,11 +77,11 @@
    "cell": "gold/5m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 3872,
+   "n_eff_learn": 3846,
    "n_eff_judge": 392,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 9,
+   "max_inputs": 8,
    "gaps": [
     {
      "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
@@ -124,8 +124,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 3,872 < 4,300 for a 10-input block (max 9 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,744) and the per-cell input cap to the card",
+     "gap": "learn n_eff 3,846 < 4,300 for a 10-input block (max 8 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,692) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -156,7 +156,7 @@
    "cell": "gold/15m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 2883,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 4300,
    "need_judge": 1109,
@@ -203,8 +203,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 2,883 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,766) and the per-cell input cap to the card",
+     "gap": "learn n_eff 2,707 < 4,300 for a 10-input block (max 6 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,414) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -235,87 +235,8 @@
    "cell": "gold/30m",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 1909,
+   "n_eff_learn": 1643,
    "n_eff_judge": 193,
-   "need_train": 4300,
-   "need_judge": 1109,
-   "max_inputs": 4,
-   "gaps": [
-    {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
-     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
-     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
-     "due": "2026-12-02 (plan); read date set by graded n_eff",
-     "blocks": true,
-     "item": "D-1"
-    },
-    {
-     "gap": "fs-v1 feature store not merged",
-     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
-     "owner": "data-engineer",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-2"
-    },
-    {
-     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
-     "plan": "W2-2 / A9 implementation",
-     "owner": "implementer + microstructure-researcher",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-3"
-    },
-    {
-     "gap": "exit templates T0-T7 not frozen",
-     "plan": "freeze W3-1 / RL-1 templates",
-     "owner": "exits-researcher",
-     "due": "2026-12-02",
-     "blocks": true,
-     "item": "D-4"
-    },
-    {
-     "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
-     "owner": "data-engineer + implementer",
-     "due": "2026-12-11",
-     "blocks": true,
-     "item": "D-5gold"
-    },
-    {
-     "gap": "no pooling reaches 4,300 (bound 3,818 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
-     "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
-     "blocks": true,
-     "item": "INFEASIBLE"
-    },
-    {
-     "gap": "judge n_eff 193 < 1,109 at keep 0.33",
-     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
-     "owner": "quant-reviewer + data-engineer",
-     "due": "2026-12-11",
-     "blocks": true,
-     "item": "POWER"
-    }
-   ],
-   "requirement": {
-    "cell": "gold/30m",
-    "unit": "gold",
-    "tf": "30m",
-    "objective": "obj-v1",
-    "inputs": 10,
-    "keep_share": 0.33,
-    "tiers": "r11-v2.1",
-    "label_templates": "T0-T7 (D-4)",
-    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
-   }
-  },
-  {
-   "cell": "gold/1h",
-   "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 1473,
-   "n_eff_judge": 149,
    "need_train": 4300,
    "need_judge": 1109,
    "max_inputs": 3,
@@ -361,8 +282,87 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 2,946 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 3,286 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "INFEASIBLE"
+    },
+    {
+     "gap": "judge n_eff 193 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/30m",
+    "unit": "gold",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   }
+  },
+  {
+   "cell": "gold/1h",
+   "verdict": "SHORT",
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 1067,
+   "n_eff_judge": 149,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 2,
+   "gaps": [
+    {
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "fs-v1 feature store not merged",
+     "plan": "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)",
+     "owner": "data-engineer",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-2"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "no pooling reaches 4,300 (bound 2,134 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
@@ -392,12 +392,12 @@
   {
    "cell": "gold/2h",
    "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 736,
+   "projected": "SHORT",
+   "n_eff_learn": 0,
    "n_eff_judge": 74,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 1,
+   "max_inputs": 0,
    "gaps": [
     {
      "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
@@ -448,12 +448,12 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 1,472 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (1) or no model at this tf (rule-only)",
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
+     "due": "2026-12-16",
      "blocks": true,
-     "item": "INFEASIBLE"
+     "item": "POOL"
     },
     {
      "gap": "judge n_eff 74 < 1,109 at keep 0.33",
@@ -480,7 +480,7 @@
    "cell": "gold/4h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 295,
+   "n_eff_learn": 123,
    "n_eff_judge": 30,
    "need_train": 4300,
    "need_judge": 1109,
@@ -527,7 +527,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 590 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 246 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -558,8 +558,8 @@
   {
    "cell": "gold/1d",
    "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 175,
+   "projected": "SHORT",
+   "n_eff_learn": 0,
    "n_eff_judge": 15,
    "need_train": 4300,
    "need_judge": 1109,
@@ -606,12 +606,12 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 350 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
+     "due": "2026-12-16",
      "blocks": true,
-     "item": "INFEASIBLE"
+     "item": "POOL"
     },
     {
      "gap": "judge n_eff 15 < 1,109 at keep 0.33",
@@ -637,8 +637,8 @@
   {
    "cell": "gold/1w",
    "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 88,
+   "projected": "SHORT",
+   "n_eff_learn": 0,
    "n_eff_judge": 7,
    "need_train": 4300,
    "need_judge": 1109,
@@ -685,12 +685,12 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 176 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
+     "due": "2026-12-16",
      "blocks": true,
-     "item": "INFEASIBLE"
+     "item": "POOL"
     },
     {
      "gap": "judge n_eff 7 < 1,109 at keep 0.33",

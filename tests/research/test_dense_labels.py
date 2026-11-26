@@ -561,3 +561,30 @@ def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
         WN.read_ledger(ledger)
     with pytest.raises(WN.LedgerCorrupt):
         D.booked(ledger, "r", "s")
+
+
+def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
+    """ADR 0085 A4 (recorded 2026-11-26, quant R-b on #472): a store read under the recorded tiers file opens on the
+    learn window without monkeypatching the seal, and a 2018 read without a booked read id is still refused."""
+    rec = "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b"
+    assert rec in D.RECORDED_TIERS_SHA256
+    m15 = _minutes("2015-03-02", 6 * 1440).assign(source="histdata:EURUSD")
+    m18 = _minutes("2018-03-05", 6 * 1440).assign(source="histdata:EURUSD")
+    _, k15 = _store(tmp_path, m15, "15m", 0, "histdata:EURUSD", year=2015)
+    _, k18 = _store(tmp_path, m18, "15m", 0, "histdata:EURUSD", year=2018)
+    months = [str(p) for p in pd.period_range("2014-01", "2018-12", freq="M")]
+    served = F.Tiers(path="tiers_served_r11-v2.1.csv", sha256=rec, r11_id="r11-v2.1-2026-11-25",
+                     table={"EURUSD": dict.fromkeys(months, "A")}, source="histdata")
+    assert D.readable(served)
+    learn = (pd.Timestamp("2010-01-01", tz="UTC"), pd.Timestamp("2018-01-01", tz="UTC"))
+    lab, meta = D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=served, columns=CORE6,
+                              keys={(2015, 0): k15}, window=learn)
+    assert len(lab) and meta["tiers_sha256"] == rec and meta["booked_read"] is None
+    confirm = (pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2025-10-01", tz="UTC"))
+    with pytest.raises(PermissionError, match="booked"):
+        D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2018], tiers=served, columns=CORE6,
+                      keys={(2018, 0): k18}, window=confirm)
+    other = F.Tiers(path="x.csv", sha256="0" * 64, r11_id="r", table=served.table, source="histdata")
+    with pytest.raises(D.SealedStore):                         # any other tiers file stays sealed
+        D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=other, columns=CORE6,
+                      keys={(2015, 0): k15}, window=learn)

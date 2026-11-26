@@ -135,10 +135,13 @@ SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=1
                  floor_tr_mult=1.5, floor_window_min=1_440, sides=(1, -1), judged_head="T2", lookback_bars=100,
                  ctx_lookback_days=140, rho_day=0.25, feature_spec=F.spec_hash())
 
-# Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. Empty: every
-# store is sealed (labels produced, counted outcome-blind, never read). A member must appear in ADR 0085 (test).
-# Candidate: the D-1 served file tiers_served_r11-v2.1.csv, sha256 ff653ea7... (PR #467), not yet recorded.
-RECORDED_TIERS_SHA256: frozenset[str] = frozenset()
+# Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. A member
+# must appear in full on an ADR 0085 recording line (test). Recorded 2026-11-26 (quant R-b on PR #472): the D-1 served
+# file tiers_served_r11-v2.1.csv. It unseals learn-window reads only: confirm and test_old need a booked read id (C-1),
+# and w2-point / h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
+    "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",   # tiers_served_r11-v2.1.csv (D-1, #467)
+})
 RESERVE_FROM = pd.Timestamp("2026-10-01", tz="UTC")     # N12: odd ISO weeks from here never train
 
 ROW_KEYS = ("instrument", "tf", "phase", "group_id", "decision_utc", "available_utc", "window_from_utc", "source",

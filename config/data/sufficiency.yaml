@@ -11,16 +11,19 @@ units:
   gold:
     label: "Gold (Dukascopy XAUUSD; D-1 r11-v2.1 grade: A/A-cons intraday, B too at 1d/1w)"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
-    # learn 1,473 intraday / 1,754 daily days; judge 149 days (2018 only: 2019-2025-09 are C under r11-v2.1, and
-    # r11-v2.2 is VOID, tol 39 bp > 15 bp; item D-1)
-    learn: [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88]
+    # learn: D-5 measured supply (ADR 0085 A4 recorded the served tiers sha 2026-11-26): T2 n_eff after tier survival
+    # for the core-12 level-order prefix (L2, >= the 10-input block), from `measured.learn_T2_core12`; 2h has no bar
+    # rule, so no row exists (0, TF-2h). Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88].
+    # judge: still the card-method count (149 graded days, 2018 only: 2019-2025-09 are C under r11-v2.1; r11-v2.2 is
+    # VOID); the dense factory does not count confirm before a booked read.
+    learn: [5226, 3846, 2707, 1643, 1067, 0, 123, 0, 0]
     judge: [527, 392, 292, 193, 149, 74, 30, 15, 7]
     items: [D-1, D-2, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
     # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
     # ff653ea7) with each column set's input lookback (per-column registry lookbacks, two perturbations, 32 seeds; d1 in daily bars).
-    # Outcome-blind skeleton counts; the label store stays sealed until ADR 0085 A4 records the sha. learn/judge above
-    # stay the D-1 count until then. test_old labels: sealed, counts only.
+    # Outcome-blind skeleton counts; ADR 0085 A4 recorded the sha on 2026-11-26 (learn-window reads only). learn above
+    # is now this measured core-12 row. test_old labels: sealed, counts only.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
