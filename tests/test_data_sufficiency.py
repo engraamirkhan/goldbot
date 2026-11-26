@@ -59,3 +59,37 @@ def test_supply_is_what_the_loader_keeps_b_units_are_daily_only_and_gold_is_grad
     g = cells["gold/15m"]                                  # graded by D-1 (r11-v2.1): measured, no projection label
     assert g.projected == "SHORT" and "D-1" in [x.item for x in g.gaps] and g.n_eff_judge == 292
     assert cells["gold/1m"].verdict == "SHORT"
+
+
+def test_a_zero_row_cell_is_not_started_data_with_no_pool_item() -> None:
+    """Quant A1 on PR #482: learn == 0 (measured) is NOT STARTED (data), gap NO-ROWS, no POOL or INFEASIBLE."""
+    c = _cells()["gold/1d"]
+    items = [g.item for g in c.gaps]
+    assert c.n_eff_learn == 0 and c.projected == "NOT STARTED (data)"
+    assert "NO-ROWS" in items and "POOL" not in items and "INFEASIBLE" not in items
+    g = next(x for x in c.gaps if x.item == "NO-ROWS")
+    assert g.gap == "no usable graded rows under ADR 0104 §4 for the column set"
+    assert g.plan == "D-1 (ii), D-13, D-14; re-assessed at each monthly regrade (card 2.3)"
+
+
+def test_2h_is_not_measurable_and_tf_2h_stays_first() -> None:
+    """Quant A2 on PR #482: gold 2h learn is null (no bar rule), never 0; the TF-2h gap leads."""
+    c = _cells()["gold/2h"]
+    assert c.n_eff_learn is None and c.gaps[0].item == "TF-2h" and c.projected == "SHORT"
+    assert "NO-ROWS" not in [g.item for g in c.gaps]
+
+
+def test_one_method_per_cell_and_gold_is_measured_on_both_sides() -> None:
+    """Quant A3 on PR #482: every unit states its method; a unit whose learn and judge methods differ is refused."""
+    cells = _cells()
+    assert {c.method for c in cells.values()} <= set(D.METHODS)
+    assert cells["gold/15m"].method == "dense-skeleton" and cells["fx10/15m"].method == "card-2.2"
+    base = {"requirement": {"inputs": 10, "keep_share": 0.33, "objective": "obj-v1", "label_templates": "T"},
+            "tfs": ["15m"], "items": {}, "units": {"u": {"learn": [5000], "judge": [2000], "items": []}}}
+    with pytest.raises(ValueError, match="method"):
+        D.certificates(base)                                                     # no method stated
+    base["units"]["u"]["method"] = {"learn": "dense-skeleton", "judge": "card-2.2"}
+    with pytest.raises(ValueError, match="one method per cell"):
+        D.certificates(base)
+    base["units"]["u"]["method"] = {"learn": "dense-skeleton", "judge": "dense-skeleton"}
+    assert D.certificates(base)[0].method == "dense-skeleton"

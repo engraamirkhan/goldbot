@@ -57,6 +57,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -768,28 +769,40 @@ def booked(ledger: Path, read_id: str, frozen_spec_hash: str, windows: Iterable[
     return out
 
 
-def _consumptions(ledger: Path, read_id: str) -> list[dict[str, Any]]:
+def _consumptions(ledger: Path, booked_read: str) -> list[dict[str, Any]]:
     rows = WN.read_ledger(ledger)
-    return [r for r in rows if r.get("type") == "consumption" and r.get("id") == read_id]
+    return [r for r in rows if r.get("type") == "consumption" and r.get("booked_read") == booked_read]
 
 
-def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str,
-            keys: Mapping[str, str]) -> dict[str, Any]:
-    """Quant C-4: every `load_labels` under a booked read appends a consumption row (id, columns, label spec hash,
-    keys, ts). The first consumption fixes the columns (compared as a set: `sorted(columns)`), the spec hash and the
-    keys (one instrument, tf and year set per booked id); a later load under the same id with any of them different
-    raises. Read, check and append run under an exclusive lock with one O_APPEND write and fsync (code review LOW-A),
-    so two concurrent first loads cannot both be first."""
-    row = {"type": "consumption", "id": read_id, "columns": sorted(columns), "label_spec_hash": label_spec_hash,
-           "keys": dict(sorted(keys.items()))}
+PROCEDURE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str, keys: Mapping[str, str],
+            procedure: str, purpose: str, booked_read: str | None = None) -> dict[str, Any]:
+    """Quant L1 on PR #484 (verbatim): "Every label-value read (learn or booked) appends a consumption row to the read
+    ledger: `{type: consumption, id: <procedure>/<instrument>/<tf>/<purpose>, procedure, purpose, columns,
+    label_spec_hash, keys, ts}`. `procedure` is a required argument of `load_labels` (for example `sr-v3`). Only
+    `skeleton` counts write nothing."
+    Quant C-4: under a booked read (`booked_read`, kept on the row) the first consumption fixes the columns (as a set,
+    `sorted(columns)`), the spec hash and the keys (one instrument, tf and year set per booked id); a later load under
+    the same booked id with any of them different raises. Read, check and append run under an exclusive lock with one
+    O_APPEND write and fsync (code review LOW-A), so two concurrent first loads cannot both be first."""
+    if not PROCEDURE.fullmatch(procedure):
+        raise ValueError(f"procedure {procedure!r}: a lower-case name such as 'sr-v3' is required (quant L1)")
+    row: dict[str, Any] = {"type": "consumption", "id": read_id, "procedure": procedure, "purpose": purpose,
+                           "columns": sorted(columns), "label_spec_hash": label_spec_hash,
+                           "keys": dict(sorted(keys.items()))}
+    if booked_read is not None:
+        row["booked_read"] = booked_read
     with WN.locked_ledger(ledger) as fd:
-        prior = _consumptions(ledger, read_id)
-        if prior:
-            first = prior[0]
-            for f in ("columns", "label_spec_hash", "keys"):
-                if (sorted(first.get(f) or []) if f == "columns" else first.get(f)) != row[f]:
-                    raise PermissionError(f"read {read_id!r} was first consumed with other {f}: a booked read is fixed "
-                                          "by its first load (quant C-4)")
+        if booked_read is not None:
+            prior = _consumptions(ledger, booked_read)
+            if prior:
+                first = prior[0]
+                for f in ("columns", "label_spec_hash", "keys"):
+                    if (sorted(first.get(f) or []) if f == "columns" else first.get(f)) != row[f]:
+                        raise PermissionError(f"read {booked_read!r} was first consumed with other {f}: a booked read "
+                                              "is fixed by its first load (quant C-4)")
         WN.append_row(fd, {**row, "ts": pd.Timestamp.now(tz="UTC").isoformat()})
     return row
 
@@ -801,11 +814,11 @@ def _touches(lo: np.ndarray, hi: np.ndarray, spans: Iterable[tuple[pd.Timestamp,
     return hit
 
 
-def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], tiers: F.Tiers | None,
-                columns: Sequence[str] | None, keys: Mapping[tuple[int, int], str],
+def load_labels(cache: Path, *, procedure: str, ledger: Path, instrument: str, tf: str, years: Iterable[int],
+                tiers: F.Tiers | None, columns: Sequence[str] | None, keys: Mapping[tuple[int, int], str],
                 window: tuple[pd.Timestamp, pd.Timestamp], purpose: str = "judge", phases: Sequence[int] = (0,),
                 templates: Sequence[str] | None = None, proxy_source: str | None = None,
-                booked_read: str | None = None, ledger: Path | None = None, frozen_spec_hash: str | None = None,
+                booked_read: str | None = None, frozen_spec_hash: str | None = None,
                 family: str | None = None, allow_test_old: bool = False,
                 spec: LabelSpec = SPEC) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Label rows for a booked read. Refuses: a read without tiers or without `columns` (the served column set, ADR
@@ -832,7 +845,7 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     touched = [w for w, sp in spans_by.items() if _touches(one_lo, one_hi, [sp])[0]]
     book = None
     if touched:
-        if booked_read is None or ledger is None or frozen_spec_hash is None:
+        if booked_read is None or frozen_spec_hash is None:
             raise PermissionError(f"dl-v1 {instrument}: window {lo.date()}..{hi.date()} touches "
                                   f"{[w.value for w in touched]}; a booked read id, its ledger and the frozen spec "
                                   "hash are required (quant C-1)")
@@ -845,8 +858,8 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     if not readable(tiers):
         raise SealedStore(f"dl-v1 {instrument} {tf}: tiers sha256 {tiers.sha256[:12]} is not recorded in ADR 0085 A4 "
                           "(card ruling 5): label values are sealed; counts read `skeleton`")
-    if book is not None and booked_read is not None and ledger is not None:
-        consume(ledger, booked_read, columns=columns, label_spec_hash=spec_hash(spec), keys=key_map)
+    consume(ledger, f"{procedure}/{instrument}/{tf}/{purpose}", columns=columns, label_spec_hash=spec_hash(spec),
+            keys=key_map, procedure=procedure, purpose=purpose, booked_read=booked_read if book is not None else None)
     frames = []
     for st in stems:
         sk = pd.read_parquet(f"{st}.skeleton.parquet")
@@ -859,7 +872,7 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     if purpose == "judge" and (lab["phase"] != 0).any():
         raise ValueError("a judged read holds a phase != 0 row")
     lab = attach_tiers(lab, tiers, columns=columns, proxy_source=proxy_source, spec=spec)
-    meta: dict[str, Any] = {"spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
+    meta: dict[str, Any] = {"procedure": procedure, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
                             "tiers_sha256": tiers.sha256, "r11_id": tiers.r11_id, "tier_proxy": proxy_source,
                             "columns": list(columns), "keys": key_map,
                             "booked_read": booked_read if book is not None else None, "family": family, "rows_read": len(lab),

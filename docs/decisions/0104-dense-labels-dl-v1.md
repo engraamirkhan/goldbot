@@ -132,6 +132,22 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        - `windows.record_read_once` uses the same reader, lock and write.
      - The lock is `fcntl.flock` on POSIX and `msvcrt.locking` on byte 0 on Windows, as `data/store.py` does (LOW-1).
        With neither available, a ledger write raises; it is never done unlocked.
+   - **Every read is ledgered (quant L1 on #484, verbatim):** "Every label-value read (learn or booked) appends a
+     consumption row to the read ledger: `{type: consumption, id: <procedure>/<instrument>/<tf>/<purpose>, procedure,
+     purpose, columns, label_spec_hash, keys, ts}`. `procedure` is a required argument of `load_labels` (for example
+     `sr-v3`). Only `skeleton` counts write nothing." A booked read's row also carries `booked_read`, and C-4 fixes
+     the columns, spec hash and keys per booked id.
+   - **Not a gate read (quant A4 on #482, verbatim):** "`load_labels` sets `meta['gate_eligible'] = False` whenever
+     any returned row has `cost_version == 'w2-point'` or the spec's `h_ref == 'H'`, with `meta['gate_block']` naming
+     why. Any gate or evaluator read refuses `gate_eligible` False." `require_gate_eligible(meta)` is that refusal.
+   - **Bookings (code review MEDIUM-1 on #482).** A booking opens only its own window:
+     - `booked()` needs a ledger row for each judged window the request touches (confirm or test_old), under the
+       frozen spec hash. When the booking carries a family, it must be the caller's `family`.
+     - test_old also needs `allow_test_old` from `windows.allow_test_old_for` (the confirm-seen rule).
+   - **Embargo (MEDIUM-2):** a window touching the 2006-01 embargo is refused, booked or not. Rows whose [decision,
+     horizon end] reach it are dropped and counted (`dropped_embargo`).
+   - **learn_old 2003-05 opens unbooked.** This is intended: W2 counts it as learn, and the A4 recording unseals
+     learn-window reads.
    - It refuses:
      - a read without tiers or without `columns`;
      - a sealed store;
