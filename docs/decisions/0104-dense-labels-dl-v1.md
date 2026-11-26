@@ -104,6 +104,19 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
+   - **Rule R-a (quant ruling on PR #486, 2026-11-26), appended verbatim:** "A column declared close-only in the
+     registry (`CLOSE_ONLY_COLUMNS`) accepts lookback months graded B. Every other column needs A or A-consistent
+     over its lookback. The label window (decision month through horizon end) needs A or A-consistent for barrier
+     templates, and also B for T0 at 1d/1w as before. C, F, P and ungraded months are never usable. A row's usability
+     is the conjunction over its requested columns."
+     - Code: `dense_labels.attach_tiers` checks two spans per row: strict = [decision - the lookback of the columns
+       that are not close-only, horizon end] under the template rule, and close = [decision - the lookback of the
+       close-only columns, decision] at A / A-consistent / B. `tier` reports the worst month read.
+     - Proof (`tests/test_close_only_columns.py`): for every column in `CLOSE_ONLY_COLUMNS`, perturbing open, high,
+       low, spread and tick count of every bar with the closes unchanged leaves the value identical (15m, 4h, 1d);
+       a column that fails cannot be declared close-only, and the check bites on range, spread and volume columns.
+     - R-b (same ruling): "HistData XAUUSD does not lift Dukascopy non-A months (it is their reference; disagreement
+       is not arbitrable under r11-v2.1, and source switching breaks A16). GOLD-TIER proceeds via R-a only."
    - **Sources.** The tiers must grade the rows' own source, `<source>:<instrument>` (quant C3 on #462), unless the
      caller passes a `proxy_source`. The D-1 served file (`tiers_served_r11-v2.1.csv`, sha256 ff653ea7..., PR #467)
      grades dukascopy:XAUUSD and histdata:<FX>.

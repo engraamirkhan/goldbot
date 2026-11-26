@@ -124,6 +124,17 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
 }
 
 
+# ADR 0104 4 rule R-a (quant ruling on PR #486, 2026-11-26): a column that reads only the CLOSE of its lookback bars
+# (and the clock) accepts lookback months graded B; every other column needs A / A-consistent over its lookback.
+# Proved by tests/test_close_only_columns.py: perturbing open, high, low, spread and tick count of every bar with the
+# closes unchanged leaves the column identical; a column that fails cannot be declared here.
+CLOSE_ONLY_COLUMNS: frozenset[str] = frozenset({
+    "bars_since_jump", "bb_z_20", "dow", "er_30", "hour_utc", "jump_z", "min_since_london_open",
+    "min_since_newyork_open", "ret_16", "ret_4", "ret_96", "rsi14", "rv_ratio", "session_id", "tsmom_score",
+    "vol_tercile",
+})
+
+
 # Columns whose declared lookback may go below the signed floor (tests/fixtures/column_lookbacks_floor.json; ADR 0104 4:
 # "Declared lookbacks never shrink without a quant re-review"). Each marker carries the re-review reference ("PR #N" or
 # "ADR NNNN") and the newly signed value per tf of the floor; the declaration must equal it, and a marker none of whose
