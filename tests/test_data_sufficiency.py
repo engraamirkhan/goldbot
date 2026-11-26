@@ -1,6 +1,8 @@
 """Data-sufficiency contract (goldbot/research/data_sufficiency.py): requirements from the sr-v3 card, certificates."""
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from goldbot.research import data_sufficiency as D
@@ -85,12 +87,13 @@ def test_one_method_per_cell_and_gold_is_measured_on_both_sides() -> None:
     cells = _cells()
     assert {c.method for c in cells.values()} <= set(D.METHODS)
     assert cells["gold/15m"].method == "dense-skeleton" and cells["fx10/15m"].method == "card-2.2"
-    base = {"requirement": {"inputs": 10, "keep_share": 0.33, "objective": "obj-v1", "label_templates": "T"},
-            "tfs": ["15m"], "items": {}, "units": {"u": {"learn": [5000], "judge": [2000], "items": []}}}
+    unit: dict[str, Any] = {"learn": [5000], "judge": [2000], "items": []}
+    base: dict[str, Any] = {"requirement": {"inputs": 10, "keep_share": 0.33, "objective": "obj-v1",
+                                            "label_templates": "T"}, "tfs": ["15m"], "items": {}, "units": {"u": unit}}
     with pytest.raises(ValueError, match="method"):
         D.certificates(base)                                                     # no method stated
-    base["units"]["u"]["method"] = {"learn": "dense-skeleton", "judge": "card-2.2"}
+    unit["method"] = {"learn": "dense-skeleton", "judge": "card-2.2"}
     with pytest.raises(ValueError, match="one method per cell"):
         D.certificates(base)
-    base["units"]["u"]["method"] = {"learn": "dense-skeleton", "judge": "dense-skeleton"}
+    unit["method"] = {"learn": "dense-skeleton", "judge": "dense-skeleton"}
     assert D.certificates(base)[0].method == "dense-skeleton"
