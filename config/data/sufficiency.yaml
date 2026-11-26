@@ -11,13 +11,16 @@ units:
   gold:
     label: "Gold (Dukascopy XAUUSD; D-1 r11-v2.1 grade: A/A-cons intraday, B too at 1d/1w)"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
+    method: dense-skeleton          # one method per cell, learn and judge (quant A3 on PR #482)
     # learn: D-5 measured supply (ADR 0085 A4 recorded the served tiers sha 2026-11-26): T2 n_eff after tier survival
-    # for the core-12 level-order prefix (L2, >= the 10-input block), from `measured.learn_T2_core12`; 2h has no bar
-    # rule, so no row exists (0, TF-2h). Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88].
-    # judge: still the card-method count (149 graded days, 2018 only: 2019-2025-09 are C under r11-v2.1; r11-v2.2 is
-    # VOID); the dense factory does not count confirm before a booked read.
-    learn: [5226, 3846, 2707, 1643, 1067, 0, 123, 0, 0]
-    judge: [527, 392, 292, 193, 149, 74, 30, 15, 7]
+    # for the core-12 level-order prefix (L2, >= the 10-input block), from `measured.learn_T2_core12`. 2h is null: no
+    # bar rule (TF-2h), not measurable (quant A2). Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736,
+    # 295, 175, 88].
+    # judge: the same measured skeleton T2 n_eff (core-12, tiers ff653ea7) on the confirm window 2018-01..2025-09
+    # (quant A3: C-1 governs label values, not skeleton counts). null until that count lands; never the card-method
+    # day count, which would mix methods in one cell (was [527, 392, 292, 193, 149, 74, 30, 15, 7]).
+    learn: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+    judge: null
     items: [D-1, D-2, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
     # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
@@ -36,6 +39,7 @@ units:
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
   fx10:
+    method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "FX10 pooled (HistData, A/A-cons)"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
@@ -51,6 +55,7 @@ units:
       EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, null, 422, 35, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:
+    method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"
     tiers_kept: B
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
@@ -59,6 +64,7 @@ units:
     judge: [73, 54, 40, 27, 21, 10, 4, 114, 57]
     items: [D-2, D-3, D-4, D-5fx]
   index_energy_b:
+    method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows)"
     tiers_kept: B
     windows: {learn: "2018-01..2021-12", judge: "2022-01..2025-09"}
@@ -68,6 +74,7 @@ units:
     judge: [0, 0, 0, 0, 0, 0, 0, 121, 60]
     items: [D-2, D-3, D-4, D-5ie]
   independent_new:
+    method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: null
