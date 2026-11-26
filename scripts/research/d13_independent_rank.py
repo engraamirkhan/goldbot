@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from goldbot.data import holdout_guard
 from goldbot.data.holdout_guard import HOLDOUT_START
 
 DATAFEED = "https://datafeed.dukascopy.com/datafeed"
@@ -101,11 +102,11 @@ def route(cls: str, code: str, hd: str | None) -> str:
 
 
 def cap(body: bytes, year: int) -> bytes:
-    """The day records strictly before CUT, re-compressed: a year file never holds a sealed day on disk (L4)."""
+    """The day records outside the sealed holdout, re-compressed: a year file never holds a sealed day on disk (L4)."""
     raw = lzma.decompress(body)
     rec = np.frombuffer(raw[: len(raw) // 24 * 24], dtype=REC)
     day = pd.Timestamp(f"{year}-01-01") + pd.to_timedelta(rec["sec"].astype("int64"), unit="s")
-    keep = np.asarray(day < HOLDOUT_START.tz_localize(None))     # the holdout guard: no sealed day is cached
+    keep = ~holdout_guard.in_holdout(pd.DatetimeIndex(day))     # the holdout guard: no sealed day is cached
     return body if keep.all() else lzma.compress(rec[keep].tobytes(), format=lzma.FORMAT_ALONE)
 
 
@@ -141,7 +142,7 @@ def fetch(code: str, year: int, cache: Path, pause: float) -> bytes | None:
 
 
 def daily_closes(code: str, cache: Path, pause: float) -> tuple[pd.Series, list[int]]:
-    """(weekday closes before CUT, years with no file): a missing year is recorded, never dropped silently (L3)."""
+    """(weekday closes outside the holdout, years with no file): a missing year is recorded, never dropped (L3)."""
     parts, missing = [], []
     for y in YEARS:
         b = fetch(code, y, cache, pause)
@@ -160,7 +161,7 @@ def daily_closes(code: str, cache: Path, pause: float) -> tuple[pd.Series, list[
     s = pd.concat(parts)
     s = s[~s.index.duplicated(keep="last")].sort_index()
     idx = pd.DatetimeIndex(s.index)
-    return s[(idx < HOLDOUT_START.tz_localize(None)) & (idx.dayofweek < 5)], missing
+    return s[~holdout_guard.in_holdout(idx) & (idx.dayofweek < 5)], missing
 
 
 def _corr(a: pd.Series, b: pd.Series, lo: pd.Timestamp, hi: pd.Timestamp
