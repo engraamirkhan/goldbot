@@ -1,22 +1,22 @@
 {
  "card_dated": "2026-11-26",
- "counted_by": "sr-v3 card rev 2 section 2.2 (outcome-blind; gold untiered until D-1)",
+ "counted_by": "sr-v3 card rev 2 section 2.2 (outcome-blind); gold, metals/crosses and index/energy recounted 2026-11-26 from the D-1 served r11-v2.1 tiers (scripts/research/sufficiency_counts.py, tiers sha256 ff653ea7; intraday A/A-cons, B at 1d/1w only)",
  "cells": [
   {
    "cell": "gold/1m",
    "verdict": "SHORT",
-   "projected": "UNMEASURED (D-1)",
-   "n_eff_learn": 7328,
-   "n_eff_judge": 7085,
+   "projected": "SHORT",
+   "n_eff_learn": 5212,
+   "n_eff_judge": 527,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 17,
+   "max_inputs": 12,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -51,6 +51,14 @@
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
+    },
+    {
+     "gap": "judge n_eff 527 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -68,18 +76,18 @@
   {
    "cell": "gold/5m",
    "verdict": "SHORT",
-   "projected": "UNMEASURED (D-1)",
-   "n_eff_learn": 5443,
-   "n_eff_judge": 5263,
+   "projected": "SHORT",
+   "n_eff_learn": 3872,
+   "n_eff_judge": 392,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 12,
+   "max_inputs": 9,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -114,6 +122,22 @@
      "due": "2026-12-11",
      "blocks": true,
      "item": "D-5gold"
+    },
+    {
+     "gap": "learn n_eff 3,872 < 4,300 for a 10-input block (max 9 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,744) and the per-cell input cap to the card",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-16",
+     "blocks": true,
+     "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 392 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -131,18 +155,18 @@
   {
    "cell": "gold/15m",
    "verdict": "SHORT",
-   "projected": "UNMEASURED (D-1)",
-   "n_eff_learn": 4054,
-   "n_eff_judge": 3919,
+   "projected": "SHORT",
+   "n_eff_learn": 2883,
+   "n_eff_judge": 292,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 9,
+   "max_inputs": 6,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -179,12 +203,20 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 4,054 < 4,300 for a 10-input block (max 9 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 8,108) and the per-cell input cap to the card",
+     "gap": "learn n_eff 2,883 < 4,300 for a 10-input block (max 6 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,766) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
      "item": "POOL"
+    },
+    {
+     "gap": "judge n_eff 292 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -202,18 +234,18 @@
   {
    "cell": "gold/30m",
    "verdict": "SHORT",
-   "projected": "UNMEASURED (D-1)",
-   "n_eff_learn": 2683,
-   "n_eff_judge": 2594,
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 1909,
+   "n_eff_judge": 193,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 6,
+   "max_inputs": 4,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -250,12 +282,20 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 2,683 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,366) and the per-cell input cap to the card",
+     "gap": "no pooling reaches 4,300 (bound 3,818 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "POOL"
+     "item": "INFEASIBLE"
+    },
+    {
+     "gap": "judge n_eff 193 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -274,17 +314,17 @@
    "cell": "gold/1h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 2071,
-   "n_eff_judge": 2002,
+   "n_eff_learn": 1473,
+   "n_eff_judge": 149,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 4,
+   "max_inputs": 3,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -321,12 +361,20 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 4,142 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
+     "gap": "no pooling reaches 4,300 (bound 2,946 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
      "item": "INFEASIBLE"
+    },
+    {
+     "gap": "judge n_eff 149 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -345,11 +393,11 @@
    "cell": "gold/2h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 1035,
-   "n_eff_judge": 1001,
+   "n_eff_learn": 736,
+   "n_eff_judge": 74,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 2,
+   "max_inputs": 1,
    "gaps": [
     {
      "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
@@ -360,10 +408,10 @@
      "item": "TF-2h"
     },
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -400,15 +448,15 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 2,070 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
+     "gap": "no pooling reaches 4,300 (bound 1,472 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (1) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 1,001 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 74 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -432,17 +480,17 @@
    "cell": "gold/4h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 414,
-   "n_eff_judge": 400,
+   "n_eff_learn": 295,
+   "n_eff_judge": 30,
    "need_train": 4300,
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -479,7 +527,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 828 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 590 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -487,7 +535,7 @@
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 400 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 30 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -511,17 +559,17 @@
    "cell": "gold/1d",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 207,
-   "n_eff_judge": 200,
+   "n_eff_learn": 175,
+   "n_eff_judge": 15,
    "need_train": 4300,
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -558,7 +606,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 414 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 350 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -566,7 +614,7 @@
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 200 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 15 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -590,17 +638,17 @@
    "cell": "gold/1w",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 104,
-   "n_eff_judge": 100,
+   "n_eff_learn": 88,
+   "n_eff_judge": 7,
    "need_train": 4300,
    "need_judge": 1109,
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered",
-     "plan": "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest",
-     "owner": "data-engineer",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -637,7 +685,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 208 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 176 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -645,7 +693,7 @@
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 100 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 7 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -1291,14 +1339,6 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -1368,14 +1408,6 @@
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
-    },
-    {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
     },
     {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
@@ -1449,14 +1481,6 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -1528,14 +1552,6 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -1605,14 +1621,6 @@
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
-    },
-    {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
     },
     {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
@@ -1694,14 +1702,6 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -1773,14 +1773,6 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-mc"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -1804,12 +1796,12 @@
   {
    "cell": "metals_crosses_b/1d",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 229,
+   "n_eff_judge": 114,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
     {
      "gap": "fs-v1 feature store not merged",
@@ -1844,12 +1836,20 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
+     "gap": "no pooling reaches 4,300 (bound 458 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "COUNT-mc"
+     "item": "INFEASIBLE"
+    },
+    {
+     "gap": "judge n_eff 114 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -1867,12 +1867,12 @@
   {
    "cell": "metals_crosses_b/1w",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": null,
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 115,
+   "n_eff_judge": 57,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
     {
      "gap": "fs-v1 feature store not merged",
@@ -1907,12 +1907,20 @@
      "item": "D-5fx"
     },
     {
-     "gap": "metals/crosses n_eff not counted",
-     "plan": "outcome-blind n_eff count by the card 2.2 method from the r11 tiers",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
+     "gap": "no pooling reaches 4,300 (bound 230 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "COUNT-mc"
+     "item": "INFEASIBLE"
+    },
+    {
+     "gap": "judge n_eff 57 < 1,109 at keep 0.33",
+     "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
+     "owner": "quant-reviewer + data-engineer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "POWER"
     }
    ],
    "requirement": {
@@ -1976,14 +1984,6 @@
      "due": "2026-12-21",
      "blocks": true,
      "item": "D-5ie"
-    },
-    {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
     },
     {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
@@ -2057,14 +2057,6 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -2134,14 +2126,6 @@
      "due": "2026-12-21",
      "blocks": true,
      "item": "D-5ie"
-    },
-    {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
     },
     {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
@@ -2215,14 +2199,6 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -2292,14 +2268,6 @@
      "due": "2026-12-21",
      "blocks": true,
      "item": "D-5ie"
-    },
-    {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
     },
     {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
@@ -2381,14 +2349,6 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -2460,14 +2420,6 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
-     "blocks": true,
-     "item": "COUNT-ie"
-    },
-    {
      "gap": "learn n_eff 0 < 4,300 for a 10-input block (max 0 inputs)",
      "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 0) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
@@ -2491,12 +2443,12 @@
   {
    "cell": "index_energy_b/1d",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 235,
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 117,
+   "n_eff_judge": 121,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
     {
      "gap": "fs-v1 feature store not merged",
@@ -2531,15 +2483,15 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
+     "gap": "no pooling reaches 4,300 (bound 234 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "COUNT-ie"
+     "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 235 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 121 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -2562,12 +2514,12 @@
   {
    "cell": "index_energy_b/1w",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": null,
-   "n_eff_judge": 118,
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 58,
+   "n_eff_judge": 60,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": null,
+   "max_inputs": 0,
    "gaps": [
     {
      "gap": "fs-v1 feature store not merged",
@@ -2602,15 +2554,15 @@
      "item": "D-5ie"
     },
     {
-     "gap": "index/energy learn 2018-2021 (R-L) n_eff not counted",
-     "plan": "outcome-blind count, after the N8 class-window card is frozen",
-     "owner": "data-engineer",
-     "due": "2026-11-28",
+     "gap": "no pooling reaches 4,300 (bound 116 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
      "blocks": true,
-     "item": "COUNT-ie"
+     "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 118 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 60 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -2642,7 +2594,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2697,7 +2649,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2752,7 +2704,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2807,7 +2759,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2862,7 +2814,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2925,7 +2877,7 @@
     },
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -2980,7 +2932,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -3035,7 +2987,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
@@ -3090,7 +3042,7 @@
    "gaps": [
     {
      "gap": "too few independent instruments x days: the binding constraint, not rows",
-     "plan": "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first",
+     "plan": "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first",
      "owner": "data-engineer; quant (references)",
      "due": "2026-12-11",
      "blocks": true,
