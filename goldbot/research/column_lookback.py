@@ -88,20 +88,21 @@ def builder(feature: str) -> Builder:
 
 
 @lru_cache(maxsize=None)
-def _base(feature: str, seed: int, tf: str) -> pd.DataFrame:
-    return builder(feature)(fixture(seed, tf))
+def _base(feature: str, seed: int, tf: str, n: int = N_BARS) -> pd.DataFrame:
+    return builder(feature)(fixture(seed, tf, n))
 
 
-def _scale(feature: str, column: str, seed: int, tf: str) -> float:
-    v = _base(feature, seed, tf)[column].to_numpy(dtype=float)[-SCALE_BARS:]
+def _scale(feature: str, column: str, seed: int, tf: str, n: int = N_BARS) -> float:
+    v = _base(feature, seed, tf, n)[column].to_numpy(dtype=float)[-SCALE_BARS:]
     v = v[np.isfinite(v)]
     return float(np.std(v)) if len(v) else 0.0
 
 
-def change(feature: str, columns: Sequence[str], keep: int, seed: int, tf: str) -> dict[str, float]:
-    """|column(T) perturbed - column(T) base| / (BOUND x scale) per column: < 1 means within the bound."""
-    base = _base(feature, seed, tf)
-    pert = builder(feature)(perturb(fixture(seed, tf), keep, seed))
+def change(feature: str, columns: Sequence[str], keep: int, seed: int, tf: str, n: int = N_BARS) -> dict[str, float]:
+    """|column(T) perturbed - column(T) base| / (BOUND x scale) per column: < 1 means within the bound. `n`: fixture
+    length (default N_BARS; a column whose lookback exceeds it, e.g. a 4h-level column at 1m, needs a longer one)."""
+    base = _base(feature, seed, tf, n)
+    pert = builder(feature)(perturb(fixture(seed, tf, n), keep, seed))
     out = {}
     for c in columns:
         a, b = float(base[c].iloc[-1]), float(pert[c].iloc[-1])
@@ -111,30 +112,31 @@ def change(feature: str, columns: Sequence[str], keep: int, seed: int, tf: str) 
         if np.isnan(a) != np.isnan(b):
             out[c] = np.inf
             continue
-        s = _scale(feature, c, seed, tf)
+        s = _scale(feature, c, seed, tf, n)
         out[c] = abs(a - b) / (BOUND * s) if s > 0 else (0.0 if a == b else np.inf)
     return out
 
 
-def passes(feature: str, column: str, keep: int, tf: str) -> bool:
-    return all(change(feature, [column], keep, s, tf)[column] < 1.0 for s in SEEDS)
+def passes(feature: str, column: str, keep: int, tf: str, n: int = N_BARS) -> bool:
+    return all(change(feature, [column], keep, s, tf, n)[column] < 1.0 for s in SEEDS)
 
 
-def tight(feature: str, column: str, keep: int, tf: str) -> bool:
+def tight(feature: str, column: str, keep: int, tf: str, n: int = N_BARS) -> bool:
     """The bar just inside matters: perturbing every bar older than keep - 1 breaks the bound on some seed."""
-    return keep <= 1 or not passes(feature, column, keep - 1, tf)
+    return keep <= 1 or not passes(feature, column, keep - 1, tf, n)
 
 
-def measure(feature: str, column: str, tf: str, hi: int = N_BARS - 50) -> int:
+def measure(feature: str, column: str, tf: str, hi: int | None = None, n: int = N_BARS) -> int:
     """The smallest L (bars, the current one included) that passes: binary search, monotone by construction."""
-    if passes(feature, column, 1, tf):
+    hi = n - 50 if hi is None else hi
+    if passes(feature, column, 1, tf, n):
         return 1
-    if not passes(feature, column, hi, tf):
+    if not passes(feature, column, hi, tf, n):
         raise ValueError(f"{feature}/{column}: no lookback below {hi} bars passes the 1 % bound")
     lo_, hi_ = 1, hi
     while hi_ - lo_ > 1:
         mid = (lo_ + hi_) // 2
-        if passes(feature, column, mid, tf):
+        if passes(feature, column, mid, tf, n):
             hi_ = mid
         else:
             lo_ = mid
