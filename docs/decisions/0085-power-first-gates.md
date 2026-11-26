@@ -289,3 +289,49 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
 **N26 addition (quant issue 12 on PR #460, 2026-11-26).** "Learning-class demo serving at K 0 is not a go decision,
 provided deployment is unconditional on any Stage L/C outcome (every cell with a merged report and a Stage 0 pass
 deploys)."
+
+## Amendment 2026-11-25 (quant rulings D-12 a-d, on PR #466; written by the ml-researcher)
+
+Status: ruled by the quant-reviewer; written into this ADR and the sr-v3 card (2.3, 9a) by the ml-researcher. Research
+and demo promotion only. The phase gate, live unlock, real-money confirmation and RiskGate are untouched. Inputs:
+`docs/research/rho-measurement-2026-11.md` and `.json` (script `scripts/research/measure_rho.py`).
+
+**(a) Level of rho_inst.** Quant text, verbatim:
+> "ρ_u,inst (and ρ_x,j,inst) is the cross-instrument correlation of instrument-day mean residuals (D-12 'day-mean'),
+> upper 95 % CI, for the body's membership and hold bucket; the per-candidate pair ICC never enters 1+(k−1)ρ_inst."
+
+- Why: with m candidates a day per instrument, corr(day means) = m·ρ_pair / (1 + (m − 1)·ρ_day). With that value,
+  (1 + (m − 1)ρ_day)(1 + (k − 1)ρ_inst) equals the three-level design effect 1 + (m − 1)ρ_day + (k − 1)·m·ρ_pair.
+  The pair value would overstate a pooled n_eff about 4-6 times on FX10.
+- Test: `test_d12_a_rho_inst_is_the_day_mean_correlation_not_the_pair_icc` (m = 89, ρ_pair = 0.0134, ρ_day = 0.01,
+  k = 10: within 5 % of the three-level design effect; the pair value is more than 4x off).
+
+**(b) D-13, admitting a new instrument.** Quant text, verbatim:
+> "admit a new instrument to a hold bucket only if the upper 95 % CI of its day-mean ρ_u,inst vs gold, max over PC1
+> and per-instrument sign orientations, is ≤ 0.2 in that bucket (D-12 method, learn 2010-17, graded A/A-cons rows);
+> existing members (FX10, XAG) stay under R13 pricing, not D-13."
+
+**(c) The validator.** As ruled on #466 (relayed, not verbatim):
+- `research.power_first.rho_day_measurement: str | None`.
+- `rho_day_le_60m < 0.25` is refused unless all of these hold:
+  - the named file exists, with schema `rho_day_measurement/v2` or later;
+  - its `script.sha256` equals the sha256 of the committed script;
+  - its `window` is learn and ends no later than 2018-01-01;
+  - its `candidates` list at least 2 replayed families that are neither sr-v3 nor H-102;
+  - the value is at least the file's binding for every class.
+- rho_day above 60 min keeps its 0.25 floor.
+- The shipped setting stays 0.25 (`config.check_rho_measurement`; tests `test_d12_*` in
+  tests/research/test_power_first.py).
+
+**(d) sr-v3 card 2.3, LAMBDA_INST.** Quant text, verbatim:
+> "τ_a = max(0.01 R, upper 95 % CI over the control grid and ≥2 replayed non-sr-v3/H-102 families, both-sides and
+> long-only variants); λ_a uses the pooled-body row (13,500 / 3,416 / 1,324 until the families run) for any
+> membership, since it is the smallest λ of the memberships considered; frozen by hash before Stage 0."
+
+**Bindings.**
+- Each binding is max(0.05, grid bound, families' bound) for ρ_u,day ≤ 60 min, and the max of the two for the day-mean
+  ρ_u,inst and τ_a.
+- The families are box_break_close (MB15, W2), sweep_absorb (MSA15) and session_range_break (GS1). All are retired
+  arms, outside sr-v3 and H-102.
+- The values are those of the committed JSON. The rev-3 ladder rows that assumed ρ_inst = 0.1 are void, and the
+  ladder is recomputed mechanically at Stage 0.

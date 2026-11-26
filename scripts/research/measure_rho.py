@@ -56,6 +56,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from goldbot.config import RHO_EXCLUDED_ARMS  # noqa: E402
 from goldbot.research import windows as W  # noqa: E402
 
 LEARN_LO, LEARN_HI = W.bounds("learn")          # 2010-01-01 .. 2018-01-01, end exclusive
@@ -110,6 +111,18 @@ GEOMETRIES = tuple(Geometry(b, tf, h, head) for b, tf, h in (
 ) for head in ("T2", "T6"))
 HEADS = {"T2": (1.0, 2.0), "T6": (2.0, None)}
 OUTCOMES = ("long_gross", "long_net", "short_gross", "short_net", "rand_gross", "rand_net")
+FAMILY_OUTCOMES = ("fam_gross", "fam_net", "long_gross", "long_net", "short_gross", "short_net")
+# Replayed families (ADR 0085 Q1 "other families' replayed candidates"; quant ruling on #466): retired arms, none an
+# sr-v3 (self_retrain.PRENAMED) or H-102 (mtf-v1 units) arm, none with a USD stop band (the rule runs on FX prices).
+# Their own exits are not used: each decision is labelled with every hold-bucket geometry below.
+FAMILIES: dict[str, tuple[str, ...]] = {
+    "box_break_close": ("MB15", "W2"),
+    "sweep_absorb": ("MSA15",),
+    "session_range_break": ("GS1",),
+}
+EXCLUDED_ARMS = tuple(sorted(RHO_EXCLUDED_ARMS))           # sr-v3 (self_retrain.PRENAMED) and H-102 units
+if {a_ for arms_ in FAMILIES.values() for a_ in arms_} & RHO_EXCLUDED_ARMS:
+    raise SystemExit("a replayed family uses an sr-v3 / H-102 arm")
 
 
 # ------------------------------------------------------------------------------------------------------------ data
@@ -191,19 +204,15 @@ def atr14(b: pd.DataFrame) -> pd.Series:
     return tr.rolling(14, min_periods=14).mean()
 
 
-def candidates(m: pd.DataFrame, g: Geometry, inst: str) -> pd.DataFrame:
-    b = tf_bars(m, g.tf_min)
-    a = atr14(b)
-    close_t = b.index + pd.Timedelta(minutes=g.tf_min)
-    # every hold_bars-th tf bar of each session day, counted from the day's first bar (non-overlapping in a day)
-    rank = pd.Series(np.arange(len(close_t))).groupby(session_day(pd.DatetimeIndex(close_t))).cumcount().to_numpy()
-    keep = (rank % g.hold_bars == 0) & np.isfinite(a.to_numpy())
-    dec, atr = close_t[keep], a.to_numpy()[keep]
+def label(m: pd.DataFrame, g: Geometry, inst: str, dec: pd.DatetimeIndex, atr: np.ndarray) -> pd.DataFrame:
+    """Both sides of the geometry-`g` bracket at each decision `dec` (a minute boundary), entry at the next minute's
+    open, barriers on 1m bars, stop first on a shared minute; gross and net R. Rows whose hold is short of
+    MIN_COVERAGE minutes or ends at or after LEARN_HI are dropped."""
     k_stop, tgt = HEADS[g.head]
     stop_d = k_stop * atr * np.sqrt(g.hold_bars / 1.0)
     i0 = ((dec - m.index[0]) // pd.Timedelta(minutes=1)).to_numpy().astype(np.int64)
     L = g.hold_min
-    ok = (i0 + L <= len(m)) & (dec + pd.Timedelta(minutes=L) <= LEARN_HI) & (stop_d > 0)
+    ok = (i0 >= 0) & (i0 + L <= len(m)) & np.asarray(dec + pd.Timedelta(minutes=L) <= LEARN_HI) & (stop_d > 0)
     i0, dec, stop_d = i0[ok], dec[ok], stop_d[ok]
     if not len(i0):
         return pd.DataFrame()
@@ -230,13 +239,70 @@ def candidates(m: pd.DataFrame, g: Geometry, inst: str) -> pd.DataFrame:
         r = np.where(stopped, -1.0, np.where(targeted, float(tgt or 0.0), side * (last - entry) / stop_d))
         cost = (rt * 1e-4 * entry + ov * 1e-4 * entry * stopped) / stop_d
         out[side] = (r, r - cost)
-    rs = np.random.default_rng([SEED, sum(map(ord, inst)), g.tf_min, g.hold_bars, len(g.head)]).choice([1, -1], len(entry))
-    return pd.DataFrame({
-        "day": session_day(dec),
-        "long_gross": out[1][0], "long_net": out[1][1], "short_gross": out[-1][0], "short_net": out[-1][1],
-        "rand_gross": np.where(rs == 1, out[1][0], out[-1][0]), "rand_net": np.where(rs == 1, out[1][1], out[-1][1]),
-        "both_gross": (out[1][0] + out[-1][0]) / 2,
-    })
+    return pd.DataFrame({"decision": dec, "day": session_day(pd.DatetimeIndex(dec)),
+                         "long_gross": out[1][0], "long_net": out[1][1], "short_gross": out[-1][0],
+                         "short_net": out[-1][1], "both_gross": (out[1][0] + out[-1][0]) / 2})
+
+
+def candidates(m: pd.DataFrame, g: Geometry, inst: str) -> pd.DataFrame:
+    """The control grid: every hold_bars-th tf bar of each session day, counted from the day's first bar (so the day's
+    candidates never overlap), labelled with `label`; plus a seeded random side."""
+    b = tf_bars(m, g.tf_min)
+    a = atr14(b)
+    close_t = b.index + pd.Timedelta(minutes=g.tf_min)
+    rank = pd.Series(np.arange(len(close_t))).groupby(session_day(pd.DatetimeIndex(close_t))).cumcount().to_numpy()
+    keep = (rank % g.hold_bars == 0) & np.isfinite(a.to_numpy())
+    c = label(m, g, inst, pd.DatetimeIndex(close_t[keep]), a.to_numpy()[keep])
+    if c.empty:
+        return c
+    rs = np.random.default_rng([SEED, sum(map(ord, inst)), g.tf_min, g.hold_bars, len(g.head)]).choice([1, -1], len(c))
+    c["rand_gross"] = np.where(rs == 1, c["long_gross"], c["short_gross"])
+    c["rand_net"] = np.where(rs == 1, c["long_net"], c["short_net"])
+    return c
+
+
+def family_decisions(b: pd.DataFrame, blackout: tuple[np.ndarray, np.ndarray]) -> dict[str, pd.DataFrame]:
+    """Outcome-blind candidates (decision, side) of each replayed family on `b`, through the established replay
+    (`history_replay._horizons`: the arm's rule, its window, the common filters and its stop band, every candidate
+    taken or not). Same-minute duplicates within a family keep the first."""
+    from goldbot.research import history_replay as H
+    out: dict[str, pd.DataFrame] = {}
+    for fam, arm_ids in FAMILIES.items():
+        parts = []
+        for aid in arm_ids:
+            c = H._horizons(H.load_arm(aid), b, blackout)
+            parts.append(pd.DataFrame({"decision": pd.DatetimeIndex(c["decision_utc"]).tz_convert("UTC").as_unit("ns"),
+                                       "side": c["side"].to_numpy(float), "arm": aid}))
+        f = pd.concat(parts, ignore_index=True).sort_values(["decision", "arm"], kind="stable")
+        out[fam] = f.drop_duplicates("decision").reset_index(drop=True)
+    return out
+
+
+def family_candidates(m: pd.DataFrame, g: Geometry, inst: str, fam: pd.DataFrame) -> pd.DataFrame:
+    """A family's decisions labelled with geometry `g` (ATR14 of the last g-tf bar closed at the decision), thinned
+    greedily to non-overlapping holds in time; `fam_*` = the family's own side."""
+    b = tf_bars(m, g.tf_min)
+    a = atr14(b).to_numpy()
+    from goldbot.data.timeutil import epoch_ns
+    close_t = pd.DatetimeIndex(b.index + pd.Timedelta(minutes=g.tf_min))
+    dec = pd.DatetimeIndex(fam["decision"])
+    pos = np.searchsorted(epoch_ns(close_t), epoch_ns(dec), side="right") - 1
+    ok = (pos >= 0) & np.isfinite(a[np.maximum(pos, 0)])
+    dec, side, pos = dec[ok], fam["side"].to_numpy(float)[ok], pos[ok]
+    keep, last = [], None
+    hold = pd.Timedelta(minutes=g.hold_min)
+    for i, t in enumerate(dec):
+        if last is None or t >= last + hold:
+            keep.append(i)
+            last = t
+    k = np.asarray(keep, dtype=int)
+    c = label(m, g, inst, dec[k], a[pos[k]])
+    if c.empty:
+        return c
+    sd = pd.Series(side[k], index=dec[k]).reindex(pd.DatetimeIndex(c["decision"])).to_numpy(float)
+    c["fam_gross"] = np.where(sd > 0, c["long_gross"], c["short_gross"])
+    c["fam_net"] = np.where(sd > 0, c["long_net"], c["short_net"])
+    return c
 
 
 # ------------------------------------------------------------------------------------------------------------ features
@@ -277,6 +343,20 @@ def work(args: tuple[str, str]) -> tuple[str, dict[tuple[str, ...], pd.DataFrame
         day = c["day"].to_numpy()
         for col in (*OUTCOMES, "both_gross"):
             series[("out", g.name, col)] = cells(day, c[col].to_numpy(float))
+    from goldbot.research import history_replay as H
+    fams = family_decisions(b, H.load_blackout(raw / "calendar"))
+    fams["all"] = (pd.concat(list(fams.values()), ignore_index=True).sort_values("decision", kind="stable")
+                   .drop_duplicates("decision").reset_index(drop=True))
+    for fam, fd in fams.items():
+        ncand[f"family {fam} decisions"] = int(len(fd))
+        for g in GEOMETRIES:
+            c = family_candidates(m, g, inst, fd)
+            ncand[f"family {fam} {g.name}"] = int(len(c))
+            if c.empty:
+                continue
+            day = c["day"].to_numpy()
+            for col in (*FAMILY_OUTCOMES, "both_gross"):
+                series[(f"fam-{fam}", g.name, col)] = cells(day, c[col].to_numpy(float))
     for tf in FEATURE_TFS:
         f = features(b, tf)
         dec = pd.DatetimeIndex(f["decision"])
@@ -420,12 +500,19 @@ def main() -> None:
         if GOLD in sign and sign[GOLD] < 0:
             sign = {k: -s for k, s in sign.items()}
         pc1[cls] = sign
+    # per-instrument sign (D-13 ruling (b)): each member signed by its learn daily-return correlation with gold
+    gsign: dict[str, dict[str, int]] = {}
+    for cls, members in CLASSES.items():
+        if GOLD in members and len(members) > 1:
+            x = rets[list(members)].dropna()
+            gsign[cls] = {m_: (1 if m_ == GOLD else int(np.sign(float(x[m_].corr(x[GOLD]))) or 1)) for m_ in members}
 
     jobs = []
     seed = SEED
     for key, parts in per.items():
         full = pd.concat(parts, ignore_index=True)
-        directional = (key[0] == "feat" and key[3] in DIRECTIONAL) or (key[0] == "out" and key[2] != "both_gross")
+        directional = ((key[0] == "feat" and key[3] in DIRECTIONAL)
+                       or (key[0] != "feat" and key[2] != "both_gross"))
         for cls, members in CLASSES.items():
             tab = full[full["inst"].isin(members)]
             if tab.empty or tab["day"].nunique() < 20:
@@ -434,6 +521,8 @@ def main() -> None:
             orients: list[tuple[str, dict[str, int] | None]] = [("raw", None)]
             if directional and cls in pc1:
                 orients.append(("pc1", pc1[cls]))
+            if directional and cls in gsign and gsign[cls] != pc1.get(cls):
+                orients.append(("goldsign", gsign[cls]))
             for oname, osign in orients:
                 t = tab
                 if osign is not None:
@@ -449,9 +538,10 @@ def main() -> None:
         kind, *rest = jkey.split("|")
         row: dict[str, Any] = {"kind": kind, "class": cls, "key": jkey, **{rk: rv for rk, rv in r.items()
                                                                            if not isinstance(rv, dict)}}
-        if kind == "out":
+        if kind != "feat":
             geom, col, orient = rest
-            row.update(geometry=geom, outcome=col, orientation=orient,
+            row.update(source="grid" if kind == "out" else kind.removeprefix("fam-"),
+                       geometry=geom, outcome=col, orientation=orient,
                        band=next(g.band for g in GEOMETRIES if g.name == geom),
                        head=geom.split()[-1])
         else:
@@ -475,26 +565,64 @@ def main() -> None:
                                                             float(t[f"{stat}.point"].max())],
                 "days": [int(t["days"].min()), int(t["days"].max())], "variants": int(len(t))}
 
-    o = tab[(tab["kind"] == "out") & (tab["outcome"] != "both_gross")]
-    rho_u_day, rho_u_inst, rho_u_inst_vs_gold, tau_a = {}, {}, {}, {}
-    for band in ("le60m", "1h-4h", "gt4h"):
-        for cls in CLASSES:
-            t = o[(o["band"] == band) & (o["class"] == cls)]
-            w = worst(t, "within_day")
-            if w["upper95"] is not None and band == "le60m":
-                w["rho_value"] = max(0.05, w["upper95"])
-            rho_u_day[f"{cls}|{band}"] = w
-            if cls != "gold":
-                rho_u_inst[f"{cls}|{band}"] = {"agg": worst(t, "cross_agg"), "pair": worst(t, "cross_pair")}
-            if cls in VS_GOLD:
-                rho_u_inst_vs_gold[f"{cls}|{band}"] = {"agg": worst(t, "vs_gold_agg"), "pair": worst(t, "vs_gold_pair")}
-            tt = tab[(tab["kind"] == "out") & (tab["band"] == band) & (tab["class"] == cls) & (tab["head"] == "T2")
-                     & tab["outcome"].isin(["both_gross", "long_gross"]) & (tab["orientation"] == "raw")]
-            if cls != "gold" and len(tt):
-                w = worst(tt, "between_inst_sd")
-                w["tau_a"] = max(0.01, w["upper95"]) if w["upper95"] is not None else None
-                w["lambda_a"] = 1.35 / w["tau_a"] ** 2 if w.get("tau_a") else None
-                tau_a[f"{cls}|{band}"] = w
+    def summarise(src: pd.DataFrame) -> dict[str, dict[str, Any]]:
+        """rho_u,day, rho_u,inst (day-mean and pair), vs gold, and the between-instrument SD of mean gross T2 R, per
+        (class, hold bucket): each the largest upper 95 % bound over the variants in `src`."""
+        o = src[src["outcome"] != "both_gross"]
+        res: dict[str, dict[str, Any]] = {"rho_u_day": {}, "rho_u_inst": {}, "rho_u_inst_vs_gold": {}, "tau_sd": {}}
+        for band in ("le60m", "1h-4h", "gt4h"):
+            for cls in CLASSES:
+                t = o[(o["band"] == band) & (o["class"] == cls)]
+                k = f"{cls}|{band}"
+                res["rho_u_day"][k] = worst(t, "within_day")
+                if cls != "gold":
+                    res["rho_u_inst"][k] = {"agg": worst(t, "cross_agg"), "pair": worst(t, "cross_pair")}
+                if cls in VS_GOLD:
+                    res["rho_u_inst_vs_gold"][k] = {"agg": worst(t, "vs_gold_agg"), "pair": worst(t, "vs_gold_pair")}
+                tt = src[(src["band"] == band) & (src["class"] == cls) & (src["head"] == "T2")
+                         & src["outcome"].isin(["both_gross", "long_gross"]) & (src["orientation"] == "raw")]
+                if cls != "gold" and len(tt):
+                    res["tau_sd"][k] = worst(tt, "between_inst_sd")
+        return res
+
+    def up(w: dict[str, Any] | None) -> float | None:
+        return None if not w else w.get("upper95")
+
+    def mx(*vals: float | None) -> float | None:
+        v = [x for x in vals if x is not None and np.isfinite(x)]
+        return max(v) if v else None
+
+    out_tab = tab[tab["kind"] != "feat"]
+    by_source = {"grid": summarise(out_tab[out_tab["source"] == "grid"]),
+                 "families": summarise(out_tab[out_tab["source"] != "grid"])}
+    for fam in (*FAMILIES, "all"):
+        by_source[f"family:{fam}"] = summarise(out_tab[out_tab["source"] == fam])
+    binding: dict[str, dict[str, Any]] = {"rho_u_day": {}, "rho_u_inst_day_mean": {},
+                                          "rho_u_inst_vs_gold_day_mean": {}, "tau_a": {}}
+    grid_s, fam_s, pool_s = by_source["grid"], by_source["families"], by_source["family:all"]
+
+    def cap(v: float | None) -> float | None:          # a correlation bound above 1 is sampling noise: capped
+        return None if v is None else min(1.0, v)
+
+    for bk in grid_s["rho_u_day"]:
+        g_, f_ = up(grid_s["rho_u_day"][bk]), up(fam_s["rho_u_day"].get(bk))
+        e: dict[str, Any] = {"grid": g_, "families": f_, "families_pooled": up(pool_s["rho_u_day"].get(bk)),
+                             "max": cap(mx(g_, f_))}
+        if bk.endswith("|le60m"):
+            e["rho_value"] = max(0.05, e["max"]) if e["max"] is not None else None
+        binding["rho_u_day"][bk] = e
+    for name, src_key in (("rho_u_inst_day_mean", "rho_u_inst"), ("rho_u_inst_vs_gold_day_mean", "rho_u_inst_vs_gold")):
+        for bk, w in grid_s[src_key].items():
+            g_, f_ = up(w["agg"]), up(fam_s[src_key].get(bk, {}).get("agg"))
+            binding[name][bk] = {"grid": g_, "families": f_,
+                                 "families_pooled": up(pool_s[src_key].get(bk, {}).get("agg")), "max": cap(mx(g_, f_))}
+    for bk, w in grid_s["tau_sd"].items():
+        g_, f_ = up(w), up(fam_s["tau_sd"].get(bk))
+        m_ = mx(g_, f_)
+        tau = max(0.01, m_) if m_ is not None else None
+        binding["tau_a"][bk] = {"grid": g_, "families": f_, "families_pooled": up(pool_s["tau_sd"].get(bk)), "tau_a": tau,
+                               "lambda_a": 1.35 / tau ** 2 if tau else None}
+    rho_u_day = {k: v for k, v in binding["rho_u_day"].items()}
     f = tab[tab["kind"] == "feat"]
     rho_x: dict[str, Any] = {}
     for keys, t in f.groupby(["fold", "tf", "class", "column"], sort=True):
@@ -516,7 +644,23 @@ def main() -> None:
         "window": {"name": "learn", "from": str(LEARN_LO), "to_exclusive": str(LEARN_HI),
                    "feature_folds": {k: [str(v[0]), str(v[1])] for k, v in FOLDS.items()}},
         "never_read": ["test_old 2006-02..2009-12", "confirm 2018-01..2025-09", "holdout 2025-10-01 onward"],
-        "candidates": "control grid (no family, no rule; non-overlapping within a day; same times on every instrument)",
+        "candidates": [
+            {"kind": "control", "name": "control_grid",
+             "how": "every hold_bars-th tf bar of each NY-17:00 session day; same times on every instrument"},
+            *({"kind": "family", "name": fam, "arms": list(arms), "replay": "goldbot/research/history_replay.py _horizons",
+               "labelled_with": "the hold-bucket geometries below (the family's own exits are not used); "
+                                "greedy non-overlap per instrument"}
+              for fam, arms in FAMILIES.items()),
+        ],
+        "excluded_arms": list(EXCLUDED_ARMS),
+        "stated_deviations": [
+            "stop floor 1.5 x session-median true range (sr-v3 template rule) not applied; stop = k x ATR14_tf x "
+            "sqrt(hold_bars)",
+            "HistData has no volume: VWAP-based columns are equal-weight on FX and XAG",
+            "XAG and FX bps costs are assumptions (gold: W2 cost of record)",
+            "2h has no feature rho_x (not a repo timeframe on main)",
+        ],
+        "geometries": [g.name for g in GEOMETRIES],
         "bootstrap": {"block": "ISO week of the NY-17:00 session day, all instruments jointly", "B": a.boot,
                       "upper": "97.5th percentile", "seed": SEED},
         "script": {"path": str(script.relative_to(ROOT)), "sha256": sha256_file(script), "git_blob": git_blob(script),
@@ -529,11 +673,10 @@ def main() -> None:
         "not_measurable": {"index": "no A/A-consistent learn month (r11-v2.1)", "energy": "XTIUSD 3 A months",
                            "crosses": "EURAUD, EURGBP, GBPAUD: tier B/C only", "XAUEUR": "tier B only"},
         "pc1_orientation": pc1,
+        "gold_sign_orientation": gsign,
         "rho_x": rho_x,
-        "rho_u_day": rho_u_day,
-        "rho_u_inst": rho_u_inst,
-        "rho_u_inst_vs_gold": rho_u_inst_vs_gold,
-        "tau_a": tau_a,
+        "binding": binding,
+        "by_source": by_source,
         "rho_day_le_60m": {cls: rho_u_day[f"{cls}|le60m"].get("rho_value") for cls in CLASSES},
     }
     a.out.mkdir(parents=True, exist_ok=True)
@@ -543,7 +686,8 @@ def main() -> None:
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         gz.write(tab.sort_values("key").to_csv(index=False, float_format="%.6g").encode())
     cells_path.write_bytes(buf.getvalue())
-    out["cells_file"] = {"path": str(cells_path.relative_to(ROOT)), "sha256": sha256_file(cells_path),
+    rel = cells_path.relative_to(ROOT) if cells_path.is_relative_to(ROOT) else cells_path
+    out["cells_file"] = {"path": str(rel), "sha256": sha256_file(cells_path),
                          "rows": int(len(tab))}
     (a.out / "rho-measurement-2026-11.json").write_text(json.dumps(rounded(out), indent=1, default=str) + "\n")
     print(json.dumps({k: out[k] for k in ("rho_day_le_60m",)}, indent=1))

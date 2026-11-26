@@ -289,9 +289,11 @@ def test_a_label_must_end_after_it_starts():
 
 
 # ------------------------------------------------------------------- rho_day per horizon (quant Q1, 2026-11-25)
-def test_q1_rho_day_for_horizons_up_to_60_minutes_may_go_down_to_0_05_longer_keep_the_0_25_floor():
-    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05}).rho_day_le_60m == 0.05
-    for bad in ({"rho_day_le_60m": 0.04}, {"rho_day": 0.2}):
+def test_q1_rho_day_for_horizons_up_to_60_minutes_may_go_down_to_0_05_longer_keep_the_0_25_floor(tmp_path):
+    ok = rho_file(tmp_path)
+    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05,
+                                              "rho_day_measurement": str(ok)}).rho_day_le_60m == 0.05
+    for bad in ({"rho_day_le_60m": 0.04, "rho_day_measurement": str(ok)}, {"rho_day": 0.2}):
         with pytest.raises(ValidationError):
             PowerFirstSettings.model_validate(bad)
     assert PF.rho_day_le_60m == PF.rho_day == 0.25          # shipped: the prior until the Q1 measurement lands
@@ -419,3 +421,92 @@ def test_a_registry_merge_keeps_a_not_started_row_without_a_trial_number(tmp_pat
     P.start_or_refuse(reg, card(instruments=METALS10), SETTINGS, agent_id="rd")
     merged = merge_rows(reg._rows())
     assert [r["trial"] for r in merged if r["status"] == P.NOT_STARTED_POWER] == [None]
+
+
+# ------------------------------------------------------------- D-12 measurement file (quant ruling (c) on #466)
+MEASURE_SCRIPT = "scripts/research/measure_rho.py"
+
+
+def rho_file(tmp_path, **over):
+    """A valid D-12 measurement file (two replayed non-sr-v3/H-102 families, learn window, the committed script's
+    sha256, binding 0.05), with `over` replacing top-level keys."""
+    import hashlib
+    import json
+
+    from goldbot.config import ROOT
+    d = {"schema": "rho_day_measurement/v2",
+         "window": {"name": "learn", "from": "2010-01-01 00:00:00+00:00", "to_exclusive": "2018-01-01 00:00:00+00:00"},
+         "script": {"path": MEASURE_SCRIPT, "sha256": hashlib.sha256((ROOT / MEASURE_SCRIPT).read_bytes()).hexdigest()},
+         "candidates": [{"kind": "control", "name": "control_grid"},
+                        {"kind": "family", "name": "box_break_close", "arms": ["MB15", "W2"]},
+                        {"kind": "family", "name": "sweep_absorb", "arms": ["MSA15"]}],
+         "rho_day_le_60m": {"gold": 0.05, "fx10": 0.05}} | over
+    f = tmp_path / "rho.json"
+    f.write_text(json.dumps(d))
+    return f
+
+
+def _refused(value, path, match):
+    with pytest.raises(ValidationError, match=match):
+        PowerFirstSettings.model_validate({"rho_day_le_60m": value, "rho_day_measurement": path})
+
+
+def test_d12_a_valid_measurement_file_admits_rho_day_le_60m_at_0_05(tmp_path):
+    pf = PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05, "rho_day_measurement": str(rho_file(tmp_path))})
+    assert pf.rho_day_for(60 / 1440) == 0.05 and pf.rho_day_for(61 / 1440) == 0.25    # > 60 min keeps 0.25
+
+
+def test_d12_refused_without_a_file_or_with_a_missing_one(tmp_path):
+    with pytest.raises(ValidationError, match="needs rho_day_measurement"):
+        PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05})
+    _refused(0.05, str(tmp_path / "nope.json"), "does not exist")
+
+
+def test_d12_refused_when_the_script_sha_is_not_the_committed_scripts(tmp_path):
+    _refused(0.05, str(rho_file(tmp_path, script={"path": MEASURE_SCRIPT, "sha256": "0" * 64})), "sha256")
+
+
+def test_d12_refused_for_a_control_grid_only_file_or_one_with_judged_families(tmp_path):
+    grid = [{"kind": "control", "name": "control_grid"}]
+    _refused(0.05, str(rho_file(tmp_path, candidates=grid)), ">= 2 replayed families")
+    judged = grid + [{"kind": "family", "name": "box_break_close", "arms": ["MB1H"]},      # an H-102 arm
+                     {"kind": "family", "name": "sr-v3", "arms": []},
+                     {"kind": "family", "name": "sweep_absorb", "arms": ["MSA15"]}]
+    _refused(0.05, str(rho_file(tmp_path, candidates=judged)), ">= 2 replayed families")
+
+
+def test_d12_refused_below_the_files_binding_for_any_class(tmp_path):
+    f = rho_file(tmp_path, rho_day_le_60m={"gold": 0.05, "fx10": 0.08})
+    _refused(0.05, str(f), "below the measured binding")
+    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.08, "rho_day_measurement": str(f)})
+
+
+def test_d12_refused_for_an_old_schema_or_a_window_past_learn(tmp_path):
+    _refused(0.05, str(rho_file(tmp_path, schema="rho_day_measurement/v1")), "v2 or later")
+    late = {"name": "learn", "to_exclusive": "2018-02-01 00:00:00+00:00"}
+    _refused(0.05, str(rho_file(tmp_path, window=late)), "learn ending")
+    _refused(0.05, str(rho_file(tmp_path, window={"name": "confirm", "to_exclusive": "2018-01-01"})), "learn ending")
+
+
+def test_d12_the_shipped_setting_stays_the_prior():
+    assert PF.rho_day_le_60m == 0.25 and PF.rho_day_measurement is None
+
+
+def test_d12_excluded_arms_cover_the_sr_v3_prenamed_arms():
+    from goldbot.config import RHO_EXCLUDED_ARMS
+    from goldbot.research.self_retrain import PRENAMED
+    assert set(PRENAMED) <= RHO_EXCLUDED_ARMS
+
+
+def test_d12_a_rho_inst_is_the_day_mean_correlation_not_the_pair_icc():
+    """Ruling (a): with m = 89 candidates a day, rho_pair 0.0134, rho_day 0.01 and k = 10 instruments, the pooled n_eff
+    from the day-mean rho_inst is within 5 % of the three-level design effect
+    1 + (m - 1) rho_day + (k - 1) m rho_pair; the pair ICC in 1 + (k - 1) rho_inst overstates n_eff about 4x."""
+    m, rho_pair, rho_day, k, days = 89, 0.0134, 0.01, 10, 2_000
+    n = m * k * days
+    three_level = 1 + (m - 1) * rho_day + (k - 1) * m * rho_pair
+    day_mean = m * rho_pair / (1 + (m - 1) * rho_day)        # corr of two instruments' day-mean residuals
+    n_eff = n / P.design_effect(m, rho_day, k, day_mean, concurrency=1.0)
+    assert n_eff == pytest.approx(n / three_level, rel=0.05)
+    n_eff_pair = n / P.design_effect(m, rho_day, k, rho_pair, concurrency=1.0)
+    assert n_eff_pair > 4 * n / three_level

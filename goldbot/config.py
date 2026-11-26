@@ -653,6 +653,67 @@ class ArmLifecycleSettings(_Section):
     enabled: bool = True
 
 
+RHO_DAY_PRIOR = 0.25
+RHO_SCHEMA = "rho_day_measurement/v"
+RHO_LEARN_END = "2018-01-01"
+# the judged arms a rho measurement may never be taken from (ADR 0085 Q1 "never from the card's own arms"): sr-v3's
+# rev-1 signals (self_retrain.PRENAMED) and H-102's units (prereg-2026-11-25-multi-tf-learning.md)
+RHO_EXCLUDED_FAMILIES = frozenset({"sr-v3", "sr_v3", "H-102", "mtf-v1", "self_retrain", "model_zoo"})
+RHO_EXCLUDED_ARMS = frozenset({"RBR15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B", "F1A", "Z2P", "Z5P",
+                               "F1A30", "G1A", "PDC1", "MB1H", "ML2H", "MP2H", "DON4", "PDC4", "KSQ4", "BXF4H"})
+
+
+def check_rho_measurement(path: str | None, value: float) -> None:
+    """ValueError unless `path` names a D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25, quant
+    ruling (c) on #466): the file exists; schema rho_day_measurement/v2 or later; its `script.sha256` is the sha256 of
+    that script as committed in this repo; its window is learn and ends no later than 2018-01-01; its `candidates`
+    name at least two replayed families that are neither sr-v3 nor H-102; and `value` is at least the file's
+    rho_day_le_60m binding for every class."""
+    import hashlib
+    import json
+    from datetime import datetime
+
+    if not path:
+        raise ValueError(f"rho_day_le_60m {value} < {RHO_DAY_PRIOR} needs rho_day_measurement naming the committed "
+                         "D-12 file (ADR 0085 Q1)")
+    f = Path(path) if Path(path).is_absolute() else ROOT / path
+    if not f.is_file():
+        raise ValueError(f"rho_day_measurement {path!r} does not exist")
+    d = json.loads(f.read_text())
+    schema = str(d.get("schema", ""))
+    try:
+        version = int(schema.removeprefix(RHO_SCHEMA)) if schema.startswith(RHO_SCHEMA) else 0
+    except ValueError:
+        version = 0
+    if version < 2:
+        raise ValueError(f"rho_day_measurement schema {schema!r}: rho_day_measurement/v2 or later is required")
+    script = d.get("script") or {}
+    sp = ROOT / str(script.get("path", ""))
+    if not script.get("path") or not sp.is_file():
+        raise ValueError(f"rho_day_measurement script {script.get('path')!r} is not in the repo")
+    if hashlib.sha256(sp.read_bytes()).hexdigest() != script.get("sha256"):
+        raise ValueError(f"rho_day_measurement script sha256 differs from the committed {script.get('path')}")
+    w = d.get("window") or {}
+    try:
+        end = datetime.fromisoformat(str(w.get("to_exclusive")).replace("Z", "+00:00")).date()
+    except ValueError:
+        raise ValueError("rho_day_measurement window has no readable to_exclusive") from None
+    if w.get("name") != "learn" or end > date.fromisoformat(RHO_LEARN_END):
+        raise ValueError(f"rho_day_measurement window must be learn ending <= {RHO_LEARN_END}, got {w}")
+    fams = [c for c in d.get("candidates") or [] if isinstance(c, dict) and c.get("kind") == "family"
+            and str(c.get("name")) not in RHO_EXCLUDED_FAMILIES
+            and not (set(map(str, c.get("arms") or [])) & RHO_EXCLUDED_ARMS)]
+    if len(fams) < 2:
+        raise ValueError("rho_day_measurement needs >= 2 replayed families that are neither sr-v3 nor H-102 "
+                         f"(found {len(fams)}); a control-grid-only file does not qualify")
+    bound = d.get("rho_day_le_60m") or {}
+    vals = [float(v) for v in bound.values() if v is not None]
+    if not vals:
+        raise ValueError("rho_day_measurement carries no rho_day_le_60m binding")
+    if value < max(vals) - 1e-12:
+        raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals)} ({path})")
+
+
 class PowerFirstSettings(_Section):
     """ADR 0085 power-first rule (goldbot/research/power_first.py), research and demo promotion only, as re-ruled by the
     quant-reviewer on 2026-11-15: "Start only if every power_g >= 0.5, simulated joint power >= 0.25, and n_eff >=
@@ -676,6 +737,9 @@ class PowerFirstSettings(_Section):
     # 95 % CI of the day-clustered ICC), floor 0.05; longer labels keep rho_day, floor 0.25
     rho_day: float = Field(0.25, ge=0.25, le=1)
     rho_day_le_60m: float = Field(0.25, ge=0.05, le=1)
+    # ADR 0085 Q1 / D-12 ruling (c): rho_day_le_60m below 0.25 stands only on a committed measurement file
+    # (`check_rho_measurement`): repo-relative path, e.g. docs/research/rho-measurement-2026-11.json
+    rho_day_measurement: str | None = None
     rho_instrument: float = Field(0.5, ge=0.5, le=1)
     rho_instrument_metals: float = Field(0.7, ge=0.7, le=1)
     sims: int = Field(20_000, ge=2_000)                        # joint-power Monte Carlo draws
@@ -688,6 +752,12 @@ class PowerFirstSettings(_Section):
         if bad:
             raise ValueError(f"a measured sd is > 0, got {bad}")
         return v
+
+    @model_validator(mode="after")
+    def _rho_day_le_60m_needs_its_measurement(self) -> PowerFirstSettings:
+        if self.rho_day_le_60m < RHO_DAY_PRIOR:
+            check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m)
+        return self
 
     def rho_day_for(self, hold_days: float) -> float:
         """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value."""
