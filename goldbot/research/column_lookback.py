@@ -118,21 +118,21 @@ def builder(feature: str) -> Builder:
 
 
 @lru_cache(maxsize=None)
-def _base(feature: str, seed: int, tf: str) -> pd.DataFrame:
-    return builder(feature)(fixture(seed, tf))
+def _base(feature: str, seed: int, tf: str, n: int = N_BARS) -> pd.DataFrame:
+    return builder(feature)(fixture(seed, tf, n))
 
 
-def _scale(feature: str, column: str, seed: int, tf: str) -> float:
-    v = _base(feature, seed, tf)[column].to_numpy(dtype=float)[-SCALE_BARS:]
+def _scale(feature: str, column: str, seed: int, tf: str, n: int = N_BARS) -> float:
+    v = _base(feature, seed, tf, n)[column].to_numpy(dtype=float)[-SCALE_BARS:]
     v = v[np.isfinite(v)]
     return float(np.std(v)) if len(v) else 0.0
 
 
 def change(feature: str, columns: Sequence[str], keep: int, seed: int, tf: str,
-           kind: str = PATH) -> dict[str, float]:
+           kind: str = PATH, n: int = N_BARS) -> dict[str, float]:
     """|column(T) perturbed - column(T) base| / (BOUND x scale) per column: < 1 means within the bound."""
-    base = _base(feature, seed, tf)
-    pert = builder(feature)(perturb(fixture(seed, tf), keep, seed, kind))
+    base = _base(feature, seed, tf, n)
+    pert = builder(feature)(perturb(fixture(seed, tf, n), keep, seed, kind))
     out = {}
     for c in columns:
         a, b = float(base[c].iloc[-1]), float(pert[c].iloc[-1])
@@ -142,15 +142,15 @@ def change(feature: str, columns: Sequence[str], keep: int, seed: int, tf: str,
         if np.isnan(a) != np.isnan(b):
             out[c] = np.inf
             continue
-        s = _scale(feature, c, seed, tf)
+        s = _scale(feature, c, seed, tf, n)
         out[c] = abs(a - b) / (BOUND * s) if s > 0 else (0.0 if a == b else np.inf)
     return out
 
 
 def passes(feature: str, column: str, keep: int, tf: str, *, seeds: Sequence[int] = SEEDS,
-           kinds: Sequence[str] = KINDS) -> bool:
+           kinds: Sequence[str] = KINDS, n: int = N_BARS) -> bool:
     """Every perturbation in `kinds` of every bar older than `keep` stays within the bound on every seed."""
-    return all(change(feature, [column], keep, s, tf, k)[column] < 1.0 for k in kinds for s in seeds)
+    return all(change(feature, [column], keep, s, tf, k, n)[column] < 1.0 for k in kinds for s in seeds)
 
 
 def tight(feature: str, column: str, keep: int, tf: str) -> bool:

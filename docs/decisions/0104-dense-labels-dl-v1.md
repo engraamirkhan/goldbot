@@ -101,6 +101,26 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        - it carries the newly signed value for every floor tf, and the declaration must equal it;
        - a marker with no value below the floor is stale and fails.
      - Against the base branch (when the checkout has it), no floor value may go down without such a marker.
+     - **Amendment 2026-11-26 (sr-v3 rev 7, block X6; before any label read; quant review of #484).** A column with
+       bounded memory by construction (no EWM, no carried state: `goldbot/features/price_action_x6.py`) declares its
+       **structural** bound (`price_action_x6.structural_lookback`), not the fixture minimum, which is lower on a
+       random walk (pivots are dense) than what a sparse-pivot trend reads. For these columns:
+       - the truncation half of the check holds at the declared value (`column_lookback.passes`, both perturbations);
+       - "the value at T built from only the last L bars equals the full-history value exactly at every row T of a
+         fixture covering every htf-bucket phase, on at least two path types (random walk and trend), at every tf
+         (`tests/test_price_action_x6.py` iterates T over all phases, not a sample)."
+       - the tightness half does not apply. Over-declaring costs warm-up and embargo, never a leaked bar.
+       `column_lookback` gains an optional fixture length `n` (default 4,000, unchanged for fs-v1), because the X6
+       level columns read up to 8,880 bars at 1m. The #478 no-shrink guard applies to the X6 declarations.
+       - **Guard instant (quant L2 on #484, verbatim):** "The guard instant is `X6_MERGED_UTC`, the committer time of the merge commit that lands this amendment on main. It is set by a one-line follow-up commit immediately after merge, and the test then fails on any sr-v3 consumption or read-once row dated before it, or with no parseable ts. Until that follow-up lands, no sr-v3 label value is read (trainer instruction, recorded here)."
+         - The constant is `price_action_x6.X6_MERGED_UTC`. Until the follow-up sets it, it is None, and the
+           legitimacy test (`tests/test_price_action_x6.py::test_no_sr_v3_label_read_existed_when_x6_merged`) fails
+           closed on every sr-v3 row.
+         - A row counts as sr-v3 when its `family`, `id` or `key` field names sr-v3 or H-103; free text never counts
+           (code review LOW-1).
+         - sr-v3 rows dated at or after the merge time pass (code review MEDIUM-1).
+         - The guard sees learn-window reads only once `load_labels` writes a consumption row for every label-value
+           read (quant L1). That change lands in PR #482 and must merge before any sr-v3 label read.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
@@ -145,6 +165,22 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        - `windows.record_read_once` uses the same reader, lock and write.
      - The lock is `fcntl.flock` on POSIX and `msvcrt.locking` on byte 0 on Windows, as `data/store.py` does (LOW-1).
        With neither available, a ledger write raises; it is never done unlocked.
+   - **Every read is ledgered (quant L1 on #484, verbatim):** "Every label-value read (learn or booked) appends a
+     consumption row to the read ledger: `{type: consumption, id: <procedure>/<instrument>/<tf>/<purpose>, procedure,
+     purpose, columns, label_spec_hash, keys, ts}`. `procedure` is a required argument of `load_labels` (for example
+     `sr-v3`). Only `skeleton` counts write nothing." A booked read's row also carries `booked_read`, and C-4 fixes
+     the columns, spec hash and keys per booked id.
+   - **Not a gate read (quant A4 on #482, verbatim):** "`load_labels` sets `meta['gate_eligible'] = False` whenever
+     any returned row has `cost_version == 'w2-point'` or the spec's `h_ref == 'H'`, with `meta['gate_block']` naming
+     why. Any gate or evaluator read refuses `gate_eligible` False." `require_gate_eligible(meta)` is that refusal.
+   - **Bookings (code review MEDIUM-1 on #482).** A booking opens only its own window:
+     - `booked()` needs a ledger row for each judged window the request touches (confirm or test_old), under the
+       frozen spec hash. When the booking carries a family, it must be the caller's `family`.
+     - test_old also needs `allow_test_old` from `windows.allow_test_old_for` (the confirm-seen rule).
+   - **Embargo (MEDIUM-2):** a window touching the 2006-01 embargo is refused, booked or not. Rows whose [decision,
+     horizon end] reach it are dropped and counted (`dropped_embargo`).
+   - **learn_old 2003-05 opens unbooked.** This is intended: W2 counts it as learn, and the A4 recording unseals
+     learn-window reads.
    - It refuses:
      - a read without tiers or without `columns`;
      - a sealed store;

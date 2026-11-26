@@ -57,6 +57,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -135,10 +136,13 @@ SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=1
                  floor_tr_mult=1.5, floor_window_min=1_440, sides=(1, -1), judged_head="T2", lookback_bars=100,
                  ctx_lookback_days=140, rho_day=0.25, feature_spec=F.spec_hash())
 
-# Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. Empty: every
-# store is sealed (labels produced, counted outcome-blind, never read). A member must appear in ADR 0085 (test).
-# Candidate: the D-1 served file tiers_served_r11-v2.1.csv, sha256 ff653ea7... (PR #467), not yet recorded.
-RECORDED_TIERS_SHA256: frozenset[str] = frozenset()
+# Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. A member
+# must appear in full on an ADR 0085 recording line (test). Recorded 2026-11-26 (quant R-b on PR #472): the D-1 served
+# file tiers_served_r11-v2.1.csv. It unseals learn-window reads only: confirm and test_old need a booked read id (C-1),
+# and w2-point / h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
+    "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",   # tiers_served_r11-v2.1.csv (D-1, #467)
+})
 RESERVE_FROM = pd.Timestamp("2026-10-01", tz="UTC")     # N12: odd ISO weeks from here never train
 
 ROW_KEYS = ("instrument", "tf", "phase", "group_id", "decision_utc", "available_utc", "window_from_utc", "source",
@@ -752,52 +756,77 @@ def skeleton(cache: Path, *, instrument: str, tf: str, years: Iterable[int], pha
 INDEX_ENERGY = frozenset({"US500", "USTEC", "UK100", "DE40", "US30", "XTIUSD", "USINDEX"})
 
 
-def judged_spans(instrument: str) -> tuple[tuple[pd.Timestamp, pd.Timestamp], ...]:
+def judged_spans(instrument: str) -> dict[WN.Window, tuple[pd.Timestamp, pd.Timestamp]]:
+    """The unit's judged windows and their spans: gold/FX confirm 2018-01..2025-09 and test_old 2006-02..2009;
+    index-energy judge 2022-01..2025-09 (booked as `confirm`)."""
     if instrument in INDEX_ENERGY:
-        return ((pd.Timestamp("2022-01-01", tz="UTC"), WN.HOLDOUT_FROM),)
-    return (WN.SPANS[WN.Window.CONFIRM], WN.SPANS[WN.Window.TEST_OLD])
+        return {WN.Window.CONFIRM: (pd.Timestamp("2022-01-01", tz="UTC"), WN.HOLDOUT_FROM)}
+    return {WN.Window.CONFIRM: WN.SPANS[WN.Window.CONFIRM], WN.Window.TEST_OLD: WN.SPANS[WN.Window.TEST_OLD]}
+
+
+EMBARGO_SPAN = WN.SPANS[WN.Window.EMBARGO]       # 2006-01: never read, booked or not (code review MEDIUM-2 on #482)
 
 
 def learn_end(instrument: str) -> pd.Timestamp:
     return pd.Timestamp("2022-01-01", tz="UTC") if instrument in INDEX_ENERGY else WN.SPANS[WN.Window.LEARN][1]
 
 
-def booked(ledger: Path, read_id: str, frozen_spec_hash: str) -> dict[str, Any]:
-    """The read-once ledger row (`windows.READS_LEDGER`, written before the read by `windows.record_read_once`) whose
-    key is `read_id`, for a confirm or test_old window, with `ref.spec_hash` = the frozen spec hash. Else raises."""
+def booked(ledger: Path, read_id: str, frozen_spec_hash: str, windows: Iterable[WN.Window],
+           family: str | None = None) -> dict[str, Any]:
+    """The read-once ledger rows (`windows.READS_LEDGER`, written before the read by `windows.record_read_once`) that
+    book `read_id` for EACH judged window the request touches, under the frozen spec hash (`ref.spec_hash`); a booking
+    that carries a family must name `family` (code review MEDIUM-1 on #482: a confirm booking never opens test_old,
+    nor the reverse). Raises PermissionError otherwise."""
     p = Path(ledger)
-    rows = WN.read_ledger(p)
-    hit = [r for r in rows if r.get("key") == read_id and r.get("window") in (WN.Window.CONFIRM.value,
-                                                                               WN.Window.TEST_OLD.value)]
-    if not hit:
-        raise PermissionError(f"read {read_id!r} is not booked in {p} for confirm or test_old")
-    if not any((r.get("ref") or {}).get("spec_hash") == frozen_spec_hash for r in hit):
-        raise PermissionError(f"read {read_id!r} is booked under another spec hash than {frozen_spec_hash[:12]}")
-    return hit[-1]
+    rows = [r for r in WN.read_ledger(p) if r.get("key") == read_id and r.get("type") != "consumption"]
+    out: dict[str, Any] = {}
+    for w in sorted(set(windows), key=lambda x: x.value):
+        hit = [r for r in rows if r.get("window") == w.value]
+        if not hit:
+            raise PermissionError(f"read {read_id!r} is not booked in {p} for {w.value}")
+        if any(r.get("family") is not None and r.get("family") != family for r in hit):
+            raise PermissionError(f"read {read_id!r} for {w.value} is booked by family "
+                                  f"{sorted({str(r.get('family')) for r in hit})}, not {family!r}")
+        if not any((r.get("ref") or {}).get("spec_hash") == frozen_spec_hash for r in hit):
+            raise PermissionError(f"read {read_id!r} is booked under another spec hash than {frozen_spec_hash[:12]}")
+        out = hit[-1]
+    return out
 
 
-def _consumptions(ledger: Path, read_id: str) -> list[dict[str, Any]]:
+def _consumptions(ledger: Path, booked_read: str) -> list[dict[str, Any]]:
     rows = WN.read_ledger(ledger)
-    return [r for r in rows if r.get("type") == "consumption" and r.get("id") == read_id]
+    return [r for r in rows if r.get("type") == "consumption" and r.get("booked_read") == booked_read]
 
 
-def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str,
-            keys: Mapping[str, str]) -> dict[str, Any]:
-    """Quant C-4: every `load_labels` under a booked read appends a consumption row (id, columns, label spec hash,
-    keys, ts). The first consumption fixes the columns (compared as a set: `sorted(columns)`), the spec hash and the
-    keys (one instrument, tf and year set per booked id); a later load under the same id with any of them different
-    raises. Read, check and append run under an exclusive lock with one O_APPEND write and fsync (code review LOW-A),
-    so two concurrent first loads cannot both be first."""
-    row = {"type": "consumption", "id": read_id, "columns": sorted(columns), "label_spec_hash": label_spec_hash,
-           "keys": dict(sorted(keys.items()))}
+PROCEDURE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str, keys: Mapping[str, str],
+            procedure: str, purpose: str, booked_read: str | None = None) -> dict[str, Any]:
+    """Quant L1 on PR #484 (verbatim): "Every label-value read (learn or booked) appends a consumption row to the read
+    ledger: `{type: consumption, id: <procedure>/<instrument>/<tf>/<purpose>, procedure, purpose, columns,
+    label_spec_hash, keys, ts}`. `procedure` is a required argument of `load_labels` (for example `sr-v3`). Only
+    `skeleton` counts write nothing."
+    Quant C-4: under a booked read (`booked_read`, kept on the row) the first consumption fixes the columns (as a set,
+    `sorted(columns)`), the spec hash and the keys (one instrument, tf and year set per booked id); a later load under
+    the same booked id with any of them different raises. Read, check and append run under an exclusive lock with one
+    O_APPEND write and fsync (code review LOW-A), so two concurrent first loads cannot both be first."""
+    if not PROCEDURE.fullmatch(procedure):
+        raise ValueError(f"procedure {procedure!r}: a lower-case name such as 'sr-v3' is required (quant L1)")
+    row: dict[str, Any] = {"type": "consumption", "id": read_id, "procedure": procedure, "purpose": purpose,
+                           "columns": sorted(columns), "label_spec_hash": label_spec_hash,
+                           "keys": dict(sorted(keys.items()))}
+    if booked_read is not None:
+        row["booked_read"] = booked_read
     with WN.locked_ledger(ledger) as fd:
-        prior = _consumptions(ledger, read_id)
-        if prior:
-            first = prior[0]
-            for f in ("columns", "label_spec_hash", "keys"):
-                if (sorted(first.get(f) or []) if f == "columns" else first.get(f)) != row[f]:
-                    raise PermissionError(f"read {read_id!r} was first consumed with other {f}: a booked read is fixed "
-                                          "by its first load (quant C-4)")
+        if booked_read is not None:
+            prior = _consumptions(ledger, booked_read)
+            if prior:
+                first = prior[0]
+                for f in ("columns", "label_spec_hash", "keys"):
+                    if (sorted(first.get(f) or []) if f == "columns" else first.get(f)) != row[f]:
+                        raise PermissionError(f"read {booked_read!r} was first consumed with other {f}: a booked read "
+                                              "is fixed by its first load (quant C-4)")
         WN.append_row(fd, {**row, "ts": pd.Timestamp.now(tz="UTC").isoformat()})
     return row
 
@@ -809,11 +838,12 @@ def _touches(lo: np.ndarray, hi: np.ndarray, spans: Iterable[tuple[pd.Timestamp,
     return hit
 
 
-def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], tiers: F.Tiers | None,
-                columns: Sequence[str] | None, keys: Mapping[tuple[int, int], str],
+def load_labels(cache: Path, *, procedure: str, ledger: Path, instrument: str, tf: str, years: Iterable[int],
+                tiers: F.Tiers | None, columns: Sequence[str] | None, keys: Mapping[tuple[int, int], str],
                 window: tuple[pd.Timestamp, pd.Timestamp], purpose: str = "judge", phases: Sequence[int] = (0,),
                 templates: Sequence[str] | None = None, proxy_source: str | None = None,
-                booked_read: str | None = None, ledger: Path | None = None, frozen_spec_hash: str | None = None,
+                booked_read: str | None = None, frozen_spec_hash: str | None = None,
+                family: str | None = None, allow_test_old: bool = False,
                 spec: LabelSpec = SPEC) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Label rows for a booked read. Refuses: a read without tiers or without `columns` (the served column set, ADR
     0104 4); a sealed store (tiers sha256 not recorded in ADR 0085 A4); phase != 0 for a judged read; the holdout (any
@@ -830,21 +860,30 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     if not columns:
         raise ValueError("dl-v1 judge and train reads name their served column set (ADR 0104 4): pass columns")
     lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
-    spans = judged_spans(instrument)
-    wants_judged = bool(_touches(np.array([lo.value]), np.array([hi.value]), spans)[0])
+    one_lo, one_hi = np.array([lo.value]), np.array([hi.value])
+    if _touches(one_lo, one_hi, [EMBARGO_SPAN])[0]:
+        raise WN.EmbargoSealed(f"dl-v1 {instrument}: window {lo.date()}..{hi.date()} touches the 2006-01 embargo; it "
+                               "is never read (code review MEDIUM-2)")
+    spans_by = judged_spans(instrument)
+    spans = list(spans_by.values())
+    touched = [w for w, sp in spans_by.items() if _touches(one_lo, one_hi, [sp])[0]]
     book = None
-    if wants_judged:
-        if booked_read is None or ledger is None or frozen_spec_hash is None:
-            raise PermissionError(f"dl-v1 {instrument}: window {lo.date()}..{hi.date()} touches confirm/test_old; "
-                                  "a booked read id, its ledger and the frozen spec hash are required (quant C-1)")
-        book = booked(ledger, booked_read, frozen_spec_hash)
+    if touched:
+        if booked_read is None or frozen_spec_hash is None:
+            raise PermissionError(f"dl-v1 {instrument}: window {lo.date()}..{hi.date()} touches "
+                                  f"{[w.value for w in touched]}; a booked read id, its ledger and the frozen spec "
+                                  "hash are required (quant C-1)")
+        if WN.Window.TEST_OLD in touched and not allow_test_old:
+            raise WN.TestOldSealed("test_old opens only for a strategy that passed confirm: pass "
+                                   "allow_test_old=windows.allow_test_old_for(id, confirm_passed)")
+        book = booked(ledger, booked_read, frozen_spec_hash, touched, family)
     stems = _stems(cache, spec, instrument, tf, years, phases, keys)
     key_map = {f"{y}:{p}": k for (y, p), k in keys.items()}
     if not readable(tiers):
         raise SealedStore(f"dl-v1 {instrument} {tf}: tiers sha256 {tiers.sha256[:12]} is not recorded in ADR 0085 A4 "
                           "(card ruling 5): label values are sealed; counts read `skeleton`")
-    if book is not None and booked_read is not None and ledger is not None:
-        consume(ledger, booked_read, columns=columns, label_spec_hash=spec_hash(spec), keys=key_map)
+    consume(ledger, f"{procedure}/{instrument}/{tf}/{purpose}", columns=columns, label_spec_hash=spec_hash(spec),
+            keys=key_map, procedure=procedure, purpose=purpose, booked_read=booked_read if book is not None else None)
     frames = []
     for st in stems:
         sk = pd.read_parquet(f"{st}.skeleton.parquet")
@@ -857,10 +896,10 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     if purpose == "judge" and (lab["phase"] != 0).any():
         raise ValueError("a judged read holds a phase != 0 row")
     lab = attach_tiers(lab, tiers, columns=columns, proxy_source=proxy_source, spec=spec)
-    meta: dict[str, Any] = {"spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
+    meta: dict[str, Any] = {"procedure": procedure, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
                             "tiers_sha256": tiers.sha256, "r11_id": tiers.r11_id, "tier_proxy": proxy_source,
                             "columns": list(columns), "keys": key_map,
-                            "booked_read": booked_read if book is not None else None, "rows_read": len(lab),
+                            "booked_read": booked_read if book is not None else None, "family": family, "rows_read": len(lab),
                             "purpose": purpose, "window": [str(lo), str(hi)]}
     d, e = _ns(lab["decision_utc"]), _ns(lab["horizon_end_utc"])
     inside = (d >= lo.value) & (e <= hi.value)
@@ -869,6 +908,9 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
         judged = _touches(d, e, spans)
         meta["dropped_judged"] = int((inside & judged).sum())
         inside &= ~judged
+    emb = _touches(d, e, [EMBARGO_SPAN])           # rows whose [decision, horizon end] reach 2006-01: dropped
+    meta["dropped_embargo"] = int((inside & emb).sum())
+    inside &= ~emb
     usable = lab["usable"].to_numpy(bool)
     meta["dropped_tier"] = int((inside & ~usable).sum())
     keep = inside & usable
@@ -880,10 +922,29 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
         keep &= lab["template"].isin(list(templates)).to_numpy()
     out = lab.loc[keep].reset_index(drop=True)
     meta["rows"] = len(out)
+    meta.update(gate_status(out, spec))
     return out, meta
 
 
-__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "column_producers", "input_lookback", "judged_spans",
+def gate_status(labels: pd.DataFrame, spec: LabelSpec = SPEC) -> dict[str, Any]:
+    """Quant A4 on PR #482 (verbatim): "`load_labels` sets `meta['gate_eligible'] = False` whenever any returned row
+    has `cost_version == 'w2-point'` or the spec's `h_ref == 'H'`, with `meta['gate_block']` naming why. Any gate or
+    evaluator read refuses `gate_eligible` False." (ADR 0085 A4: not gate reads until D-3 and D-4 freeze.)"""
+    block = []
+    if len(labels) and (labels["cost_version"].astype(str) == "w2-point").any():
+        block.append("cost_version w2-point: the ub95 cost of record per cell is not frozen (D-3)")
+    if spec.h_ref == "H":
+        block.append("h_ref = H: the exit templates' h_ref is not frozen (D-4)")
+    return {"gate_eligible": not block, "gate_block": block}
+
+
+def require_gate_eligible(meta: Mapping[str, Any]) -> None:
+    """For any gate or evaluator read of dense labels: refuse a read whose `gate_eligible` is not True."""
+    if meta.get("gate_eligible") is not True:
+        raise PermissionError(f"dense labels are not a gate read: {meta.get('gate_block') or 'no gate status'}")
+
+
+__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
            "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
            "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "close_only", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",

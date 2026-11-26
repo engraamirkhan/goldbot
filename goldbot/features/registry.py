@@ -121,6 +121,19 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
     "tsmom_score": 481,              # tsmom
     "vol_of_vol_60": 80,             # vol_estimators
     "vol_ts_yz_20_60": 61,           # vol_estimators
+    # sr-v3 block X6 (opt-in goldbot.features.price_action_x6, card 3.2). Bounded memory by construction, so each value
+    # is the STRUCTURAL bound (price_action_x6.structural_lookback), not the 8-seed fixture minimum: the fixture's
+    # frequent pivots under-state the bar a sparse-pivot trend reads. Every one passes the truncation check and an exact
+    # all-phase tail-equality test; the fixture tightness check does not apply (tests/test_price_action_x6.py; ADR 0104
+    # amendment, quant review of #484).
+    "x6_body_frac": 1,               # x6_candles
+    "x6_clv": 1,                     # x6_candles
+    "x6_io_bar": 2,                  # x6_candles
+    "x6_ms_state": 60,               # x6_structure
+    "x6_ms_bos": 84,                 # x6_structure
+    "x6_lv_dist_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "4h": 30, "1d": 30, "1w": 30},
+    "x6_lv_room_net_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "4h": 30, "1d": 30, "1w": 30},
+    "x6_lv_brk_state": {"1m": 8880, "5m": 1776, "15m": 592, "30m": 296, "1h": 148, "4h": 35, "1d": 35, "1w": 35},
 }
 
 

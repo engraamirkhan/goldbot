@@ -14,6 +14,7 @@ from goldbot.data import holdout_guard
 from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 from goldbot.research import feature_store as F
+from goldbot.research import windows as WN
 
 
 def _minutes(start: str, n: int, seed: int = 7, spread: float = 0.2, source: str = "dukascopy") -> pd.DataFrame:
@@ -205,7 +206,7 @@ def test_judge_refuses_phase_and_sealed_store(tmp_path: Path, mins: pd.DataFrame
 
     def load(tiers_: F.Tiers | None, purpose: str, phases: tuple[int, ...] = (0,),
              columns: tuple[str, ...] | None = CORE6) -> tuple[pd.DataFrame, dict[str, Any]]:
-        return D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=tiers_, columns=columns,
+        return D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=tiers_, columns=columns,
                              keys=keys, window=win, purpose=purpose, phases=phases)
 
     with pytest.raises(D.SealedStore):                   # card ruling 5: no recorded tiers sha, no label read
@@ -224,7 +225,7 @@ def test_judge_refuses_phase_and_sealed_store(tmp_path: Path, mins: pd.DataFrame
     assert set(tr["phase"]) == {0, 5}
     # gold rows under tiers that grade another source: ungraded, never usable (quant C3)
     _, kg = _store(tmp_path, mins, "15m", 0, "dukascopy")
-    gold, _ = D.load_labels(tmp_path, instrument="XAUUSD", tf="15m", years=[2015], tiers=tiers, window=win,
+    gold, _ = D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="XAUUSD", tf="15m", years=[2015], tiers=tiers, window=win,
                             columns=CORE6, keys={(2015, 0): kg})
     assert gold.empty
 
@@ -255,11 +256,11 @@ def test_reads_only_the_partition_of_the_data_key(tmp_path: Path, mins: pd.DataF
     tiers = _tiers(tmp_path, "EURUSD", ["2015-02", "2015-03"])
     monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
     win = (pd.Timestamp("2015-01-01", tz="UTC"), pd.Timestamp("2016-01-01", tz="UTC"))
-    lab, meta = D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=tiers, window=win,
+    lab, meta = D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=tiers, window=win,
                               columns=CORE6, keys={(2015, 0): fresh})
     assert meta["keys"] == {"2015:0": fresh}
     with pytest.raises(FileNotFoundError):
-        D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=tiers, window=win,
+        D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=tiers, window=win,
                       columns=CORE6, keys={(2015, 0): "0" * 64})
 
 
@@ -281,9 +282,9 @@ def test_confirm_and_test_old_need_a_booked_read(tmp_path: Path, monkeypatch: py
 
     def load(year: int, key: str, window: tuple[pd.Timestamp, pd.Timestamp], *, read: str | None = None,
              frozen: str | None = None, columns: tuple[str, ...] = CORE6) -> tuple[pd.DataFrame, dict[str, Any]]:
-        return D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[year], tiers=tiers, columns=columns,
+        return D.load_labels(tmp_path, procedure="sr-v3", instrument="EURUSD", tf="15m", years=[year], tiers=tiers, columns=columns,
                              keys={(year, 0): key}, window=window, booked_read=read,
-                             ledger=ledger if read else None, frozen_spec_hash=frozen)
+                             ledger=ledger, frozen_spec_hash=frozen, family="sr_v3")
 
     lab, meta = load(2015, k15, learn)
     assert len(lab) and meta["booked_read"] is None
@@ -306,7 +307,7 @@ def test_confirm_and_test_old_need_a_booked_read(tmp_path: Path, monkeypatch: py
     # a learn read whose window ends past the learn end still drops every row reaching confirm
     lab2, _ = load(2015, k15, (learn[0], pd.Timestamp("2017-12-31", tz="UTC")))
     assert (lab2["horizon_end_utc"] <= D.learn_end("EURUSD")).all()
-    assert D.judged_spans("US500")[0][0] == pd.Timestamp("2022-01-01", tz="UTC")
+    assert D.judged_spans("US500")[WN.Window.CONFIRM][0] == pd.Timestamp("2022-01-01", tz="UTC")
 
 
 def test_recorded_tiers_are_in_adr_0085_a4() -> None:
@@ -485,7 +486,8 @@ def test_reserve_weeks() -> None:
 def _race_consume(ledger: str, columns: list[str], start: Any, out: Any) -> None:
     start.wait()
     try:
-        D.consume(Path(ledger), "race-1", columns=columns, label_spec_hash="h", keys={"2018:0": "k"})
+        D.consume(Path(ledger), "sr-v3/EURUSD/15m/judge", columns=columns, label_spec_hash="h", keys={"2018:0": "k"},
+                  procedure="sr-v3", purpose="judge", booked_read="race-1")
         out.put("ok")
     except PermissionError:
         out.put("refused")
@@ -551,8 +553,9 @@ def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
     good = '{"family": "sr_v3", "window": "confirm", "status": "started", "key": "r", "ref": {"spec_hash": "s"}}'
     ledger.write_text(good + "\n" + '{"type": "consumption", "id": "r", "colu')
     assert len(WN.read_ledger(ledger)) == 1
-    assert D.booked(ledger, "r", "s")["key"] == "r"
-    D.consume(ledger, "r", columns=list(CORE6), label_spec_hash="h", keys={"2018:0": "k"})
+    assert D.booked(ledger, "r", "s", [WN.Window.CONFIRM], "sr_v3")["key"] == "r"
+    D.consume(ledger, "sr-v3/EURUSD/15m/judge", columns=list(CORE6), label_spec_hash="h", keys={"2018:0": "k"},
+              procedure="sr-v3", purpose="judge", booked_read="r")
     rows = WN.read_ledger(ledger)
     assert len(rows) == 2 and rows[-1]["type"] == "consumption"
     assert (tmp_path / "window_reads.jsonl.torn").exists()
@@ -560,7 +563,7 @@ def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
     with pytest.raises(WN.LedgerCorrupt):
         WN.read_ledger(ledger)
     with pytest.raises(WN.LedgerCorrupt):
-        D.booked(ledger, "r", "s")
+        D.booked(ledger, "r", "s", [WN.Window.CONFIRM], "sr_v3")
 
 
 def _mixed_tiers(tmp_path: Path, inst: str, by_month: dict[str, str]) -> F.Tiers:
@@ -600,3 +603,136 @@ def test_rule_r_a_close_only_lookbacks_accept_b_months_nothing_else_does(tmp_pat
     mar_c = _mixed_tiers(tmp_path, "EURUSD", {"2015-03": "C", "2015-04": "A"})
     c = D.attach_tiers(lab, mar_c, columns=("side", "ret_96"))
     assert not c.loc[reach, "usable"].any() and (c["usable"].to_numpy()[april & ~reach] == ok[april & ~reach]).all()
+
+
+def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
+    """ADR 0085 A4 (recorded 2026-11-26, quant R-b on #472): a store read under the recorded tiers file opens on the
+    learn window without monkeypatching the seal, and a 2018 read without a booked read id is still refused."""
+    rec = "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b"
+    assert rec in D.RECORDED_TIERS_SHA256
+    m15 = _minutes("2015-03-02", 6 * 1440).assign(source="histdata:EURUSD")
+    m18 = _minutes("2018-03-05", 6 * 1440).assign(source="histdata:EURUSD")
+    _, k15 = _store(tmp_path, m15, "15m", 0, "histdata:EURUSD", year=2015)
+    _, k18 = _store(tmp_path, m18, "15m", 0, "histdata:EURUSD", year=2018)
+    months = [str(p) for p in pd.period_range("2014-01", "2018-12", freq="M")]
+    served = F.Tiers(path="tiers_served_r11-v2.1.csv", sha256=rec, r11_id="r11-v2.1-2026-11-25",
+                     table={"EURUSD": dict.fromkeys(months, "A")}, source="histdata")
+    assert D.readable(served)
+    learn = (pd.Timestamp("2010-01-01", tz="UTC"), pd.Timestamp("2018-01-01", tz="UTC"))
+    lab, meta = D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=served, columns=CORE6,
+                              keys={(2015, 0): k15}, window=learn)
+    assert len(lab) and meta["tiers_sha256"] == rec and meta["booked_read"] is None
+    # quant A4 on #482: w2-point rows (and h_ref = H) are not a gate read, machine-readably
+    assert (lab["cost_version"] == "w2-point").all()
+    assert meta["gate_eligible"] is False and any("w2-point" in b for b in meta["gate_block"])
+    assert any("h_ref" in b for b in meta["gate_block"])
+    with pytest.raises(PermissionError, match="not a gate read"):
+        D.require_gate_eligible(meta)
+    assert D.gate_status(lab.assign(cost_version="ecr-ub95"),
+                         D.SPEC.model_copy(update={"h_ref": "frozen-D4"})) == {"gate_eligible": True,
+                                                                                "gate_block": []}
+    confirm = (pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2025-10-01", tz="UTC"))
+    with pytest.raises(PermissionError, match="booked"):
+        D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2018], tiers=served, columns=CORE6,
+                      keys={(2018, 0): k18}, window=confirm)
+    other = F.Tiers(path="x.csv", sha256="0" * 64, r11_id="r", table=served.table, source="histdata")
+    with pytest.raises(D.SealedStore):                         # any other tiers file stays sealed
+        D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=other, columns=CORE6,
+                      keys={(2015, 0): k15}, window=learn)
+
+
+def _eur_store(tmp_path: Path, year_starts: dict[int, str]) -> dict[int, str]:
+    keys = {}
+    for y, start in year_starts.items():
+        m = _minutes(start, 6 * 1440).assign(source="histdata:EURUSD")
+        keys[y] = _store(tmp_path, m, "15m", 0, "histdata:EURUSD", year=y)[1]
+    return keys
+
+
+def test_a_booking_opens_only_its_own_window_and_family(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review MEDIUM-1 on #482: a confirm booking never opens test_old and a test_old booking never opens
+    confirm; a booking by another family opens nothing; test_old also needs windows.allow_test_old_for."""
+    keys = _eur_store(tmp_path, {2008: "2008-03-03", 2018: "2018-03-05"})
+    months = [str(p) for p in pd.period_range("2006-01", "2018-12", freq="M")]
+    tiers = _tiers(tmp_path, "EURUSD", months)
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
+    ledger = tmp_path / WN.READS_LEDGER
+    monkeypatch.setitem(WN.READ_ONCE_FAMILIES, "sr_v3", frozenset({WN.Window.CONFIRM, WN.Window.TEST_OLD}))
+    monkeypatch.setitem(WN.READ_ONCE_FAMILIES, "other", frozenset({WN.Window.CONFIRM}))
+    WN.record_read_once(ledger, "sr_v3", "confirm", ref={"spec_hash": "f"}, resume_key="conf-1")
+    WN.record_read_once(ledger, "sr_v3", "test_old", ref={"spec_hash": "f"}, resume_key="told-1")
+    WN.record_read_once(ledger, "other", "confirm", ref={"spec_hash": "f"}, resume_key="oth-1")
+    confirm = WN.SPANS[WN.Window.CONFIRM]
+    test_old = WN.SPANS[WN.Window.TEST_OLD]
+
+    def load(year: int, window: tuple[pd.Timestamp, pd.Timestamp], read: str, family: str,
+             allow: bool = False) -> tuple[pd.DataFrame, dict[str, Any]]:
+        return D.load_labels(tmp_path, procedure="sr-v3", instrument="EURUSD", tf="15m", years=[year], tiers=tiers, columns=CORE6,
+                             keys={(year, 0): keys[year]}, window=window, booked_read=read, ledger=ledger,
+                             frozen_spec_hash="f", family=family, allow_test_old=allow)
+
+    with pytest.raises(PermissionError, match="not booked .* for test_old"):        # confirm -> test_old
+        load(2008, test_old, "conf-1", "sr_v3", allow=True)
+    with pytest.raises(PermissionError, match="not booked .* for confirm"):         # test_old -> confirm
+        load(2018, confirm, "told-1", "sr_v3")
+    with pytest.raises(PermissionError, match="booked by family"):                  # another family's booking
+        load(2018, confirm, "oth-1", "sr_v3")
+    with pytest.raises(WN.TestOldSealed):                                           # confirm-seen rule
+        load(2008, test_old, "told-1", "sr_v3")
+    got, meta = load(2008, test_old, "told-1", "sr_v3",
+                     allow=WN.allow_test_old_for("arm-x", confirm_passed={"arm-x"}))
+    assert len(got) and meta["booked_read"] == "told-1"
+    got, _ = load(2018, confirm, "conf-1", "sr_v3")
+    assert len(got)
+
+
+def test_the_embargo_month_never_reads_and_learn_old_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review MEDIUM-2 on #482: a window touching 2006-01 is refused, booked or not, and rows whose [decision,
+    horizon end] reach it are dropped. learn_old 2003-05 opening unbooked is intended (W2 counts it as learn; ADR 0085
+    A4 unseals learn-window reads)."""
+    keys = _eur_store(tmp_path, {2005: "2005-12-26", 2004: "2004-03-01"})
+    months = [str(p) for p in pd.period_range("2003-01", "2006-02", freq="M")]
+    tiers = _tiers(tmp_path, "EURUSD", months)
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
+
+    def load(year: int, window: tuple[pd.Timestamp, pd.Timestamp]) -> tuple[pd.DataFrame, dict[str, Any]]:
+        return D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[year], tiers=tiers, columns=CORE6,
+                             keys={(year, 0): keys[year]}, window=window)
+
+    with pytest.raises(WN.EmbargoSealed):
+        load(2005, (pd.Timestamp("2003-01-01", tz="UTC"), pd.Timestamp("2006-02-01", tz="UTC")))
+    learn_old = WN.SPANS[WN.Window.LEARN_OLD]                        # 2003-01-01 .. 2006-01-01
+    got, meta = load(2004, learn_old)
+    assert len(got) and meta["booked_read"] is None                  # learn_old opens: intended
+    late, meta = load(2005, learn_old)
+    emb_lo = D.EMBARGO_SPAN[0]
+    assert (late["horizon_end_utc"] <= emb_lo).all()                 # nothing reaching 2006-01 is served
+    assert meta["dropped_window"] + meta["dropped_embargo"] > 0
+
+
+def test_every_label_read_writes_one_consumption_row_and_counts_write_none(tmp_path: Path,
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant L1 on PR #484: a learn read with procedure="sr-v3" appends exactly one consumption row
+    {type, id sr-v3/<instrument>/<tf>/<purpose>, procedure, purpose, columns, label_spec_hash, keys, ts}; a
+    `skeleton` count writes nothing; `procedure` is required and must be a name."""
+    m = _minutes("2015-03-02", 6 * 1440).assign(source="histdata:EURUSD")
+    _, k = _store(tmp_path, m, "15m", 0, "histdata:EURUSD")
+    tiers = _tiers(tmp_path, "EURUSD", [str(p) for p in pd.period_range("2014-01", "2015-03", freq="M")])
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
+    ledger = tmp_path / WN.READS_LEDGER
+    learn = WN.SPANS[WN.Window.LEARN]
+    D.skeleton(tmp_path, instrument="EURUSD", tf="15m", years=[2015])
+    assert not ledger.exists()                                           # counts write nothing
+    lab, meta = D.load_labels(tmp_path, procedure="sr-v3", ledger=ledger, instrument="EURUSD", tf="15m",
+                              years=[2015], tiers=tiers, columns=CORE6, keys={(2015, 0): k}, window=learn,
+                              purpose="train")
+    rows = WN.read_ledger(ledger)
+    assert len(lab) and len(rows) == 1 and meta["procedure"] == "sr-v3"
+    r = rows[0]
+    assert r["type"] == "consumption" and r["id"] == "sr-v3/EURUSD/15m/train"
+    assert r["procedure"] == "sr-v3" and r["purpose"] == "train" and r["columns"] == sorted(CORE6)
+    assert r["label_spec_hash"] == D.spec_hash() and r["keys"] == {"2015:0": k} and "ts" in r
+    assert "booked_read" not in r
+    with pytest.raises(ValueError, match="procedure"):
+        D.load_labels(tmp_path, procedure="", ledger=ledger, instrument="EURUSD", tf="15m", years=[2015],
+                      tiers=tiers, columns=CORE6, keys={(2015, 0): k}, window=learn)
