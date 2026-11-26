@@ -289,3 +289,69 @@ gate, live unlock and RiskGate are untouched. Rulings R-O, R-Q and R-J of the li
 **N26 addition (quant issue 12 on PR #460, 2026-11-26).** "Learning-class demo serving at K 0 is not a go decision,
 provided deployment is unconditional on any Stage L/C outcome (every cell with a merged report and a Stage 0 pass
 deploys)."
+
+## Amendment 2026-11-25 (quant rulings D-12 a-d, on PR #466; written by the ml-researcher)
+
+Status: ruled by the quant-reviewer; written into this ADR and the sr-v3 card (2.3, 9a) by the ml-researcher. Research
+and demo promotion only. The phase gate, live unlock, real-money confirmation and RiskGate are untouched. Inputs:
+`docs/research/rho-measurement-2026-11.md` and `.json` (script `scripts/research/measure_rho.py`).
+
+**(a) Level of rho_inst.** Quant text, verbatim:
+> "ρ_u,inst (and ρ_x,j,inst) is the cross-instrument correlation of instrument-day mean residuals (D-12 'day-mean'),
+> upper 95 % CI, for the body's membership and hold bucket; the per-candidate pair ICC never enters 1+(k−1)ρ_inst."
+
+- Why: with m candidates a day per instrument, corr(day means) = m·ρ_pair / (1 + (m − 1)·ρ_day). With that value,
+  (1 + (m − 1)ρ_day)(1 + (k − 1)ρ_inst) equals the three-level design effect 1 + (m − 1)ρ_day + (k − 1)·m·ρ_pair.
+  The pair value would overstate a pooled n_eff about 4-6 times on FX10.
+- Test: `test_d12_a_rho_inst_is_the_day_mean_correlation_not_the_pair_icc` (m = 89, ρ_pair = 0.0134, ρ_day = 0.01,
+  k = 10: within 5 % of the three-level design effect; the pair value is more than 4x off).
+
+**(b) D-13, admitting a new instrument.** Quant text, verbatim:
+> "admit a new instrument to a hold bucket only if the upper 95 % CI of its day-mean ρ_u,inst vs gold, max over PC1
+> and per-instrument sign orientations, is ≤ 0.2 in that bucket (D-12 method, learn 2010-17, graded A/A-cons rows);
+> existing members (FX10, XAG) stay under R13 pricing, not D-13."
+
+**(c) The validator.** As ruled on #466 (relayed, not verbatim), with the code review of #466 applied:
+- Settings: `research.power_first.rho_day_measurement: str | None`, and
+  `research.power_first.rho_day_measurement_sha256: str | None` (the file's sha256, pinned next to the setting).
+- `rho_day_le_60m < 0.25` is refused unless all of these hold:
+  - the named file exists and its sha256 equals the pinned `rho_day_measurement_sha256`;
+  - its schema is `rho_day_measurement/v2` or later;
+  - its `window` is learn, from 2010-01-01 or later and ending no later than 2018-01-01;
+  - its `candidates` list at least 2 replayed families that are neither sr-v3 nor H-102;
+  - its `cells_file` exists with its recorded sha256;
+  - its `rho_day_le_60m` carries every class (gold, metals, fx10, pooled, gold+fx10), each finite, each equal to
+    max(0.05, the largest ≤ 60 min within-day upper 95 % bound) recomputed from the cells file;
+  - the value is at least every class's binding.
+- Settings load never hashes a live script. Instead, a CI test asserts that the committed `measure_rho.py` has the
+  sha256 recorded in the committed (and in any pinned) measurement JSON. An edit of the script therefore fails CI,
+  never a running service's settings load.
+- **Changing `scripts/research/measure_rho.py` means re-running it (new JSON, cells file and pin), or setting
+  `rho_day_le_60m` back to 0.25 (both measurement fields null) in the same PR.**
+- rho_day above 60 min keeps its 0.25 floor.
+- The shipped setting stays 0.25 (`config.check_rho_measurement`; tests `test_d12_*` in
+  tests/research/test_power_first.py).
+
+**(d) sr-v3 card 2.3, LAMBDA_INST.** Quant text, verbatim:
+> "τ_a = max(0.01 R, upper 95 % CI over the control grid and ≥2 replayed non-sr-v3/H-102 families, both-sides and
+> long-only variants); λ_a uses the pooled-body row (13,500 / 3,416 / 1,324 until the families run) for any
+> membership, since it is the smallest λ of the memberships considered; frozen by hash before Stage 0."
+
+**Bindings.**
+- Each binding is max(0.05, grid bound, families' bound) for ρ_u,day ≤ 60 min, and the max of the two for the day-mean
+  ρ_u,inst and τ_a.
+- The families are box_break_close (MB15, W2), sweep_absorb (MSA15) and session_range_break (GS1). All are retired
+  arms, outside sr-v3 and H-102.
+- The values are those of the committed JSON. Families run 2026-11-26:
+  - ρ_u,day ≤ 60 min: gold 0.148, metals 0.137, FX10 0.062, pooled 0.054. The single families sweep_absorb and
+    session_range_break drive these; the pooled families read ≤ 0.022 and the grid ≤ 0.010. The bound open for the
+    quant is in docs/research/rho-measurement-2026-11.md section 2.
+  - Day-mean ρ_u,inst (≤ 60 min): FX10 0.443, pooled 0.397.
+  - Vs gold: XAG 0.885-1.0, FX10 0.256-0.350.
+  - τ_a, pooled body: 0.041 / 0.055 / 0.063 R, so λ_a = 820 / 441 / 341.
+- The shipped `rho_day_le_60m` stays 0.25.
+- The rev-3 ladder rows that assumed ρ_inst = 0.1 are void, and the ladder is recomputed mechanically at Stage 0.
+
+**R1 (quant, 2026-11-26).** The ρ_u,day family bound is the maximum over single families' upper 95 % CIs (as applied: gold 0.148, metals 0.137, FX10 0.062, pooled 0.054 at ≤ 60 min). The pooled-families estimate (≤ 0.022) is reported, not binding: pooling across families dilutes the within-family clustering the families are there to catch, and choosing it after the run would lower a bound post hoc. The bound is conservative: low-m families (about 1.7-1.9 candidates a day) give wide intervals, and the maximum over variants selects the noisiest. For measurements after 2026Q4 only (not this one), pre-registered now: a single family enters the maximum only when its cell has at least 2,000 within-day candidate pairs; below that it is reported, not binding. Horizons above 60 min keep the 0.25 floor (ADR 0085 Q1), whatever the family reads (0.155 / 0.169).
+
+**R2 (quant, 2026-11-26).** τ_a is the upper 95 % CI of the observed between-instrument SD of mean gross T2 R, with no sampling-noise correction (card 2.3 definition). Subtracting the per-instrument SE² would lower τ_a, raise λ_a and loosen the ladder after the result is seen. The uncorrected value overstates dispersion, which is conservative for the Riley gate. λ_a = 820 / 441 / 341 (≤ 60 min / 1-4 h / > 4 h, pooled-body row) is frozen by hash before Stage 0.
