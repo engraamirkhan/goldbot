@@ -38,18 +38,21 @@ def render(cfg: dict[str, Any], certs: list[D.Certificate]) -> str:
         "and sufficient data for models).", "",
         "Requirement (ML side, sr-v3 card rev 2): learn n_eff >= 430 per input (Riley, continuous outcome, shrinkage "
         f">= 0.9) for a {cfg['requirement']['inputs']}-input block; judge n_eff >= the A22 power row at keep share "
-        f"{cfg['requirement']['keep_share']}. Supply: the card's n_eff method (2.2) until the dense label factory "
-        "(D-5) measures each cell. A cell is SUFFICIENT only when the numbers meet the requirement AND no blocking "
+        f"{cfg['requirement']['keep_share']}. Supply: each unit states its method, one per cell for learn and judge "
+        "(`dense-skeleton`: D-5 measured n_eff, T2 core-12 after tier survival, outcome-blind skeleton counts; "
+        "`card-2.2`: the card's day-count method until the factory runs the unit). A cell with no usable graded rows "
+        "is NOT STARTED (data) (card 2.3). A cell is SUFFICIENT only when the numbers meet the requirement AND no blocking "
         "data item is open; `projected` is the verdict on the numbers alone. SHORT is never a conclusion: every SHORT "
         "cell names its gap, plan, owner and date.", "",
         "## Cells", "",
-        "| Cell | Verdict | Projected | Learn n_eff / need | Max inputs | Judge n_eff / need | First open item (due) |",
-        "|---|---|---|---|---|---|---|",
+        "| Cell | Method | Verdict | Projected | Learn n_eff / need | Max inputs | Judge n_eff / need | "
+        "First open item (due) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for c in certs:
         g = c.gaps[0] if c.gaps else None
         first = f"{g.item}: {g.gap} ({g.due})" if g else ""
-        lines.append(f"| {c.cell} | {c.verdict} | {c.projected} | {n(c.n_eff_learn)} / {c.need_train:,} | "
+        lines.append(f"| {c.cell} | {c.method} | {c.verdict} | {c.projected} | {n(c.n_eff_learn)} / {c.need_train:,} | "
                      f"{n(c.max_inputs)} | {n(c.n_eff_judge)} / {c.need_judge:,} | {first} |")
     lines += ["", "## Data items (sr-v3 card 9a) and date risk", "",
               "| Item | Gap | Plan | Owner | Due | Status | Risk |", "|---|---|---|---|---|---|---|"]
@@ -57,7 +60,8 @@ def render(cfg: dict[str, Any], certs: list[D.Certificate]) -> str:
         lines.append(f"| {k} | {d['gap']} | {d['plan']} | {d['owner']} | {d['due']} | {d['status']} | {d['risk']} |")
     lines += ["", "## Units", ""]
     for unit, u in cfg["units"].items():
-        lines.append(f"- `{unit}`: {u['label']}; learn {u['windows']['learn']}, judge {u['windows']['judge']}.")
+        lines.append(f"- `{unit}` ({D.unit_method(unit, u)}): {u['label']}; learn {u['windows']['learn']}, judge "
+                     f"{u['windows']['judge']}.")
     return "\n".join(lines) + "\n"
 
 
