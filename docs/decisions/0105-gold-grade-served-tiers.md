@@ -223,6 +223,22 @@ How each claim holds (2026-11-26):
   - `scripts/broker_m1_capture.py` makes the same copy from the Mac before any grade.
   - Until that PR is deployed, this claim is not live.
 
+**Capture guard requirements (quant, on #471, 2026-11-26).**
+- **Freeze rule.** A closed month freezes once its 5-day deadline passes. Any later rewrite gets a new sha256 and an
+  entry in that month's gap log (and in rewrites.jsonl), and is graded only under the sha recorded in its tiers rows.
+- **Gate.** No fallback-(ii) grade runs until `learning:broker_m1_capture` has passed at least once on the brain after
+  #471 is deployed.
+- **Deadline.** If #471 is not live by 2026-12-05, October and November are copied from the Mac by that date
+  (`scripts/broker_m1_capture.py`) and their sha256 are recorded in the D-1 status.
+- **Two checks.** #471 has two checks, so a late month copy cannot hide a missed day or the reverse:
+  - `learning:broker_m1_capture`, the daily capture. Weekends and CME metals full closures are never due.
+  - `learning:broker_m1_copy`, the month copy and its sums.
+- **Read-only replay before enabling (2026-11-26 03:39 UTC).** The daily-capture rule was replayed on the brain over
+  the last 20 due icm-demo session days (2026-10-29..2026-11-25):
+  - 0 false FAILs: 1,318-1,377 of 1,380 minutes, and the Mondays are 1,318.
+  - Thanksgiving 2026-11-26 was not yet due at the run. On Dukascopy, Thanksgiving 2024 held 1,286 minutes and the
+    day after 1,242, both well above the 828-minute line.
+
 **Reference account (quant K3, verbatim).** Reference for (ii): icm-demo (the traded ICM feed). Fixed 2026-11-26, before any grade. Vantage and icm-probe are not graded against Dukascopy for D-1. If icm-demo fails (a)-(c) in a month, that month grades C. There is no switch to another account.
 
 - Citation: MetaTrader 5 Help, "Charts" (metatrader5.com/en/terminal/help/charts_analysis/charts, fetched
