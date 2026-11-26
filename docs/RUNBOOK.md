@@ -2476,6 +2476,33 @@ the broker's) and the broker ledger (`broker_ledger`). The feed part:
   missed or late run, a short broker reply), one bridge call per day within 2 minutes per account. It is never
   graded. A failed call is tried again the next weekday run; nothing to do unless it repeats (check `bridge:<account>`).
 
+#### Broker M1 capture guard (D-1 fallback (ii), ADR 0105)
+
+The gold confirm forward window grades Dukascopy against icm-demo's own M1 (`bars_1m_broker`, filled daily by
+`feed_reconcile`). Two health checks guard it, and neither masks the other:
+
+* `learning:broker_m1_capture` **fail**: icm-demo holds fewer than 60 % of a due session day's 1,380 minutes. A day
+  is due from 23:50 UTC; weekends and CME metals full closures are never due. Recover on the brain:
+
+  ```
+  sudo -u goldbot sh -c 'cd /opt/goldbot && .venv/bin/python -m goldbot.ops.run m1-backfill icm-demo --days 3'
+  ```
+
+  then wait up to 15 min (the check caches its read). A day the terminal no longer serves stays missed: that month
+  grades C (ADR 0105 (ii)).
+* `learning:broker_m1_copy` **fail**: a closed month's copy in raw/broker_m1/icm-demo/ is missing more than 5 days
+  after month-end (the next `broker_m1_copy` run at 23:55 UTC on weekdays writes it), or a file no longer matches
+  SHA256SUMS (find out why before anything else: a closed month freezes at day 8 after month-end and any rewrite
+  after that is logged in rewrites.jsonl). A crash between the Parquet replace and the SHA256SUMS write leaves exactly
+  this mismatch: delete that month's file (`raw/broker_m1/icm-demo/icm-demo_m1_<YYYY-MM>.parquet`) and let the next
+  `broker_m1_copy` run rewrite it (after day 8 the rewrite is logged with its new sha256).
+* After a back-fill in days 6-7 of a new month (an `m1-backfill` that reaches the previous month), run
+  `broker_m1_copy` before day 8, so the frozen copy carries the back-filled minutes.
+* After a restore: raw/ is not in the backup. Rebuild raw/broker_m1 from the restored store by letting the job run, or
+  run `broker_m1_copy` by hand. A frozen month that is rewritten gets a new sha256 and a rewrites.jsonl entry, and a
+  grade uses only the sha recorded in its tiers rows. No fallback-(ii) grade reads a month before day 8
+  (`broker_capture.frozen_copy_for_grade` refuses).
+
 #### Broker M1 back-fill by hand (`m1-backfill`)
 
 The nightly discovered-arm read needs the broker's M1 to cover each decision's whole window (a 4h arm: about 42
