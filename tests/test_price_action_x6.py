@@ -3,13 +3,17 @@
 Pinned:
 - point in time: prefix invariance on every column at 1m, 15m, 4h and 1d (appending bars never changes a row);
 - bounded memory: the value at bar T built on only the last `column_lookback(column, tf)` bars equals the full-history
-  value EXACTLY, at many T, on a random walk and on a sparse-pivot trend; and the ADR 0104 truncation check
-  (`column_lookback.passes`) holds at the declared lookback on its 8-seed fixture;
+  value EXACTLY at every row T of a range covering every htf-bucket phase, on a random walk and on a weekday-clock
+  trend, at every tf (quant review of #484); and the ADR 0104 truncation check (`column_lookback.passes`, both
+  perturbations) holds at the declared lookback on its 8-seed fixture;
 - the registry declares exactly the structural bound (`structural_lookback`) for every column at every tf;
 - hand-worked rules (candle anatomy, structure state and break, level distance, room, break and retest);
 - opt-in wiring: default feature set unchanged, not NEEDS_STATE, signed columns registered.
 """
 from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -53,19 +57,72 @@ def test_no_column_changes_when_later_bars_are_appended(tf: str, n: int) -> None
 
 
 # --------------------------------------------------------------------------- bounded memory
-@pytest.mark.parametrize("tf,n", [("1m", 12000), ("15m", 2500), ("4h", 900), ("1d", 900)])
-@pytest.mark.parametrize("drift", [0.0, 0.25])
-def test_a_tail_of_the_declared_lookback_gives_the_full_history_value(tf: str, n: int, drift: float) -> None:
-    df = _walk(n, FREQ[tf], drift=drift, sd=0.6 if drift == 0 else 0.15)
-    full = _frame(df, tf)
-    rng = np.random.default_rng(5)
+FREQ_ALL = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1D",
+            "1w": "7D"}
+PATHS = ("walk", "trend")          # a random walk on a continuous clock; a trend on a weekday clock (weekend gaps)
+CHUNKS = 6                         # rows T per (tf, path) are split over this many cases (xdist)
+
+
+def _r(tf: str) -> int:
+    from goldbot.config import TF_SECONDS
+    return max(1, TF_SECONDS[X6.HTF] // TF_SECONDS[tf])
+
+
+def _span(tf: str) -> int:
+    """Rows T checked: one whole htf bucket plus a margin below 4h (every bucket phase, a weekend crossing on the
+    trend path), 60 rows at or above 4h."""
+    return 2 * _r(tf) + 12 if _r(tf) > 1 else 60
+
+
+def _path(tf: str, path: str) -> pd.DataFrame:
     longest = max(column_lookback(c, tf) for c in X6.COLUMNS)
-    for T in rng.integers(longest + 50, n, 6):
+    n = longest + _span(tf) + 5
+    if path == "walk":
+        return _walk(n, FREQ_ALL[tf], seed=21)
+    df = _walk(2 * n, FREQ_ALL[tf], seed=22, drift=0.08, sd=0.4)
+    if tf not in ("1d", "1w"):
+        df = df[pd.DatetimeIndex(df["ts_utc"]).dayofweek < 5]
+    return df.iloc[:n].reset_index(drop=True)
+
+
+_FULL: dict[tuple[str, str], tuple[pd.DataFrame, pd.DataFrame]] = {}
+
+
+def _full(tf: str, path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if (tf, path) not in _FULL:
+        df = _path(tf, path)
+        _FULL[(tf, path)] = (df, _frame(df, tf))
+    return _FULL[(tf, path)]
+
+
+def _tail_value(df: pd.DataFrame, T: int, L: int, column: str, tf: str) -> float:
+    part = df.iloc[T - L + 1:T + 1].reset_index(drop=True)
+    if column in X6.CANDLE_COLUMNS:
+        f = X6.candles_frame(part)
+    elif column in X6.STRUCTURE_COLUMNS:
+        f = X6.structure_frame(part)
+    else:
+        f = X6.levels_frame(part, tf)
+    return float(f[column].iloc[-1])
+
+
+@pytest.mark.parametrize("chunk", range(CHUNKS))
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("tf", TFS)
+def test_a_tail_of_the_declared_lookback_gives_the_full_history_value_at_every_phase(tf: str, path: str,
+                                                                                    chunk: int) -> None:
+    """Quant review of #484: every row T of a range covering every htf-bucket phase, two path types, every tf."""
+    df, full = _full(tf, path)
+    n = len(df)
+    rows = np.arange(n - _span(tf), n)
+    bad = []
+    for T in rows[chunk::CHUNKS]:
         for c in X6.COLUMNS:
             L = column_lookback(c, tf)
-            tail = _frame(df.iloc[T - L + 1:T + 1].reset_index(drop=True), tf)
-            a, b = float(full[c].iloc[T]), float(tail[c].iloc[-1])
-            assert (np.isnan(a) and np.isnan(b)) or a == b, f"{c}@{tf} T={T}: tail {b} != full {a}"
+            a, b = float(full[c].iloc[T]), _tail_value(df, int(T), L, c, tf)
+            if not ((np.isnan(a) and np.isnan(b)) or a == b):
+                bad.append((c, int(T), a, b))
+    assert not bad, f"{tf}/{path}: {len(bad)} tail != full, first {bad[:3]}"
 
 
 def test_registry_declares_the_structural_bound() -> None:
@@ -84,7 +141,7 @@ def test_declared_lookback_passes_the_adr_0104_truncation_check(column: str, tf:
     X6.enable()
     lb = column_lookback(column, tf)
     n = max(CL.N_BARS, lb + 2_000)
-    assert CL.passes(FEATURE_OF[column], column, lb, tf, n), f"{column}@{tf}: bars older than {lb} move it >= 1 %"
+    assert CL.passes(FEATURE_OF[column], column, lb, tf, n=n), f"{column}@{tf}: bars older than {lb} move it >= 1 %"
 
 
 # --------------------------------------------------------------------------- hand-worked rules
@@ -124,9 +181,9 @@ def test_structure_state_and_break() -> None:
 
 def test_level_distance_room_break_and_retest() -> None:
     # 4h bars: a swing high at 110 (5-bar fractal), price returns below it, breaks above, then retests it from above
-    path = [100, 102, 104, 106, 108, 110, 108, 106, 104, 102, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
+    path: list[float] = [100, 102, 104, 106, 108, 110, 108, 106, 104, 102, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
     path += [111, 113, 112, 110.1, 112, 114]
-    rows = [(c - 0.5, c + 0.5, c - 0.5, c) for c in path]
+    rows: list[tuple[float, float, float, float]] = [(c - 0.5, c + 0.5, c - 0.5, c) for c in path]
     rows[5] = (109.5, 110.5, 109.0, 110.0)                         # the pivot high is 110.5
     rows[23] = (112.0, 112.2, 110.4, 111.5)                        # retest: low into the area, close above it
     f = X6.levels_frame(_bars(rows), "4h")
@@ -163,3 +220,44 @@ def test_opt_in_wiring() -> None:
     assert "x6_io_bar" not in SIGNED and "x6_lv_dist_atr" not in SIGNED
     out = build_features(_walk(400, "15min"), names)            # a plain tail is accepted: bounded memory
     assert set(X6.COLUMNS) <= set(out.columns)
+
+
+# --------------------------------------------------------------------------- legitimacy (card rev 7, quant (1) on #484)
+SR_V3_MARKERS = ("sr-v3", "sr_v3", "srv3", "self_retrain_v3", "h-103")
+
+
+def _sr_v3_rows(path: Path) -> list[dict[str, Any]]:
+    import json
+
+    from goldbot.research import windows as WN
+    return [r for r in WN.read_ledger(path)
+            if any(m in json.dumps(r, sort_keys=True, default=str).lower() for m in SR_V3_MARKERS)]
+
+
+def _ledgers() -> list[Path]:
+    """The read-once ledger (`windows.READS_LEDGER`, beside the research registry) and the dl-v1 consumption rows,
+    which `dense_labels.consume` appends to the ledger it is given (that same file by default), plus any extra ledger
+    named in GOLDBOT_READ_LEDGERS (os.pathsep-separated; the ops VM sets it)."""
+    import os
+
+    from goldbot.research import windows as WN
+    from goldbot.research.catalogue.run import default_registry
+    out = [default_registry().with_name(WN.READS_LEDGER)]
+    out += [Path(p) for p in os.environ.get("GOLDBOT_READ_LEDGERS", "").split(os.pathsep) if p]
+    return out
+
+
+def test_no_sr_v3_label_read_exists_while_x6_is_an_amendment() -> None:
+    """Card rev 7: X6 is legitimate only if no sr-v3 label value or Stage 0/L statistic exists when it merges: the
+    dl-v1 consumption ledger and the read-once ledger hold no sr-v3 row. Fails otherwise (X6 then needs its own
+    card). A ledger that does not exist (CI) holds no row."""
+    for p in _ledgers():
+        rows = _sr_v3_rows(p)
+        assert not rows, f"{p}: {len(rows)} sr-v3 read/consumption rows exist: the X6 amendment is void"
+
+
+def test_the_legitimacy_guard_bites(tmp_path: Path) -> None:
+    p = tmp_path / "window_reads.jsonl"
+    p.write_text('{"type": "consumption", "id": "sr-v3/gold/1m/stage0", "columns": []}\n'
+                 '{"family": "model_zoo_fusion", "window": "learn", "key": "x"}\n')
+    assert len(_sr_v3_rows(p)) == 1

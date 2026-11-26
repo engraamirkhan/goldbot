@@ -267,10 +267,11 @@ def structural_lookback(column: str, tf: str) -> int:
     - ms_bos: events of the last BOS_DECAY bars, each reading its previous close and the pivots known one bar before:
       BOS_DECAY + MS_WINDOW.
     - lv_dist / lv_room: areas and ATR_htf from the last LV_WINDOW closed htf bars: LV_WINDOW at or above 4h (the row
-      closes its own htf bar), LV_WINDOW x r + 1 below (the row may be the first of a new bucket).
+      closes its own htf bar); (LV_WINDOW + 1) x r below: a row q bars into the open bucket needs the 30 closed buckets
+      whole plus those q bars, and a shorter tail cuts the oldest bucket partway (quant review of #484, measured).
     - lv_brk_state: events of the last LV_RETEST x r bars, each reading the areas then live (and breaks LV_RETEST x r
       bars before it, whose ATR window is shorter than LV_WINDOW): LV_RETEST + LV_WINDOW - 1 at or above 4h,
-      (LV_RETEST + LV_WINDOW) x r below."""
+      (LV_RETEST + LV_WINDOW + 1) x r below."""
     sec = TF_SECONDS[tf]
     hsec = TF_SECONDS[HTF]
     r = max(1, hsec // sec)
@@ -279,9 +280,9 @@ def structural_lookback(column: str, tf: str) -> int:
     if column in fixed:
         return fixed[column]
     if column in ("x6_lv_dist_atr", "x6_lv_room_net_atr"):
-        return LV_WINDOW if sec >= hsec else LV_WINDOW * r + 1
+        return LV_WINDOW if sec >= hsec else (LV_WINDOW + 1) * r
     if column == "x6_lv_brk_state":
-        return LV_RETEST + LV_WINDOW - 1 if sec >= hsec else (LV_RETEST + LV_WINDOW) * r
+        return LV_RETEST + LV_WINDOW - 1 if sec >= hsec else (LV_RETEST + LV_WINDOW + 1) * r
     raise KeyError(column)
 
 
@@ -307,7 +308,7 @@ def enable() -> list[str]:
         return list(NAMES)
     for name, fn, cols, lb in ((NAME_CANDLES, _f_candles, CANDLE_COLUMNS, 2),
                                (NAME_STRUCTURE, _f_structure, STRUCTURE_COLUMNS, MS_WINDOW + BOS_DECAY + 1),
-                               (NAME_LEVELS, _f_levels, LEVEL_COLUMNS, (LV_RETEST + LV_WINDOW) * 240)):
+                               (NAME_LEVELS, _f_levels, LEVEL_COLUMNS, (LV_RETEST + LV_WINDOW + 1) * 240)):
         signed = {k: v for k, v in SIGNED.items() if k in cols}
         feature(name, FAMILY, version=VERSION, lookback=lb, signed=signed)(fn)
     return list(NAMES)
