@@ -63,7 +63,7 @@ HTF = "4h"
 # The moment card rev 7 adopted X6 (the push that applied the #484 code review; recorded in ADR 0104's X6 amendment).
 # X6 is legitimate only if no sr-v3 label read or Stage 0/L statistic was recorded before it (card rev 7); sr-v3 rows
 # after it are the normal Stage 0 onward and never void the amendment.
-X6_ADOPTED_UTC = "2026-11-26T09:45:00+00:00"
+X6_ADOPTED_UTC = "2026-11-26T10:45:00+00:00"
 
 CANDLE_COLUMNS = ("x6_body_frac", "x6_clv", "x6_io_bar")
 STRUCTURE_COLUMNS = ("x6_ms_state", "x6_ms_bos")
