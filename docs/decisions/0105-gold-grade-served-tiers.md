@@ -132,4 +132,50 @@ minutes under (a)-(c). Same gates as the card. The read happens once, at the fir
 n_eff ≥ the card's judge requirement (counted from graded days only, never from labels); no interim reads. The holdout
 is never confirm."
 
+**(i)(b) as ruled (quant, 2026-11-26; verbatim, written before any full-year number is computed).** "(b) = per year,
+the share of identical 1m close-to-close changes, both series rounded to the coarser tick grid and clock-aligned by the
+documented converter, over minutes where at least one series moved; < 0.10 every year 2019-25. Valid only if the
+controls, computed first in the same run, give: HistData-vs-Dukascopy 2019-25 ≥ 0.50 each year, Dukascopy+37c synthetic
+≥ 0.90, HistData-vs-Dukascopy 2010-18 < 0.10 each year. If a 2010-18 year is ≥ 0.10, the bound becomes the 2010-18
+maximum. If a positive control fails, the candidate is not admitted. The 12-day sample (2026-11-25) is disclosed, not
+evidence. Price field, clock converter and coverage are fixed from source documentation before grading; single use."
+
+**12-day sample of 2026-11-25 (disclosed, not evidence).** Forexite, the 10th of each month (next weekday),
+2019-01..2025-09, 80 usable days. Yearly means:
+- (a), hour-ending exact-close share: 2019 0.000, 2020 0.040, 2021 0.018, 2022 0.015, 2023 0.025, 2024 0.025,
+  2025 0.073.
+- (b), identical changes counting minutes where both series are flat: 2019 0.145, 2020 0.076, 2021 0.062, 2022 0.055,
+  2023 0.096, 2024 0.067, 2025 0.051.
+- (b), counting only minutes where at least one series moved: 2019 0.094, 2020 0.061, 2021 0.048, 2022 0.043,
+  2023 0.076, 2024 0.056, 2025 0.046.
+- 1m return correlation with Dukascopy 0.91-0.96. Best shift -61 min in winter and -121 min in summer.
+
+**Forexite inputs, fixed from its documentation before measuring (2026-11-26).** Source: forexite.com
+free_forex_quotes, the archive pages forex_history_arhiv*.html (Russian; fetched 2026-11-26).
+- Price field: NOT DOCUMENTED for the files used. The archive lists three files per day:
+  - "ProSuite Bid" (`DDMMYY.xpo`);
+  - "ProSuite Trade" (`DDMMYYtr.xpo`);
+  - "MetaStock" (`DDMMYY.zip`), the ASCII 1m files measured here.
+
+  Only the two ProSuite files carry a stated field, and those are a binary Omega Research export ("ExportFormat5.1")
+  with no published layout. The ASCII MetaStock file's field (bid, mid or trade) is not stated anywhere on the site.
+- Clock: the archive header reads "Период, GMT+1" (period, GMT+1). DST is not mentioned. The converter used is
+  deterministic: local stamps are read as Europe/Berlin civil time (GMT+1, GMT+2 under EU summer time), converted to
+  UTC, then shifted by −1 min to turn a close stamp into an open stamp. This adds EU DST to the documented "GMT+1", as
+  the ruling specifies ("GMT+1/+2 with DST"), and the post-conversion r11 offset search must then find at most 1 min.
+- Coverage: one file per calendar day, Sundays included. Year coverage = the share of Dukascopy session days (each with
+  ≥ 60 % of its session minutes) on which Forexite holds ≥ 60 % of Dukascopy's minutes. A year is short below 0.95,
+  which tolerates floor(0.05 × ~250) = 12 missing days a year (2025: Jan-Sep, ~187 days, 9).
+- Tick grid: Forexite XAUUSD quotes 2 decimals (0.01). Dukascopy quotes 3 decimals. The coarser grid is 0.01, and the
+  HistData controls use the coarser of their own detected grid and Dukascopy's.
+
+- Rounding to the coarser grid uses integer arithmetic: each price becomes integer source points (round(price / own
+  tick)), then the coarser grid by round-half-up in integers. A constant price shift then moves every price by the same
+  number of ticks. Float rounding at half-ticks would not do that: a code dry run broke the +37c control that way.
+- Disclosure: before the script was committed, a development dry run on 2019 checked the code. It used the float
+  rounding that was later replaced, so it is not evidence. Its figures:
+  - Forexite 2019: coverage 1.00, r11 clock offset 0 min, (a) 0.009, (b*) 0.094;
+  - HistData-vs-Dukascopy: 2019 1.000, 2012 0.114;
+  - +37c synthetic 2019: 0.548, the rounding defect above.
+
 **Source choice (i):** not yet made.

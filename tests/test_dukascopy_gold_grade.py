@@ -183,3 +183,21 @@ def test_d13_cache_never_holds_a_sealed_day() -> None:
     out = np.frombuffer(lzma.decompress(R.cap(lzma.compress(rec.tobytes(), format=lzma.FORMAT_ALONE), 2025)),
                         dtype=R.REC)
     assert len(out) == 2
+
+
+def test_admission_grid_is_shift_invariant_and_b_star_counts_moved_minutes_only() -> None:
+    A = _load_research("gold_second_source_admission")
+    v = np.array([1300.125, 1300.135, 1300.145, 1300.155])
+    g0, g1 = A.on_grid(v, 0.001, 0.01), A.on_grid(v + 0.37, 0.001, 0.01)
+    assert (g1 - g0 == 37).all()
+    ts = pd.date_range("2019-03-04 10:00", periods=5, freq="min", tz="UTC")
+    x = pd.Series([1300.00, 1300.00, 1300.01, 1300.03, 1300.03], index=ts)
+    y = pd.Series([1300.00, 1300.00, 1300.01, 1300.02, 1300.03], index=ts)
+    share, moved = A.b_star(x, y, 0.01)
+    assert moved == 3 and abs(share - 1 / 3) < 1e-12           # the flat-flat minute is not counted
+
+
+def test_forexite_converter_is_berlin_time_minus_one_minute() -> None:
+    A = _load_research("gold_second_source_admission")
+    t = A.forexite_to_utc(pd.Series(pd.to_datetime(["2019-01-10 12:01", "2019-07-10 12:01"])))
+    assert [str(x) for x in t] == ["2019-01-10 11:00:00+00:00", "2019-07-10 10:00:00+00:00"]
