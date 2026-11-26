@@ -344,6 +344,17 @@ def _measured_learn(u: dict[str, Any]) -> list[int | None] | None:
     return None if row is None else [None if v is None else int(v) for v in row]
 
 
+def members(cfg: dict[str, Any], rows: dict[str, Any]) -> list[list[int | None]]:
+    """A pooled body's member rows; a string "unit.key" points at a unit's measured row (one source of truth)."""
+    out = []
+    for v in rows.values():
+        if isinstance(v, str):
+            unit, key = v.split(".", 1)
+            v = cfg["units"][unit]["measured"][key]
+        out.append([None if x is None else int(x) for x in v])
+    return out
+
+
 def supply(cfg: dict[str, Any]) -> dict[str, dict[str, tuple[int | None, int | None]]]:
     """unit -> tf -> (learn, judge) for the consumer table. Learn is the dl-v1 MEASURED T2 core-6 n_eff where the unit
     has it (the judged head, tier survival and input lookback applied), else the contract's card count; B units load
@@ -366,8 +377,8 @@ def supply(cfg: dict[str, Any]) -> dict[str, dict[str, tuple[int | None, int | N
         out[unit] = row
     for name, pdef in (cfg.get("pooled") or {}).items():
         rho = float(pdef["rho_inst"])
-        lrn = pooled_supply(list(pdef["learn_members"].values()), rho)
-        jdg = pooled_supply(list(pdef["judge_members"].values()), rho)
+        lrn = pooled_supply(members(cfg, pdef["learn_members"]), rho)
+        jdg = pooled_supply(members(cfg, pdef["judge_members"]), rho)
         out[f"pooled_{name}"] = {tf: (lrn[i], jdg[i]) for i, tf in enumerate(tfs)}
     return out
 
@@ -387,12 +398,12 @@ def routes(cfg: dict[str, Any]) -> list[Route]:
         if "pooled" in gf:
             pdef = cfg["pooled"][gf["pooled"]]
             rho = float(gf.get("rho", pdef["rho_inst"]))
-            lrn = pooled_supply(list(pdef["learn_members"].values()), rho)
-            jdg = pooled_supply(list(pdef["judge_members"].values()), rho)
+            lrn = pooled_supply(members(cfg, pdef["learn_members"]), rho)
+            jdg = pooled_supply(members(cfg, pdef["judge_members"]), rho)
             if "base_pooled_rho" in gf:
                 b = float(gf["base_pooled_rho"])
-                bl = pooled_supply(list(pdef["learn_members"].values()), b)
-                bj = pooled_supply(list(pdef["judge_members"].values()), b)
+                bl = pooled_supply(members(cfg, pdef["learn_members"]), b)
+                bj = pooled_supply(members(cfg, pdef["judge_members"]), b)
                 for i, tf in enumerate(tfs):
                     gain[f"pooled_{gf['pooled']}/{tf}"] = max(0, (lrn[i] or 0) - (bl[i] or 0))
                     gain[f"pooled_{gf['pooled']}/{tf}:judge"] = max(0, (jdg[i] or 0) - (bj[i] or 0))
@@ -447,4 +458,4 @@ def consumers(cfg: dict[str, Any]) -> list[Consumer]:
 
 __all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
            "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
-           "consumers", "inherit", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
+           "consumers", "inherit", "members", "pooled_supply", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]

@@ -2833,7 +2833,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 566,
+   "residual_learn": 567,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -2896,7 +2896,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3336,
+   "residual_learn": 3337,
    "residual_judge": 956,
    "max_inputs_after": 2
   },
@@ -3461,7 +3461,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 6057,
+   "n_eff_learn": 6056,
    "n_eff_judge": 3243,
    "need_train": 4300,
    "need_judge": 1109,
@@ -3480,7 +3480,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4410,
+   "n_eff_learn": 4409,
    "n_eff_judge": 2414,
    "need_train": 4300,
    "need_judge": 1109,
@@ -3499,11 +3499,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 2834,
+   "n_eff_learn": 2833,
    "n_eff_judge": 1598,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1466,
+   "short_learn": 1467,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3511,18 +3511,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 758,
+   "residual_learn": 759,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 2276,
+   "short_learn": 2277,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3530,7 +3530,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1770,
+   "residual_learn": 1771,
    "residual_judge": 0,
    "max_inputs_after": 5
   },
@@ -3575,11 +3575,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 36,
+   "n_eff_learn": 35,
    "n_eff_judge": 122,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 4264,
+   "short_learn": 4265,
    "short_judge": 987,
    "status": "SHORT",
    "routes": [
@@ -3587,7 +3587,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4264,
+   "residual_learn": 4265,
    "residual_judge": 956,
    "max_inputs_after": 0
   },
@@ -3779,7 +3779,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1616,
+   "residual_learn": 1617,
    "residual_judge": 956,
    "max_inputs_after": 2
   },
@@ -4344,7 +4344,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 6057,
+   "n_eff_learn": 6056,
    "n_eff_judge": 3243,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4363,7 +4363,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4410,
+   "n_eff_learn": 4409,
    "n_eff_judge": 2414,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4382,7 +4382,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 2834,
+   "n_eff_learn": 2833,
    "n_eff_judge": 1598,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4401,11 +4401,11 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 556,
+   "short_learn": 557,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -4413,7 +4413,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 50,
+   "residual_learn": 51,
    "residual_judge": 0,
    "max_inputs_after": 5
   },
@@ -4458,11 +4458,11 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 36,
+   "n_eff_learn": 35,
    "n_eff_judge": 122,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2544,
+   "short_learn": 2545,
    "short_judge": 987,
    "status": "SHORT",
    "routes": [
@@ -4470,7 +4470,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2544,
+   "residual_learn": 2545,
    "residual_judge": 956,
    "max_inputs_after": 0
   },
@@ -4577,7 +4577,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 410,
+   "residual_learn": 411,
    "residual_judge": 0,
    "max_inputs_after": 11
   },
@@ -4599,7 +4599,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1426,
+   "residual_learn": 1427,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -4662,7 +4662,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4196,
+   "residual_learn": 4197,
    "residual_judge": 956,
    "max_inputs_after": 2
   },
@@ -5227,7 +5227,7 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 6057,
+   "n_eff_learn": 6056,
    "n_eff_judge": 3243,
    "need_train": 5160,
    "need_judge": 1109,
@@ -5246,11 +5246,11 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4410,
+   "n_eff_learn": 4409,
    "n_eff_judge": 2414,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 750,
+   "short_learn": 751,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5265,11 +5265,11 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 2834,
+   "n_eff_learn": 2833,
    "n_eff_judge": 1598,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2326,
+   "short_learn": 2327,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5277,18 +5277,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1618,
+   "residual_learn": 1619,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 3136,
+   "short_learn": 3137,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5296,7 +5296,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2630,
+   "residual_learn": 2631,
    "residual_judge": 0,
    "max_inputs_after": 5
   },
@@ -5341,11 +5341,11 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 36,
+   "n_eff_learn": 35,
    "n_eff_judge": 122,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 5124,
+   "short_learn": 5125,
    "short_judge": 987,
    "status": "SHORT",
    "routes": [
@@ -5353,7 +5353,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5124,
+   "residual_learn": 5125,
    "residual_judge": 956,
    "max_inputs_after": 0
   },
@@ -5394,7 +5394,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 13466,
+   "residual_learn": 13467,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -5457,7 +5457,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 16236,
+   "residual_learn": 16237,
    "residual_judge": 956,
    "max_inputs_after": 2
   },
@@ -5694,11 +5694,11 @@
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 17200,
    "need_judge": 1109,
-   "short_learn": 15176,
+   "short_learn": 15177,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5706,7 +5706,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 14670,
+   "residual_learn": 14671,
    "residual_judge": 0,
    "max_inputs_after": 5
   },
@@ -5751,11 +5751,11 @@
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 36,
+   "n_eff_learn": 35,
    "n_eff_judge": 122,
    "need_train": 17200,
    "need_judge": 1109,
-   "short_learn": 17164,
+   "short_learn": 17165,
    "short_judge": 987,
    "status": "SHORT",
    "routes": [
@@ -5763,7 +5763,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 17164,
+   "residual_learn": 17165,
    "residual_judge": 956,
    "max_inputs_after": 0
   },
@@ -5807,7 +5807,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1502,
+   "residual_learn": 1503,
    "residual_judge": 0,
    "max_inputs_after": 21
   },
@@ -5829,7 +5829,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3766,
+   "residual_learn": 3767,
    "residual_judge": 183,
    "max_inputs_after": 16
   },
@@ -5851,7 +5851,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 6000,
+   "residual_learn": 6001,
    "residual_judge": 1247,
    "max_inputs_after": 11
   },
@@ -5873,7 +5873,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7016,
+   "residual_learn": 7017,
    "residual_judge": 1722,
    "max_inputs_after": 8
   },
@@ -6339,11 +6339,11 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 6057,
+   "n_eff_learn": 6056,
    "n_eff_judge": 3243,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 4693,
+   "short_learn": 4694,
    "short_judge": 85,
    "status": "SHORT",
    "routes": [
@@ -6351,18 +6351,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3179,
+   "residual_learn": 3180,
    "residual_judge": 0,
    "max_inputs_after": 17
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4410,
+   "n_eff_learn": 4409,
    "n_eff_judge": 2414,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 6340,
+   "short_learn": 6341,
    "short_judge": 914,
    "status": "SHORT",
    "routes": [
@@ -6370,18 +6370,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5238,
+   "residual_learn": 5239,
    "residual_judge": 310,
    "max_inputs_after": 12
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 2834,
+   "n_eff_learn": 2833,
    "n_eff_judge": 1598,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 7916,
+   "short_learn": 7917,
    "short_judge": 1730,
    "status": "SHORT",
    "routes": [
@@ -6389,18 +6389,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7208,
+   "residual_learn": 7209,
    "residual_judge": 1331,
    "max_inputs_after": 8
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 8726,
+   "short_learn": 8727,
    "short_judge": 2095,
    "status": "SHORT",
    "routes": [
@@ -6408,7 +6408,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 8220,
+   "residual_learn": 8221,
    "residual_judge": 1787,
    "max_inputs_after": 5
   },
@@ -6689,7 +6689,7 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4410,
+   "n_eff_learn": 4409,
    "n_eff_judge": 2414,
    "need_train": 0,
    "need_judge": 200,
@@ -6708,7 +6708,7 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2024,
+   "n_eff_learn": 2023,
    "n_eff_judge": 1233,
    "need_train": 0,
    "need_judge": 200,
@@ -6811,18 +6811,18 @@
    "gain": {
     "gold/1m": 2922,
     "gold/1m:judge": 3838,
-    "gold/5m": 2211,
+    "gold/5m": 2210,
     "gold/5m:judge": 2851,
-    "gold/15m": 1703,
+    "gold/15m": 1702,
     "gold/15m:judge": 2122,
-    "gold/30m": 1191,
+    "gold/30m": 1190,
     "gold/30m:judge": 1405,
-    "gold/1h": 957,
+    "gold/1h": 956,
     "gold/1h:judge": 1084,
     "gold/2h:judge": 542,
     "gold/4h": 240,
     "gold/4h:judge": 216,
-    "gold/1d": 36,
+    "gold/1d": 35,
     "gold/1d:judge": 107,
     "gold/1w:judge": 54
    },
@@ -6835,8 +6835,8 @@
    "due": "2026-12-04",
    "status": "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)",
    "pr": "",
-   "counted": 21479,
-   "per_day": 9665.6
+   "counted": 21474,
+   "per_day": 9663.3
   },
   {
    "id": "D-14",

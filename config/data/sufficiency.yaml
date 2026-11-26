@@ -119,8 +119,8 @@ pooled:
     rho_inst: 0.5
     serves: [gold]          # once A2 pools gold into this body, the body's route gains reach gold's cells
     learn_members:
-      XAUUSD: [5226, 3847, 2708, 1644, 1068, null, 123, 0, 0]
-      EURUSD: [6996, 5239, 3907, 2607, 1968, null, 422, 36, 0]
+      XAUUSD: gold.learn_T2_core6
+      EURUSD: fx10.EURUSD_learn_T2_core6
     judge_members:
       XAUUSD: [527, 392, 292, 193, 149, 74, 30, 15, 7]
       FX10_card_split: [6021, 4473, 3330, 2204, 1701, 850, 340, 169, 85]
