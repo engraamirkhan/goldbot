@@ -5,6 +5,28 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-26 ADR 0106 lane 3, reproducibility and model quality (ADR 0109). Every training run can now record one
+  immutable run manifest (`goldbot/research/run_manifest.py`, `models/manifests/<sha256>.json`). It holds the data
+  version and per-file sha256, the settings and their hash, the seeds, the git HEAD and whether the tree was clean, the
+  uv.lock hash, the runtime, the train end, the scaler fit end (refused if after the train end), the artifact sha256,
+  the builder, the results and the quality verdicts.
+  - Trainer hook, one call: `run_manifest.fit_and_record("pkg.mod:build", ...)` or `run_manifest.record(artifact=...)`;
+    quality verdicts from `model_quality.seed_stability`, `param_shift` and `beats_baseline` go in `quality=[...]`.
+  - Rebuild: `uv run python scripts/research/rebuild_model.py <manifest id | registry version> --repo <clean
+    checkout at code_sha> --data-root <dir>`; exit 0 identical, 1 different bytes, 2 refused (lock, dirty tree, other
+    commit, changed data, no builder). Tested byte-identical on a tiny LightGBM and a tiny sklearn MLP.
+  - Serving rule: `ModelRegistry.champion_models` and `shadow_models` leave out (and log) a fitted model created on or
+    after 2026-11-27 without a manifest that passes `model_quality.require_servable`: a clean tree, a passing
+    `seed_stability` over at least 5 of its own seeds, no failed verdict, and, for families A/B/D, a passing paired
+    after-cost win over a C-family manifest. Older fitted entries and rule models serve as before.
+  - Monthly walk-forward: scheduler job `monthly_walkforward` on the 1st at 04:30 UTC calls
+    `model_quality.monthly_trainers` (empty today: the run says nothing was refit) and never promotes.
+  - `python -m goldbot.ops.run rollback-model <agent_id> [--reason TEXT]` restores the previous champion; it refuses
+    when there is none or when that one would not serve.
+  - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
+    and seq hook PRs add it under trading-safety review.
+  - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart
+    registers `job:monthly_walkforward`.
 - 2026-11-26 Column lookbacks: two perturbations and a locked read ledger. This is the quant sign-off follow-up of #472
   and must land before the A4 unseal.
   - Lookbacks: each declared column lookback is now the larger of two truncation tests: (i) a continuous 3×-vol path,

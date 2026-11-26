@@ -483,3 +483,41 @@ findings:
     source: cycle 2026-11-26 06:21 UTC health (FAIL job:broker_m1_copy, learning:broker_m1_copy after the 35da0698 deploy);
       repo unit fixed in fix/scheduler-raw-write, the brain needs the unit drop-in + scheduler restart (deploy does not reinstall units)
     check: {fn: manual, params: {}}
+
+  # ---------------------------------------------------------------- ADR 0106 lane 3 (reproducibility and model quality)
+  - id: GM2-SEED-STABILITY
+    title: Every served fitted model is stable across at least 5 seeds (all seeds on the pooled edge's side)
+    owner: ml-researcher
+    severity: medium
+    due: 2026-12-15
+    source: ADR 0106 goal "results stable across at least 5 random seeds", gap map 2026-11-26 GM2/OT5; rule in code
+      (model_quality.seed_stability, ADR 0109); closes when IF-1 and IF-2 record their verdicts through run_manifest
+    check: {fn: manual, params: {}}
+
+  - id: GM3-PARAM-SHIFT
+    title: Every promoted strategy stays net positive at -20/-10/+10/+20 % of each declared parameter
+    owner: quant-reviewer
+    severity: medium
+    due: 2026-12-15
+    source: ADR 0106 goal "strategy stays profitable when parameters are shifted slightly", gap map GM3; read in code
+      (model_quality.param_shift, grid fixed before reading); closes when the trainers' reports carry the read
+    check: {fn: manual, params: {}}
+
+  - id: GM7-REBUILD-FROM-LOGS
+    title: Any past model can be rebuilt byte-identical from its run manifest
+    owner: ml-researcher
+    severity: high
+    due: 2026-12-15
+    source: ADR 0106 decision 7 and goal "any past model can be rebuilt exactly from logs", gap map GM7/OT7/OT4;
+      run_manifest + scripts/research/rebuild_model.py (ADR 0109); closes when the first sr-v3 and seq artifacts rebuild
+      identical through the script
+    check: {fn: manual, params: {}}
+
+  - id: GO1-MONTHLY-WALKFORWARD
+    title: The monthly walk-forward refit of record runs on the 1st with run manifests; any model change is reversible
+    owner: ml-researcher
+    severity: medium
+    due: 2027-01-03
+    source: ADR 0106 decision 7 and goal "retraining on a fixed schedule, every change reversible", gap map GO1/OT2/A5;
+      job monthly_walkforward + rollback-model (ADR 0109); closes on the first 1st-of-month run that records manifests
+    check: {fn: manual, params: {}}

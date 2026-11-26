@@ -135,6 +135,10 @@
                     edge decays is demoted -> aux.db self_retrain_runs / self_retrain_models; one registry row per judged
                     (broker, arm), written before any status change (sr-v2).
                     Places nothing: the engine does not read these tables yet.
+* monthly_walkforward monthly, the 1st at 04:30 UTC (ADR 0106 decision 7, research/monthly_walkforward.py): each
+                    model_quality.monthly_trainers entry refits on data before 00:00 UTC that day and records its run
+                    manifests (models/manifests/); a failed trainer or a manifest past the window fails the job after
+                    every trainer ran. Never promotes, restores or changes a model's status.
 """
 from __future__ import annotations
 
@@ -2101,6 +2105,14 @@ def self_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             "capped_days": len(capped), "hold": hold, "k_rows": k_rows, "k_ok": k_ok, "health": f"{status.upper()}: {reason}"}
 
 
+def monthly_walkforward(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """The 1st of the month (ADR 0106 decision 7; research/monthly_walkforward.py): every configured trainer refits on
+    data before 00:00 UTC that day and records its run manifests in models/manifests/. Never promotes."""
+    from goldbot.research import monthly_walkforward as mwf
+    return mwf.run(slot, trainers=ctx.settings.model_quality.monthly_trainers,
+                   manifests_root=Path(ctx.settings.research.models_dir) / "manifests")
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -2136,6 +2148,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "news_coverage": news_coverage,               # BACKLOG 212: news collector coverage readout + outage dq_events
     "discovery_nightly": discovery_nightly,       # ADR 0090: bounded, power-gated G2 discovery in a niced child
     "self_retrain": self_retrain,                 # owner 2026-11-24: Sunday per-arm meta-label filter retrain + gate
+    "monthly_walkforward": monthly_walkforward,   # ADR 0106: monthly walk-forward refit of record, manifests, no promotion
 }
 
 
