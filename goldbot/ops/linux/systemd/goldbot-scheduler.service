@@ -14,7 +14,7 @@ Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data /opt/goldbot/models /var/lib/goldbot
+ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data /opt/goldbot/models /opt/goldbot/raw /var/lib/goldbot
 PrivateTmp=true
 
 [Install]
