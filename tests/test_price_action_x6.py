@@ -12,6 +12,8 @@ Pinned:
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -95,15 +97,27 @@ def _full(tf: str, path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     return _FULL[(tf, path)]
 
 
-def _tail_value(df: pd.DataFrame, T: int, L: int, column: str, tf: str) -> float:
+def _tail_frame(df: pd.DataFrame, T: int, L: int, name: str, tf: str) -> pd.DataFrame:
     part = df.iloc[T - L + 1:T + 1].reset_index(drop=True)
-    if column in X6.CANDLE_COLUMNS:
-        f = X6.candles_frame(part)
-    elif column in X6.STRUCTURE_COLUMNS:
-        f = X6.structure_frame(part)
-    else:
-        f = X6.levels_frame(part, tf)
-    return float(f[column].iloc[-1])
+    if name == X6.NAME_CANDLES:
+        return X6.candles_frame(part)
+    if name == X6.NAME_STRUCTURE:
+        return X6.structure_frame(part)
+    return X6.levels_frame(part, tf)
+
+
+def _tail_values(df: pd.DataFrame, T: int, tf: str) -> dict[str, float]:
+    """The value at T of every X6 column from a tail of its own declared lookback, building each feature once per
+    distinct lookback (the level columns share one build where their lookbacks agree)."""
+    out: dict[str, float] = {}
+    groups: dict[tuple[str, int], list[str]] = {}
+    for c in X6.COLUMNS:
+        groups.setdefault((FEATURE_OF[c], column_lookback(c, tf)), []).append(c)
+    for (name, L), cols in groups.items():
+        f = _tail_frame(df, T, L, name, tf)
+        for c in cols:
+            out[c] = float(f[c].iloc[-1])
+    return out
 
 
 @pytest.mark.parametrize("chunk", range(CHUNKS))
@@ -117,9 +131,9 @@ def test_a_tail_of_the_declared_lookback_gives_the_full_history_value_at_every_p
     rows = np.arange(n - _span(tf), n)
     bad = []
     for T in rows[chunk::CHUNKS]:
+        tail = _tail_values(df, int(T), tf)
         for c in X6.COLUMNS:
-            L = column_lookback(c, tf)
-            a, b = float(full[c].iloc[T]), _tail_value(df, int(T), L, c, tf)
+            a, b = float(full[c].iloc[T]), tail[c]
             if not ((np.isnan(a) and np.isnan(b)) or a == b):
                 bad.append((c, int(T), a, b))
     assert not bad, f"{tf}/{path}: {len(bad)} tail != full, first {bad[:3]}"
@@ -223,15 +237,29 @@ def test_opt_in_wiring() -> None:
 
 
 # --------------------------------------------------------------------------- legitimacy (card rev 7, quant (1) on #484)
-SR_V3_MARKERS = ("sr-v3", "sr_v3", "srv3", "self_retrain_v3", "h-103")
+# a ledger row is an sr-v3 row when its family, id or key (not free text such as `ref`) names sr-v3 or H-103
+SR_V3_FIELD = re.compile(r"(sr[-_]?v3|self_retrain_v3|h-103)([/_:.\- ]|$)", re.IGNORECASE)
+SR_V3_FIELDS = ("family", "id", "key")
 
 
-def _sr_v3_rows(path: Path) -> list[dict[str, Any]]:
-    import json
+def _is_sr_v3(row: dict[str, Any]) -> bool:
+    return any(isinstance(row.get(f), str) and SR_V3_FIELD.match(row[f]) for f in SR_V3_FIELDS)
 
+
+def _before_adoption(row: dict[str, Any]) -> bool:
+    """Dated before X6_ADOPTED_UTC; a row with no parseable `ts` counts as before (fail closed)."""
+    try:
+        ts = pd.Timestamp(row["ts"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return bool(ts < pd.Timestamp(X6.X6_ADOPTED_UTC))
+
+
+def _void_rows(path: Path) -> list[dict[str, Any]]:
     from goldbot.research import windows as WN
-    return [r for r in WN.read_ledger(path)
-            if any(m in json.dumps(r, sort_keys=True, default=str).lower() for m in SR_V3_MARKERS)]
+    return [r for r in WN.read_ledger(path) if _is_sr_v3(r) and _before_adoption(r)]
 
 
 def _ledgers() -> list[Path]:
@@ -247,17 +275,30 @@ def _ledgers() -> list[Path]:
     return out
 
 
-def test_no_sr_v3_label_read_exists_while_x6_is_an_amendment() -> None:
-    """Card rev 7: X6 is legitimate only if no sr-v3 label value or Stage 0/L statistic exists when it merges: the
-    dl-v1 consumption ledger and the read-once ledger hold no sr-v3 row. Fails otherwise (X6 then needs its own
-    card). A ledger that does not exist (CI) holds no row."""
+def test_no_sr_v3_label_read_existed_when_x6_was_adopted() -> None:
+    """Card rev 7: X6 is legitimate only if no sr-v3 label value or Stage 0/L statistic existed when it was adopted
+    (X6_ADOPTED_UTC, ADR 0104 X6 amendment): no sr-v3 row of the dl-v1 consumption ledger or the read-once ledger is
+    dated before it. Later sr-v3 rows (Stage 0 onward) pass. A missing ledger (CI) holds no row."""
     for p in _ledgers():
-        rows = _sr_v3_rows(p)
-        assert not rows, f"{p}: {len(rows)} sr-v3 read/consumption rows exist: the X6 amendment is void"
+        rows = _void_rows(p)
+        assert not rows, f"{p}: {len(rows)} sr-v3 rows dated before X6 was adopted: the X6 amendment is void"
 
 
-def test_the_legitimacy_guard_bites(tmp_path: Path) -> None:
+def test_the_legitimacy_guard_fails_on_an_earlier_row_and_passes_a_later_one(tmp_path: Path) -> None:
+    t0 = pd.Timestamp(X6.X6_ADOPTED_UTC)
+    rows = [
+        {"type": "consumption", "id": "sr-v3/gold/1m/stage0", "columns": [], "ts": (t0 - pd.Timedelta("1s")).isoformat()},
+        {"family": "self_retrain_v3", "window": "learn", "key": "sr-v3/gold/15m/stage0",
+         "ts": (t0 + pd.Timedelta("1h")).isoformat()},
+        {"family": "model_zoo_fusion", "window": "learn", "key": "x", "ts": (t0 - pd.Timedelta("1d")).isoformat(),
+         "ref": {"note": "compare with sr-v3 and H-103"}},                     # free text never matches
+        {"family": "h-1031", "window": "learn", "key": "y", "ts": (t0 - pd.Timedelta("1d")).isoformat()},
+        {"type": "consumption", "id": "sr_v3:gold", "columns": []},              # no ts: counts as before
+    ]
     p = tmp_path / "window_reads.jsonl"
-    p.write_text('{"type": "consumption", "id": "sr-v3/gold/1m/stage0", "columns": []}\n'
-                 '{"family": "model_zoo_fusion", "window": "learn", "key": "x"}\n')
-    assert len(_sr_v3_rows(p)) == 1
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    void = _void_rows(p)
+    assert [r.get("id") or r.get("key") for r in void] == ["sr-v3/gold/1m/stage0", "sr_v3:gold"]
+    later = tmp_path / "later.jsonl"
+    later.write_text(json.dumps(rows[1]) + "\n")
+    assert _void_rows(later) == []
