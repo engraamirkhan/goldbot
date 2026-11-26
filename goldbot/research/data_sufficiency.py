@@ -83,6 +83,7 @@ class Certificate(FrozenRecord):
     max_inputs: int | None
     gaps: tuple[Gap, ...] = ()
     requirement: dict[str, Any]
+    method: str = ""             # how learn and judge were counted (one method per cell: quant A3 on PR #482)
 
     def health_line(self) -> str:
         def f(x: int | None) -> str:
@@ -98,7 +99,7 @@ class Certificate(FrozenRecord):
 
 
 def certify(req: Requirement, n_eff_learn: int | None, n_eff_judge: int | None, gaps: Sequence[Gap],
-            projected: str | None = None) -> Certificate:
+            projected: str | None = None, method: str = "") -> Certificate:
     """SUFFICIENT when the learn n_eff carries the planned inputs, the judge n_eff meets the power row and no open
     item blocks; an unmeasured window is SHORT (its gap: measure it). `gaps`: the cell's open data items, most urgent
     first; non-blocking ones are listed but do not hold the certificate."""
@@ -112,14 +113,38 @@ def certify(req: Requirement, n_eff_learn: int | None, n_eff_judge: int | None, 
                        projected=projected or ("SUFFICIENT" if enough else "SHORT"), n_eff_learn=n_eff_learn,
                        n_eff_judge=n_eff_judge, need_train=need_t, need_judge=need_j,
                        max_inputs=None if n_eff_learn is None else n_eff_learn // RILEY_PER_PARAM,
-                       gaps=tuple(gaps), requirement=req.model_dump(mode="json"))
+                       gaps=tuple(gaps), requirement=req.model_dump(mode="json"), method=method)
 
 
+METHODS = ("dense-skeleton", "card-2.2")
+NOT_STARTED_DATA = "NOT STARTED (data)"
 RHO_INST = 0.5            # card 2.2: pooled classes divide by 1 + (k - 1) rho, so pooling adds at most 1 / rho
 
 
 def _gap(item: str, d: dict[str, Any], blocks: bool = True) -> Gap:
     return Gap(item=item, gap=d["gap"], plan=d["plan"], owner=str(d["owner"]), due=str(d["due"]), blocks=blocks)
+
+
+def unit_method(unit: str, u: dict[str, Any]) -> str:
+    """The unit's counting method (quant A3 on PR #482, verbatim: "Every unit's yaml row states its method (`method:
+    dense-skeleton | card-2.2`), and the renderer refuses a cell whose learn and judge methods differ."). `method` is
+    one name, or {learn: ..., judge: ...} naming the same one."""
+    m = u.get("method")
+    if isinstance(m, dict):
+        if m.get("learn") != m.get("judge"):
+            raise ValueError(f"{unit}: learn is counted by {m.get('learn')!r} and judge by {m.get('judge')!r}: one "
+                             "method per cell (quant A3)")
+        m = m.get("learn")
+    if m not in METHODS:
+        raise ValueError(f"{unit}: method {m!r} is not one of {METHODS} (quant A3)")
+    return str(m)
+
+
+def _at(values: list[Any] | None, i: int) -> int | None:
+    """One tf's supply: None (the whole row, or this tf: not measurable, e.g. 2h with no bar rule) or an int."""
+    if values is None or values[i] is None:
+        return None
+    return int(values[i])
 
 
 def certificates(cfg: dict[str, Any]) -> list[Certificate]:
@@ -128,14 +153,15 @@ def certificates(cfg: dict[str, Any]) -> list[Certificate]:
     req0 = cfg["requirement"]
     out = []
     for unit, u in cfg["units"].items():
+        method = unit_method(unit, u)
         daily_only = u.get("tiers_kept") == "B"
         for i, tf in enumerate(cfg["tfs"]):
             req = Requirement(cell=f"{unit}/{tf}", unit=unit, tf=tf, inputs=int(req0["inputs"]),
                               keep_share=float(req0["keep_share"]), objective=req0["objective"],
                               label_templates=req0["label_templates"])
             ul, uj = unit_rows(cfg, unit)
-            learn = None if ul is None else ul[i]
-            judge = None if uj is None else uj[i]
+            learn = _at(ul, i)
+            judge = _at(uj, i)
             gaps = [_gap(k, cfg["items"][k]) for k in [*cfg.get("tf_items", {}).get(tf, []), *u["items"]]]
             projected: str | None = None
             if daily_only and TF_SECONDS.get(tf, 0) < TF_SECONDS["1d"]:
@@ -147,7 +173,17 @@ def certificates(cfg: dict[str, Any]) -> list[Certificate]:
                                    "source to lift these months, D-13 graded instruments; this unit serves 1d/1w",
                                    owner="data-engineer", due="2026-12-09"))
             need = req.n_train()
-            if learn is not None and learn and learn / RHO_INST < need:
+            if learn == 0 and projected is None:
+                # quant A1 on PR #482 (verbatim): "`learn == 0` (measured, no usable graded rows under ADR 0104 §4):
+                # projected `NOT STARTED (data)`, gap item `NO-ROWS` 'no usable graded rows under ADR 0104 §4 for
+                # the column set', plan 'D-1 (ii), D-13, D-14; re-assessed at each monthly regrade (card 2.3)', no
+                # POOL or INFEASIBLE item."
+                projected = NOT_STARTED_DATA
+                gaps.insert(len(cfg.get("tf_items", {}).get(tf, [])), Gap(
+                    item="NO-ROWS", gap="no usable graded rows under ADR 0104 §4 for the column set",
+                    plan="D-1 (ii), D-13, D-14; re-assessed at each monthly regrade (card 2.3)",
+                    owner="data-engineer", due="next monthly regrade"))
+            elif learn is not None and learn and learn / RHO_INST < need:
                 bound = int(learn / RHO_INST)
                 k = learn // RILEY_PER_PARAM
                 projected = projected or "INFEASIBLE"
@@ -169,7 +205,7 @@ def certificates(cfg: dict[str, Any]) -> list[Certificate]:
                                 "instruments (D-13)", owner="quant-reviewer + data-engineer", due="2026-12-11"))
             if u.get("ungraded_projection") and projected is None:
                 projected = str(u["ungraded_projection"])          # quant C2: gold before D-1
-            out.append(certify(req, learn, judge, gaps, projected))
+            out.append(certify(req, learn, judge, gaps, projected, method))
     return out
 
 
@@ -380,19 +416,19 @@ def pooled_supply_by_tf(rows: Sequence[Sequence[int | None]], rho: Sequence[floa
     return out
 
 
-def unit_rows(cfg: dict[str, Any], unit: str) -> tuple[list[int] | None, list[int] | None]:
+def unit_rows(cfg: dict[str, Any], unit: str) -> tuple[list[int | None] | None, list[int | None] | None]:
     """A unit's learn and judge rows; a card-pooled unit (`card_pooled: {k, rho_inst, rho_inst_from}`) is re-divided
     at the D-12 binding rho of its membership and bucket: x (1 + (k-1) rho_card) / (1 + (k-1) rho_measured)."""
     u = cfg["units"][unit]
-    learn = None if u["learn"] is None else [int(v) for v in u["learn"]]
-    judge = None if u["judge"] is None else [int(v) for v in u["judge"]]
+    learn = None if u["learn"] is None else [None if v is None else int(v) for v in u["learn"]]
+    judge = None if u["judge"] is None else [None if v is None else int(v) for v in u["judge"]]
     cp = u.get("card_pooled")
     if cp:
         k, r0 = int(cp["k"]), float(cp["rho_inst"])
         m = measured_rho(cfg, cp["rho_inst_from"])
         f = [(1 + (k - 1) * r0) / (1 + (k - 1) * m[tf]) for tf in cfg["tfs"]]
-        learn = None if learn is None else [int(v * f[i]) for i, v in enumerate(learn)]
-        judge = None if judge is None else [int(v * f[i]) for i, v in enumerate(judge)]
+        learn = None if learn is None else [None if v is None else int(v * f[i]) for i, v in enumerate(learn)]
+        judge = None if judge is None else [None if v is None else int(v * f[i]) for i, v in enumerate(judge)]
     return learn, judge
 
 
@@ -504,6 +540,6 @@ def consumers(cfg: dict[str, Any]) -> list[Consumer]:
     return [Consumer(id=k, **{**v, "tfs": tuple(v["tfs"])}) for k, v in (cfg.get("consumers") or {}).items()]
 
 
-__all__ = ["POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
+__all__ = ["METHODS", "NOT_STARTED_DATA", "unit_method", "POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
            "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
            "consumers", "hold_bucket", "inherit", "measured_rho", "members", "pooled_supply", "pooled_supply_by_tf", "unit_rows", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
