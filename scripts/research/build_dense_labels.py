@@ -50,9 +50,13 @@ def _first_year(inst: str, raw: Path) -> int:
     return min(have)
 
 
-def _fs_key(fs_cache: Path, m: pd.DataFrame, inst: str, tf: str, year: int, phase: int) -> str | None:
-    """The fs-v1 partition key the current minutes give (`feature_store.cache_key`), if that partition is on disk."""
-    key = F.cache_key(m, instrument=inst, tf=tf, year=year, phase=phase)
+def _fs_key(fs_cache: Path, m: pd.DataFrame, htf: dict[str, pd.DataFrame], inst: str, tf: str, year: int,
+            phase: int) -> str | None:
+    """The fs-v1 partition key `feature_store.build_year` gives these minutes and context bars (same span, same cut of
+    the context bars), if that partition is on disk."""
+    span = F.year_span(m, tf, year, F.SPEC)
+    cut = {k: v[F._ns(v["visible_at"]) <= span.hi.value].reset_index(drop=True) for k, v in htf.items()}
+    key = F._key(span, cut, instrument=inst, tf=tf, year=year, spec=F.SPEC, phase=phase)[0]
     d = Path(fs_cache) / F.SPEC.spec_id / inst / tf / f"p{phase}" / str(year)
     return key if (d / f"{key[:24]}.json").exists() else None
 
@@ -77,7 +81,7 @@ def job(inst: str, tf: str, years: list[int], until: int, phases: list[int], raw
             t = time.perf_counter()
             rows = F.build_year(m, instrument=inst, tf=tf, year=y, cache_dir=fsc, htf=htf, phase=ph)
             fs_s = time.perf_counter() - t
-            fs_key = _fs_key(fsc, m, inst, tf, y, ph)
+            fs_key = _fs_key(fsc, m, htf, inst, tf, y, ph)
             if fs_key is None:              # skip this partition, report it; never abort the run
                 recs.append({**base, "skipped": "no fs-v1 manifest under the current data key"})
                 continue

@@ -16,16 +16,20 @@ units:
     learn: [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88]
     judge: [527, 392, 292, 193, 149, 74, 30, 15, 7]
     items: [D-1, D-2, D-3, D-4, D-5gold]
-    # D-5 measured (dl-v1, ADR 0104, 2026-11-26): card 2.2 n_eff on measured uniqueness, phase 0, `tfs` order (2h: no
-    # bar rule). tiered_T2 = judged head after tier survival under the D-1 served tiers (sha256 ff653ea7, PR #467;
-    # not yet recorded in ADR 0085 A4, so the label store stays sealed; counts are outcome-blind). learn/judge above
-    # stay the card projection until #467 is on main and A4 records the sha. test_old labels: sealed, counts only.
+    # D-5 measured (dl-v1, ADR 0104 4 as fixed by the quant on 2026-11-26): card 2.2 n_eff on measured uniqueness,
+    # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
+    # ff653ea7) with the input lookback of each column set (registry lookbacks, d1 context for P30's d1_slope_ema20).
+    # Outcome-blind skeleton counts; the label store stays sealed until ADR 0085 A4 records the sha. learn/judge above
+    # stay the D-1 count until then. test_old labels: sealed, counts only.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_tiered_T2: [5234, 3932, 2956, 1990, 1531, null, 335, 79, 0]
+      learn_T2_core6: [5231, 3889, 2784, 1758, 1184, null, 169, 0, 0]
+      learn_T2_core12: [5231, 3889, 2784, 1758, 1184, null, 169, 0, 0]
+      learn_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_untiered: [7338, 5523, 4179, 2851, 2271, null, 604, 298, 208]
-      test_old_tiered_T2: [159, 118, 85, 53, 38, null, 1, 0, 0]
+      test_old_T2_core6: [159, 108, 65, 26, 0, null, 0, 0, 0]
+      test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
   fx10:
@@ -34,11 +38,14 @@ units:
     learn: [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
     judge: [10948, 8133, 6056, 4009, 3094, 1547, 619, 309, 155]
     items: [D-2, D-3, D-4, D-5fx]
-    # D-5 measured (dl-v1, 2026-11-26): EURUSD alone, same method and tiers as gold. Bid-only: barrier labels need N7.
+    # D-5 measured (dl-v1, ADR 0104 4): EURUSD alone, same method, tiers and column sets as gold. Bid-only: barrier
+    # labels need N7 before a judged read.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_tiered_T2: [6998, 5267, 3983, 2709, 2130, null, 545, 220, 61]
+      EURUSD_learn_T2_core6: [6997, 5254, 3932, 2640, 2021, null, 455, 69, 0]
+      EURUSD_learn_T2_core12: [6997, 5254, 3932, 2640, 2021, null, 455, 69, 0]
+      EURUSD_learn_T2_P30: [2505, 1885, 1426, 972, 770, null, 203, 8, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:
     label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"
