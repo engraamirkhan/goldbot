@@ -125,7 +125,8 @@ def test_p30_is_sr_v2_inputs_minus_the_cost_and_dead_d1_columns() -> None:
     rest = [c for c in SR.INPUTS if c not in V.DROPPED_COST and c not in V.DROPPED_D1]
     assert len(V.P30) == 30 and set(V.P30) == set(rest)
     assert list(V.P30_REST) == [c for c in SR.FEATURES if c in V.P30_REST]
-    assert V.CORE_6 == ("side", "tsmom_score", "dist_vwap48_atr", "atr_ratio_14_100", "er_30", "bb_z_20")
+    assert V.CORE_6 == ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20")
+    assert "atr_ratio_14_100" in V.P30_REST and V.P30_REST[0] == "atr_ratio_14_100", "quant ruling 2026-11-26"
 
 
 def test_constants_are_pinned() -> None:

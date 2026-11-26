@@ -3,7 +3,7 @@ cost per fold, Stage 0 reads no label, the learner reports, deterministic v0 art
 sealed-store refusal, and train/serve parity of the L-cw export."""
 from __future__ import annotations
 
-import json
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +24,7 @@ RHO_FILE = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
 
 
 def _frame(inst: str, year: int, *, tf: str = "4h", seed: int = 0, signal: float = 0.25) -> pd.DataFrame:
-    rng = np.random.default_rng(hash((inst, year, seed)) % 2**32)
+    rng = np.random.default_rng(zlib.crc32(f"{inst}|{year}|{seed}".encode()))     # stable across processes
     days = pd.bdate_range(f"{year}-01-01", f"{year}-12-31", tz="UTC")
     bars = pd.DatetimeIndex([d + pd.Timedelta(hours=h) for d in days for h in (2, 10, 18)])
     n = len(bars)
@@ -134,7 +134,59 @@ def test_stage0_reads_no_label_column() -> None:
     assert s0.rho["gold"].source_sha256 == V.file_sha256(RHO_FILE)
 
 
+REV8_CORE12 = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16", "ret_96",
+               "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
+
+
+def _sequenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every precondition of the quant sequencing as it will stand on main: A4 sha, X6 merged instant, rev 8 order."""
+    from goldbot.features import price_action_x6 as X6
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({"a" * 64}))
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", "2026-11-26T11:30:53Z")
+    monkeypatch.setattr(D, "CORE12", REV8_CORE12)
+
+
+def test_the_trainer_core_order_is_card_rev_8_with_rv_ratio_at_position_4() -> None:
+    assert V.CORE_12 == REV8_CORE12 and V.CORE_6 == REV8_CORE12[:6]
+    assert "atr_ratio_14_100" in V.P30_REST and "rv_ratio" not in V.P30_REST
+
+
+def test_no_label_or_stage0_read_while_x6_merged_utc_is_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant sequencing on #482 (binding): no sr-v3 label value or Stage 0 statistic until #482, #484, rev 8 and
+    X6_MERGED_UTC are all on main. The store itself refuses, so no caller can read around the CLI."""
+    from goldbot.features import price_action_x6 as X6
+
+    def boom(*a: object, **k: object) -> None:
+        raise AssertionError("a label was read before the sequencing held")
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    monkeypatch.setattr(D, "load_labels", boom)
+    monkeypatch.setattr(D, "skeleton", boom)
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    with pytest.raises(T.SequencingRefused, match="X6_MERGED_UTC"):
+        store.frame("XAUUSD", "4h", 2013)
+    with pytest.raises(T.SequencingRefused, match="X6_MERGED_UTC"):
+        store.events("XAUUSD", "4h", (2010, 2011))
+
+
+def test_each_missing_sequencing_step_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from goldbot.features import price_action_x6 as X6
+    _sequenced(monkeypatch)
+    assert T.sequencing_gaps() == []
+    monkeypatch.setattr(D, "CORE12", (*REV8_CORE12[:3], "atr_ratio_14_100", *REV8_CORE12[4:]))
+    assert any("rev 8" in g for g in T.sequencing_gaps())
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset())
+    assert T.sequencing_gaps() == ["ADR 0085 A4 tiers sha (PR #482)"]
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    assert len(T.sequencing_gaps()) == 1 and "X6_MERGED_UTC" in T.sequencing_gaps()[0]
+
+
 def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sequenced(monkeypatch)
+
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("Stage 0 read a label")
     monkeypatch.setattr(D, "load_labels", boom)
@@ -151,6 +203,7 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
     def sealed(*a: object, **k: object) -> None:
         seen.update(k)
         raise D.SealedStore("sealed")
+    _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", sealed)
     store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers)
     monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
@@ -158,6 +211,8 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
         store.frame("XAUUSD", "4h", 2013)
     assert seen["window"] == T.WN.SPANS[T.WN.Window.LEARN] and seen["purpose"] == "train"
     assert seen["columns"] == V.P30 and seen.get("booked_read") is None
+    assert seen["years"] == list(V.LEARN_YEARS), "one ledgered load per instrument x tf for every learn year (#482)"
+    assert seen["procedure"] == "sr-v3", "the consumption row names sr-v3, so the X6 legitimacy guard sees it"
 
 
 # ---------------------------------------------------------------------------------------------- the unit fit
@@ -165,8 +220,7 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
 def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
     data, plan = _data(), _plan()
     col = T.collect(data, plan, seed=T.SEEDS[0])
-    hb = {Y: T.hb_fit(col.hb[Y], {k: col.impute[[V.P30.index(c) for c in T.HB_COLUMNS]] for k in col.hb[Y]},
-                      dict.fromkeys(col.hb[Y], plan.design_effect), {"4h": plan.lam_a}) for Y in col.hb}
+    hb = T.hb_from_plans(data, [plan], seed=T.SEEDS[0])
     return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000)
 
 
@@ -186,12 +240,16 @@ def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple)
 
 def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitted: tuple) -> None:
     r = fitted[2].report
-    assert len(r["seed_stability"]["G-cw"]["net_r_per_day"]) == len(T.SEEDS) >= 5
+    for name in ("L-cw", "G-cw", "HB", "AVG"):
+        assert len(r["seed_stability"][name]["detail"]["seeds"]) == len(T.SEEDS) >= 5
+    assert r["seed_stability"]["L-cw"]["detail"]["seed_invariant"]
     h = r["harness"]
     assert set(h["canaries"]) == {"L-cw", "HB", "G-cw"} and len(h["canaries"]["L-cw"]) == 3
-    assert any(c["recovered"] for c in h["canaries"]["L-cw"])
-    assert {"lambda x0.8", "lambda x1.25"} <= set(h["parameter_shift"]["L-cw"])
-    assert {"learning_rate x0.8", "num_iterations x1.25", "min_child_share x0.8"} <= set(h["parameter_shift"]["G-cw"])
+    assert all(set(c) == {"delta", "s_model", "s_oracle", "s_null", "recovered"} for c in h["canaries"]["L-cw"])
+    ps = h["parameter_shift"]
+    assert ps["L-cw"]["check"] == "param_shift" and len(ps["L-cw"]["detail"]["grid"]) == 8
+    assert {g["param"] for g in ps["G-cw"]["detail"]["grid"]} == {"learning_rate", "num_iterations", "min_child_share"}
+    assert {g["shift"] for g in ps["HB"]["detail"]["grid"]} == {-0.2, -0.1, 0.1, 0.2}
     assert all("auc_in_band" in v for v in h["shuffle"].values())
     assert len(h["seed_s"]["G-cw"]) == 5 and h["learning_curve_lcw"][-1]["n"] == h["train_rows"]
     assert "XAUUSD" in r["levels"] and set(r["levels"]["XAUUSD"]) == {"shrunk", "unshrunk"}
@@ -200,30 +258,48 @@ def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitt
 
 def test_v0_artifacts_are_deterministic_and_load(fitted: tuple) -> None:
     data, plan, res = fitted
-    again = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], harness_rows=5_000)
+    again = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
     for k in ("L-cw", "B8", "G-cw", "D-40"):
         assert res.report["artifacts"][k] == again.report["artifacts"][k]
         assert isinstance(L.load_artifact(res.artifacts[k]), (L.LcwArtifact, L.GcwArtifact, L.DenseArtifact))
     assert "AVG" in res.artifacts and "HB" in res.artifacts
 
 
-def test_any_model_rebuilds_byte_exactly_from_its_run_log(fitted: tuple, tmp_path: Path) -> None:
-    data, _, res = fitted
-    d = T.write_unit(res, tmp_path)
-    log = json.loads((d / "run_log.json").read_text())
-    assert {"data", "settings", "seeds", "code", "artifacts", "results"} <= set(log)
-    out = T.rebuild(log, data)
-    assert out["match"], out
+def test_every_v0_artifact_is_recorded_with_its_quality_and_rebuilds_byte_exactly(fitted: tuple,
+                                                                                   tmp_path: Path) -> None:
+    from goldbot.research import run_manifest as RM
+    data, plan, res = fitted
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version=data.manifest()[
+        "frames_sha256"], data_root=tmp_path, data_files=[frames.name], hb_plans=[plan], root=tmp_path / "manifests")
+    assert set(mans) == set(res.artifacts)
+    g = mans["G-cw"]
+    assert g.family == "C" and g.builder == T.BUILDER and len(g.seeds) == 5 and g.data_files[frames.name]
+    assert {q.check for q in g.quality} == {"seed_stability", "param_shift"}
+    for name in ("L-cw", "HB", "AVG"):
+        bb = [q for q in mans[name].quality if q.check == "beats_baseline"]
+        assert bb and bb[0].detail["baseline_manifest_id"] == g.manifest_id
+    assert mans["L-cw"].train_end <= pd.Timestamp("2018-01-01", tz="UTC")
+    assert RM.load(g.manifest_id, tmp_path / "manifests") == g
+    spec = RM.BuildSpec(data_files={frames.name: str(frames)}, settings=g.settings, seeds=g.seeds,
+                        train_end=g.train_end, scaler_fit_end=g.scaler_fit_end)
+    for name in ("G-cw", "HB"):
+        m = mans[name]
+        got = RM.build(T.BUILDER, spec.model_copy(update={"settings": m.settings}))
+        assert RM.sha256_bytes(got) == m.artifact_sha256, name
+
+
+def test_rebuild_from_changed_data_gives_other_bytes(fitted: tuple, tmp_path: Path) -> None:
+    data, plan, res = fitted
     bumped = dict(data.frames)
-    bumped[("XAUUSD", "4h", 2016)] = bumped[("XAUUSD", "4h", 2016)].assign(gross=lambda f: f["gross"] + 0.01)
-    with pytest.raises(ValueError, match="data version"):
-        T.rebuild(log, T.FrameData(bumped))
-    assert (d / "report.md").read_text().startswith("# sr-v3 training report: unit 4h")
+    bumped[("XAUUSD", "4h", 2016)] = bumped[("XAUUSD", "4h", 2016)].assign(gross=lambda f: f["gross"] + 0.5)
+    other = T.fit_unit(T.FrameData(bumped), plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    assert other.report["artifacts"]["L-cw"] != res.report["artifacts"]["L-cw"]
 
 
 def test_intercept_only_unit_serves_level_minus_cost() -> None:
     data, plan = _data(), _plan(cols=())
-    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], harness_rows=5_000)
+    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
     a = L.load_artifact(res.artifacts["L-cw"])
     assert isinstance(a, L.LcwArtifact) and a.columns == () and set(a.levels) == {"XAUUSD", "EURUSD"}
     assert "intercept-only" in T.report_md(res.report)
@@ -260,12 +336,17 @@ def test_hook_needs_are_listed_for_the_trading_safety_review() -> None:
     assert any("fails open" in n for n in S.ENGINE_HOOK_NEEDS)
 
 
-def test_the_cli_refuses_to_run_before_block_x6_merges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_cli_refuses_to_run_until_the_sequencing_holds(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib.util
+
+    from goldbot.features import price_action_x6 as X6
     spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    monkeypatch.setattr(mod, "X6_MODULE", tmp_path / "absent.py")
-    with pytest.raises(SystemExit, match="X6"):
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    with pytest.raises(SystemExit, match="X6_MERGED_UTC"):
         mod.refuse_before_x6()
+    _sequenced(monkeypatch)
+    mod.refuse_before_x6()                              # every precondition on main: no refusal

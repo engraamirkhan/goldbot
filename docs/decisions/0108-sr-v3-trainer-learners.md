@@ -43,9 +43,20 @@ read.
    everything (it never refuses), and `sr_v3_serve.gross_row` gives ĝ with score_row's own operations. Nothing gates:
    sr-v3 is not in GATE_SPECS. The hook needs are listed in `sr_v3_serve.ENGINE_HOOK_NEEDS` for the trading-safety
    PR (card M2).
-7. **Refusals.** Labels are read only through `load_labels` on the learn window. The CLI refuses to run, Stage 0
-   included, until goldbot/features/price_action_x6.py is in the checkout (the quant's X6 ordering). X6 is the last
-   block of the served order.
+7. **Run record.** There is no trainer-owned run log. `record_unit` writes one research/run_manifest.py manifest
+   (PR #494, ADR 0109) per v0 artifact. Each carries model_quality verdicts:
+   - seed_stability over 5 seeds (L-cw and HB are closed forms and are marked seed-invariant);
+   - param_shift on the ±10 % / ±20 % grid;
+   - beats_baseline against the G-cw manifest.
+   The builder is `sr_v3_train.build_artifact`, so `run_manifest.rebuild` refits any model byte for byte.
+8. **Core-12** follows the quant ruling of 2026-11-26: rv_ratio is position 4 and atr_ratio_14_100 moves to the rest
+   of P30. The D-12a file has no ρ_x for rv_ratio, so the ladder charges it at ρ_x = 1 until the data team measures it.
+9. **Refusals.** Labels are read only through `load_labels` on the learn window, with procedure `sr-v3` so every
+   read is a consumption row the X6 legitimacy guard sees. The quant sequencing on #482 is binding: "no sr-v3
+   label-value read until all three are on main: (1) #484 merged; (2) its one-line follow-up sets `X6_MERGED_UTC`;
+   (3) the rev 8 card amendment (rv_ratio replacing atr_ratio_14_100 in core order) merged". The store checks it at
+   every label read and every Stage 0 event read (`sequencing_gaps`, `SequencingRefused`), not only the CLI, so no
+   caller reads around it. X6 is the last block of the served order.
 
 ## Consequences
 - The first real run needs A4 recorded (#482), X6 merged (#484), the dl-v1 and fs-v1 stores built under the current

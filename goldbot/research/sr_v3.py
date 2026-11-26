@@ -78,7 +78,9 @@ LEVELS: tuple[tuple[str, int], ...] = (("L1", 40), ("L2", 12), ("L3", 6))
 MAX_INPUTS = 40
 
 # ---------------------------------------------------------------------------------------------- columns (3.1)
-CORE_12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "atr_ratio_14_100", "er_30", "bb_z_20",
+# quant ruling 2026-11-26 (label-blind, before any sr-v3 read): core-12 position 4 is rv_ratio, replacing
+# atr_ratio_14_100, which moves to the rest of P30 in its 3.1 position, at every timeframe (card rev 8 follows)
+CORE_12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20",
                             "ret_16", "ret_96", "donchian_pos_20", "adx14", "compression_8_96",
                             "min_since_london_open")
 CORE_6: tuple[str, ...] = CORE_12[:6]
@@ -87,7 +89,8 @@ CORE_6: tuple[str, ...] = CORE_12[:6]
 DROPPED_COST: tuple[str, ...] = ("em_atr_cost", "em_yz_4_cost", "em_yz_16_cost", "em_yz_48_cost", "spread_atr",
                                  "spread_rel_median_48", "tick_count_z_48", "tick_vol_ratio_20")
 DROPPED_D1: tuple[str, ...] = ("d1_atr_ratio_14_100", "d1_rv_ratio")
-P30_REST: tuple[str, ...] = ("atr14_pct", "rv_ratio", "vol_ts_yz_20_60", "vol_of_vol_60", "jump_z", "bars_since_jump",
+P30_REST: tuple[str, ...] = ("atr_ratio_14_100", "atr14_pct", "vol_ts_yz_20_60", "vol_of_vol_60", "jump_z",
+                             "bars_since_jump",
                              "vol_tercile", "hour_utc", "dow", "min_since_newyork_open", "session_id", "ret_4",
                              "slope_ema50", "dist_ema50_atr", "rsi14", "sess_high_dist_atr", "sess_low_dist_atr",
                              "d1_slope_ema20")

@@ -6,16 +6,17 @@
 
 Phases: (1) per unit, in parallel: Stage 0 from the outcome-blind skeleton and weights, then one streamed pass over
 learn 2010-17 (moments, priors, the thinned tree sample); (2) HB, one solve per fold over every unit's (tf, class)
-cells; (3) per unit, in parallel: the fold fits, OOF scoring, v0 artifacts, the report and the run log. Outputs go to
+cells; (3) per unit, in parallel: the fold fits, OOF scoring, v0 artifacts, the report and one run manifest per
+artifact (research/run_manifest.py; rebuild with scripts/research/rebuild_model.py). Outputs go to
 --out (default ~/tmp/sr-v3, outside the repo: market-derived, never committed, ADR 0048): <unit>/stage0.json,
-report.md, report.json, run_log.json, oof.parquet and one JSON artifact per learner; index.json and index.md.
+report.md, report.json, oof.parquet, manifests/ and one JSON artifact per learner; index.json and index.md.
 
 Refusals, by design:
 - labels are read only through dense_labels.load_labels on the learn window: a sealed store (ADR 0085 A4 not recorded,
   PR #482) raises SealedStore and the run stops;
-- quant ordering 2026-11-26: block X6 (PR #484) is legitimate only if no sr-v3 label value or Stage 0 statistic exists
-  when it merges, so this script refuses to run (Stage 0 included) until goldbot/features/price_action_x6.py is in the
-  checked-out code.
+- quant sequencing 2026-11-26 (binding): no sr-v3 label value or Stage 0 statistic until #482 (A4), #484 (X6), the
+  rev 8 rv_ratio amendment and price_action_x6.X6_MERGED_UTC are all on main; `refuse_before_x6` checks each and the
+  script refuses to run (Stage 0 included) while any is missing.
 """
 from __future__ import annotations
 
@@ -36,18 +37,21 @@ from goldbot.research import sr_v3 as V
 from goldbot.research import sr_v3_train as T
 
 ROOT = Path(__file__).resolve().parents[2]
-X6_MODULE = ROOT / "goldbot" / "features" / "price_action_x6.py"
 RHO = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
 
 
 def refuse_before_x6() -> None:
-    if not X6_MODULE.exists():
-        raise SystemExit("refused: quant ordering 2026-11-26 - no sr-v3 label value or Stage 0 statistic may exist before "
-                         "block X6 (PR #484) merges; goldbot/features/price_action_x6.py is not in this checkout")
+    """Quant sequencing (binding, 2026-11-26): no sr-v3 label value or Stage 0 statistic before #482 (A4), #484 (X6),
+    the rev 8 rv_ratio amendment and price_action_x6.X6_MERGED_UTC are all on main. The store refuses each read on its
+    own (`sr_v3_train.refuse_unsequenced`); this stops the run before any phase starts."""
+    if gaps := T.sequencing_gaps():
+        raise SystemExit("refused: quant sequencing 2026-11-26 - no sr-v3 label value or Stage 0 statistic until all "
+                         "are on main: " + "; ".join(gaps))
 
 
 def _store(a: argparse.Namespace) -> T.StoreData:
-    return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers))
+    return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
+                       ledger=Path(a.ledger))
 
 
 def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
@@ -140,8 +144,17 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if not (out / "collected.json").exists():
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
-    res = T.fit_unit(_store(a), _plan(out), hb_by_fold=hb, col=load_collected(out))   # type: ignore[arg-type]
+    store, plan = _store(a), _plan(out)
+    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out))   # type: ignore[arg-type]
     T.write_unit(res, Path(a.out))
+    hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
+    tiers = Path(a.tiers)
+    mans = T.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
+                         source={"kind": "store", "labels": str(a.labels), "features": str(a.features),
+                                 "tiers_file": tiers.name},
+                         data_root=tiers.parent, data_files=[tiers.name], hb_plans=hb_plans,
+                         root=Path(a.out) / "manifests")
+    res.report["manifests"] = {k: m.manifest_id for k, m in mans.items()}
     return {"unit": unit, "status": "fit", "artifacts": res.report.get("artifacts"),
             "s": {k: v.get("read", {}).get("s") for k, v in res.report.get("learners", {}).items()}}
 
@@ -154,6 +167,8 @@ def main() -> int:
     ap.add_argument("--features", default=str(Path.home() / "tmp" / "feature-store"))
     ap.add_argument("--tiers", default=str(ROOT / "raw" / "tiers" / "tiers_served_r11-v2.1.csv"))
     ap.add_argument("--rho", default=str(RHO))
+    ap.add_argument("--ledger", default=str(ROOT / "state" / "window_reads.jsonl"),
+                    help="the read-once / consumption ledger load_labels appends to (#482)")
     ap.add_argument("--out", default=str(T.OUT))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage0-only", action="store_true")

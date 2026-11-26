@@ -24,9 +24,10 @@ What it does per judged unit (1m, 5m, 15m, 30m, 1h, 2h, 4h, and 1d+1w pooled), o
    within-instrument IC and AUC (diagnostic), score deciles, the N6 shuffle check and the oracle canaries, seed
    stability over `SEEDS` (5), the parameter-shift check, the learning curve, half-split sign agreement, the train-to-
    OOF gap, gold's shrunk and unshrunk levels and v0's keep share on 2015-17 (the H1 breaker reference).
-6. **Run log** (ADR 0106: "any past model can be rebuilt exactly from logs"): data version (partition keys, tiers,
-   D-12 and weights hashes), settings, seeds, code sha (git HEAD and blob hashes of the trainer's modules) and
-   results; `rebuild` refits v0 from a log and compares every sha.
+6. **Run record** (ADR 0106 decision 7, ADR 0109): `record_unit` writes one research/run_manifest.py manifest per v0
+   artifact (data version and file shas, settings, seeds, code sha, train end, results, the model_quality verdicts:
+   seed_stability over 5 seeds, param_shift, beats_baseline against the G-cw manifest), with `build_artifact` as the
+   builder, so `run_manifest.rebuild` / scripts/research/rebuild_model.py refit any model byte for byte.
 
 Labels are read only through `dense_labels.load_labels` on the learn window (`StoreData`). Until ADR 0085 A4 records
 the tiers sha (PR #482) it raises SealedStore and nothing here works around it. Never confirm, test_old or the holdout.
@@ -60,6 +61,42 @@ OUT = Path.home() / "tmp" / "sr-v3"                 # market-derived outputs sta
 MAX_TREE_ROWS = 2_000_000
 SEEDS: tuple[int, ...] = tuple(V.SEED_CANARY + i for i in range(5))      # ADR 0106: >= 5 seeds
 CANARY_DELTAS: tuple[float, ...] = (0.03, 0.05, 0.10)
+
+
+class SequencingRefused(PermissionError):
+    """An sr-v3 label value or Stage 0 statistic was asked for before the quant sequencing holds."""
+
+
+def sequencing_gaps() -> list[str]:
+    """Quant sequencing on #482 (binding, 2026-11-26): "no sr-v3 label-value read until all three are on main: (1) #484
+    merged; (2) its one-line follow-up sets `X6_MERGED_UTC`; (3) the rev 8 card amendment (rv_ratio replacing
+    atr_ratio_14_100 in core order) merged", with #482 (ADR 0085 A4) before any read. Returns what is still missing;
+    empty means the store may be read. The trainer's core order must also equal dense_labels' (one card 3.1 order)."""
+    import importlib
+
+    from goldbot.research import dense_labels as D
+    gaps = []
+    if not D.RECORDED_TIERS_SHA256:
+        gaps.append("ADR 0085 A4 tiers sha (PR #482)")
+    try:
+        x6 = importlib.import_module("goldbot.features.price_action_x6")
+    except ImportError:
+        gaps.append("block X6 (PR #484): goldbot/features/price_action_x6.py")
+    else:
+        if getattr(x6, "X6_MERGED_UTC", None) is None:
+            gaps.append("price_action_x6.X6_MERGED_UTC is unset (the one-line follow-up after rev 8 merges)")
+    if D.CORE12[3:4] != ("rv_ratio",):
+        gaps.append("the rev 8 amendment: dense_labels.CORE12 position 4 is not rv_ratio")
+    if tuple(D.CORE12) != V.CORE_12:
+        gaps.append("sr_v3.CORE_12 differs from dense_labels.CORE12 (card 3.1 has one core order)")
+    return gaps
+
+
+def refuse_unsequenced(what: str) -> None:
+    """Raise `SequencingRefused` naming every gap while `sequencing_gaps` is not empty."""
+    if gaps := sequencing_gaps():
+        raise SequencingRefused(f"refused {what}: quant sequencing 2026-11-26, no sr-v3 label value or Stage 0 "
+                                "statistic until all are on main: " + "; ".join(gaps))
 SHIFT = (0.8, 1.25)                                 # the parameter-shift check: each named setting x 0.8 and x 1.25
 CURVE_SIZES: tuple[int, ...] = (1_000, 3_000, 10_000, 30_000, 100_000)
 LAMBDA_RW = V.LAMBDA_ROWS                           # HB: τ = 0.05 R per sd per tf step, as λ
@@ -284,12 +321,14 @@ class Collected:
     sample: pd.DataFrame
     pi: float
     n_rows: int
+    train_end: pd.Timestamp | None = None    # the last label instant v0 trains on (run manifest train_end)
 
 
 def _years(data: UnitData, plan: UnitPlan, years: Sequence[int], phases: Sequence[int]) -> Iterator[pd.DataFrame]:
-    for y in years:
-        for tf in plan.tfs:
-            for inst in plan.members:
+    """Frames in a fixed order: tf, then instrument, then year (a store holds one instrument x tf at a time)."""
+    for tf in plan.tfs:
+        for inst in plan.members:
+            for y in years:
                 f = data.frame(inst, tf, y, phases=phases)
                 if len(f):
                     yield f
@@ -314,8 +353,12 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
     hb_idx = [V.P30.index(c) for c in HB_COLUMNS]
     samples = []
     n_rows = 0
+    last = 0
     for f in _years(data, plan, V.LEARN_YEARS, phases):
         n_rows += len(f)
+        v0m = train_mask(f, V.LEARN_YEARS[-1] + 1)
+        if v0m.any():
+            last = max(last, int(_ns(f["horizon_end_utc"])[v0m].max()))
         zero = np.zeros(len(f))
         full = _td(f, V.P30, zero, design_effect=plan.design_effect)
         for Y in folds:
@@ -339,7 +382,8 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
         keep = _hash_u(f, seed) < pi
         samples.append(f[keep].assign(w=f["w"].to_numpy(float)[keep] / pi))
     sample = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame(columns=list(ROW_COLS))
-    return Collected(impute=impute, impute_lcw=impute_lcw, lcw=lcw, hb=hb, priors=pri, sample=sample, pi=pi, n_rows=n_rows)
+    return Collected(impute=impute, impute_lcw=impute_lcw, lcw=lcw, hb=hb, priors=pri, sample=sample, pi=pi, n_rows=n_rows,
+                     train_end=pd.Timestamp(last, tz="UTC") if last else None)
 
 
 def hb_fit(moms: Mapping[tuple[str, str], L.Moments], impute: Mapping[tuple[str, str], np.ndarray],
@@ -575,14 +619,14 @@ def rank_diagnostics(o: pd.DataFrame, name: str, kind: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------- canaries, shift, curve
 def _fit_score(name: str, tr: pd.DataFrame, te: pd.DataFrame, plan: UnitPlan, pri: DC.CostPriors, impute: np.ndarray,
                *, seed: int, extra: Sequence[str] = (), shift: Mapping[str, float] | None = None,
-               lam_mult: float = 1.0) -> np.ndarray:
+               lam_mult: float = 1.0, lam_a_mult: float = 1.0) -> np.ndarray:
     """Fit one learner on `tr`, return its keep on `te` (the canary, shuffle and shift harness; HB on its own rung)."""
     cost_te = cost_of(te, pri)
     if name in ("L-cw", "HB"):
         cols = (*plan.lcw_columns, *extra) if name == "L-cw" else (*HB_COLUMNS, *extra)
         imp = L.medians(tr[list(cols)].to_numpy(float)) if cols else np.zeros(0)
         td = _sample_td(tr, cols, pri, plan)
-        a = L.fit_lcw(td, lam=V.LAMBDA_ROWS * lam_mult, lam_a=plan.lam_a * lam_mult, impute=imp)
+        a = L.fit_lcw(td, lam=V.LAMBDA_ROWS * lam_mult, lam_a=plan.lam_a * lam_a_mult, impute=imp)
         v = a.value(te[list(cols)].to_numpy(float) if cols else np.empty((len(te), 0)),
                     te["instrument"].astype(str).to_numpy())
         return L.keep("gross", v, cost_te)
@@ -650,18 +694,29 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                     "auc_in_band": bool(abs(auc - 0.5) <= 4 * se) if np.isfinite(auc) else True,
                     "passed": bool(float((k & ~k0).mean()) <= G.MAX_FALSE_KEEP or int(k.sum()) < V.MIN_KEPT)}
     out["shuffle"] = sh
-    shift: dict[str, Any] = {}
-    base_l = _s(te, _fit_score("L-cw", tr, te, plan, pri, col.impute, seed=seeds[0]), pri)
-    shift["L-cw"] = {"base": base_l, **{f"lambda x{m}": _s(te, _fit_score("L-cw", tr, te, plan, pri, col.impute,
-                                                                         seed=seeds[0], lam_mult=m), pri)
-                                        for m in SHIFT}}
-    base_g = _s(te, _fit_score("G-cw", tr, te, plan, pri, col.impute, seed=seeds[0]), pri)
-    shift["G-cw"] = {"base": base_g}
-    for p in ("learning_rate", "num_iterations", "min_child_share"):
-        for m in SHIFT:
-            shift["G-cw"][f"{p} x{m}"] = _s(te, _fit_score("G-cw", tr, te, plan, pri, col.impute, seed=seeds[0],
-                                                           shift={p: m}), pri)
-    out["parameter_shift"] = shift
+    from goldbot.research import model_quality as MQ
+
+    def net_mean(k: np.ndarray) -> float:
+        return float((O.clip_r(te["gross"].to_numpy(float) - cost_of(te, pri)) * k).mean())
+    lin = {"lambda": V.LAMBDA_ROWS, "lambda_a": plan.lam_a}
+
+    def ev_lin(name: str) -> Any:
+        def ev(pt: dict[str, Any]) -> float:
+            return net_mean(_fit_score(name, tr, te, plan, pri, col.impute, seed=seeds[0],
+                                       lam_mult=pt["lambda"] / lin["lambda"],
+                                       lam_a_mult=pt["lambda_a"] / lin["lambda_a"]))
+        return ev
+    gb = {"learning_rate": L.GCW_PARAMS["learning_rate"], "num_iterations": L.GCW_PARAMS["num_iterations"],
+          "min_child_share": L.GCW_PARAMS["min_child_share"]}
+
+    def ev_g(pt: dict[str, Any]) -> float:
+        return net_mean(_fit_score("G-cw", tr, te, plan, pri, col.impute, seed=seeds[0],
+                                   shift={k: float(pt[k]) / float(gb[k]) for k in gb}))
+    # ADR 0106 "stays profitable when parameters are shifted slightly": model_quality's +-10 % / +-20 % grid, one
+    # parameter at a time, net mean after cost on the last fold (HB here is its own rung: λ0 and λ_c play λ, λ_a)
+    out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw")).model_dump(mode="json"),
+                              "HB": MQ.param_shift(lin, ev_lin("HB")).model_dump(mode="json"),
+                              "G-cw": MQ.param_shift(gb, ev_g).model_dump(mode="json")}
     out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < 0.9].reset_index(drop=True), te, plan,
                                                 pri, col.impute, seed=sd), pri) for sd in seeds]}
     curve = []
@@ -704,13 +759,14 @@ def settings() -> dict[str, Any]:
 class UnitResult:
     report: dict[str, Any]
     artifacts: dict[str, str]                      # name -> JSON
-    log: dict[str, Any]
     oof: pd.DataFrame
 
 
 def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
-             seeds: Sequence[int] = SEEDS, col: Collected | None = None, harness_rows: int = 200_000) -> UnitResult:
-    """Walk-forward fit, OOF scoring, v0 artifacts, report and run log for one unit (see the module docstring)."""
+             seeds: Sequence[int] = SEEDS, col: Collected | None = None, harness_rows: int = 200_000,
+             with_harness: bool = True) -> UnitResult:
+    """Walk-forward fit, OOF scoring, v0 artifacts and the report for one unit (see the module docstring). The run is
+    recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here."""
     col = col or collect(data, plan, seed=seeds[0])
     dense_by_year: dict[int, L.DenseArtifact] = {}
     oof_parts: list[pd.DataFrame] = []
@@ -729,6 +785,11 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
                                         if fm.gcw else "", "HB": L.artifact_sha(fm.hb) if fm.hb else ""})
         if av is not None:
             avg_by_year[Y] = L.artifact_sha(av)
+            for sd in seeds[1:]:              # AVG over each G-cw seed (seed stability of the fusion)
+                if f"v_G-cw@{sd}" in sc:
+                    alt, _ = add_avg(sc.assign(**{"v_G-cw": sc[f"v_G-cw@{sd}"]}), earlier, {})
+                    sc[f"v_AVG@{sd}"] = alt["v_AVG"]
+            sc[f"v_AVG@{seeds[0]}"] = sc["v_AVG"]
         oof_parts.append(sc)
     oof = pd.concat(oof_parts, ignore_index=True) if oof_parts else pd.DataFrame()
     v0 = fit_fold(V.LEARN_YEARS[-1] + 1, col, plan, hb=(hb_by_fold or {}).get(V.LEARN_YEARS[-1] + 1), seeds=seeds[:1],
@@ -745,22 +806,15 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
                                              if v0.gcw else "", "HB": L.artifact_sha(v0.hb) if v0.hb else ""})
         if av0 is not None:
             arts["AVG"] = L.artifact_json(av0)
-    report = unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows)
-    shas = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
-    report["artifacts"] = shas
+    report = unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows, with_harness=with_harness)
+    report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
-    runlog = {"unit": plan.unit, "plan": {"tfs": list(plan.tfs), "members": list(plan.members),
-                                          "lcw_columns": list(plan.lcw_columns), "first_oof": plan.first_oof,
-                                          "lam_a": plan.lam_a, "design_effect": plan.design_effect},
-              "stage0": plan.stage0,
-              "data": {"version": data.version(plan.members, plan.tfs, (0,)), "manifest": data.manifest()}, "settings": settings(), "seeds": list(seeds),
-              "code": code_version(), "artifacts": shas,
-              "results": {k: report["learners"][k].get("read", {}) for k in report["learners"]}}
-    return UnitResult(report=report, artifacts=arts, log=runlog, oof=oof)
+    report["train_end"] = str(col.train_end)
+    return UnitResult(report=report, artifacts=arts, oof=oof)
 
 
 def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModels, *, seeds: Sequence[int],
-                harness_rows: int) -> dict[str, Any]:
+                harness_rows: int, with_harness: bool = True) -> dict[str, Any]:
     rep: dict[str, Any] = {"unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
                            "level": plan.stage0.get("level"), "judged": plan.stage0.get("judged"),
                            "served_lcw": list(plan.lcw_columns), "first_oof": plan.first_oof,
@@ -788,22 +842,13 @@ def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModel
         rep["learners"][name] = entry
     rep["paired_d"] = {f"{a} vs {b}": paired_d(oof, a, b) for i, a in enumerate(BUILT) for b in BUILT[i + 1:]
                        if f"k_{a}" in oof and f"k_{b}" in oof}
-    seed_cols = [str(c) for c in oof.columns if str(c).startswith("v_G-cw@")]
-    if seed_cols:
-        ss = []
-        for c in seed_cols:
-            k = L.keep("p", oof[c].to_numpy(float), oof["cost"].to_numpy(float))
-            ss.append(float(pd.Series(oof["net"].to_numpy(float) * k).groupby(oof["day"].to_numpy()).sum().mean()))
-        sp = G.seed_spread(ss)
-        rep["seed_stability"] = {"G-cw": {"net_r_per_day": ss, "sd": sp.sd, "inconclusive": sp.inconclusive,
-                                          "seed_invariant": bool(np.ptp(ss) == 0)},
-                                 "L-cw": "closed form: seed-invariant", "HB": "closed form: seed-invariant"}
+    rep["seed_stability"] = {k: v.model_dump(mode="json") for k, v in seed_verdicts(oof, seeds).items()}
     gold = {i: {"shrunk": v0.lcw.levels.get(i), "unshrunk": v0.lcw.levels_unshrunk.get(i)} for i in v0.lcw.levels}
     rep["levels"] = gold or "gold body: no instrument level (unit intercept only)"
     yr = pd.DatetimeIndex(pd.to_datetime(oof["decision_utc"], utc=True)).year
     late = oof[np.isin(yr, [2015, 2016, 2017])]
     rep["v0_keep_share_2015_17"] = float(late["k_L-cw"].mean()) if len(late) else None   # H1 breaker reference (OOF)
-    rep["harness"] = harness(col, plan, seeds=seeds, max_rows=harness_rows)
+    rep["harness"] = harness(col, plan, seeds=seeds, max_rows=harness_rows) if with_harness else {"skipped": "builder"}
     rep["not_in_this_report"] = ["Stage L gates (evaluator)", "B2-B6 baselines (5.2, evaluator)",
                                  "arm-fire subset S (no arm candidates in dense rows)", "block dS table (no X block "
                                  "built)", "offset bias, staleness (live)", "£/day at 0.01 lot (needs the lot map)"]
@@ -816,7 +861,6 @@ def write_unit(res: UnitResult, out: Path) -> Path:
     for name, text in res.artifacts.items():
         (d / f"{name}.json").write_text(text)
     (d / "report.json").write_text(json.dumps(res.report, indent=1, sort_keys=True, default=_json))
-    (d / "run_log.json").write_text(json.dumps(res.log, indent=1, sort_keys=True, default=_json))
     (d / "report.md").write_text(report_md(res.report))
     if len(res.oof):
         res.oof.to_parquet(d / "oof.parquet", index=False)
@@ -870,33 +914,153 @@ def report_md(r: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def rebuild(log: Mapping[str, Any], data: UnitData, *, hb_by_fold: Mapping[int, L.HbArtifact] | None = None
-            ) -> dict[str, Any]:
-    """ADR 0106: refit v0 from a run log (plan, seeds, settings) on `data` and compare every artifact sha. Refuses a
-    log whose settings or data version differ from the current code and data."""
-    if log["settings"] != json.loads(json.dumps(settings(), default=_json)):
-        raise ValueError("the run log's settings differ from this code's frozen settings")
-    p = log["plan"]
-    if log["data"]["version"] != data.version(tuple(p["members"]), tuple(p["tfs"]), (0,)):
-        raise ValueError("the run log's data version differs from the data given")
-    plan = UnitPlan(unit=log["unit"], tfs=tuple(p["tfs"]), members=tuple(p["members"]),
-                    lcw_columns=tuple(p["lcw_columns"]), first_oof=int(p["first_oof"]), lam_a=float(p["lam_a"]),
-                    design_effect=float(p["design_effect"]), stage0=log["stage0"])
-    seeds = tuple(log["seeds"])
-    col = collect(data, plan, seed=seeds[0])
-    dense_by_year: dict[int, L.DenseArtifact] = {}
-    for Y in plan.oof_years:
-        fit_fold(Y, col, plan, hb=None, seeds=seeds[:1], dense_by_year=dense_by_year)
-    v0 = fit_fold(V.LEARN_YEARS[-1] + 1, col, plan, hb=(hb_by_fold or {}).get(V.LEARN_YEARS[-1] + 1),
-                  seeds=seeds[:1], dense_by_year=dense_by_year)
-    got = {"L-cw": L.artifact_sha(v0.lcw), "B8": L.artifact_sha(v0.b8)}
-    if v0.gcw:
-        got["G-cw"] = L.artifact_sha(v0.gcw[seeds[0]])
-    if v0.dense is not None:
-        got["D-40"] = L.artifact_sha(v0.dense)
-    want = {k: v for k, v in log["artifacts"].items() if k in got}
-    return {"match": got == want, "got": got, "want": want}
+def row_edge(oof: pd.DataFrame, kind: str, col: str) -> np.ndarray:
+    """Net R after cost per OOF decision row, 0 where the learner does not keep (model_quality's read)."""
+    v = oof[col].to_numpy(float)
+    k = np.isfinite(v) & L.keep(kind, np.nan_to_num(v, nan=-np.inf), oof["cost"].to_numpy(float))  # type: ignore[arg-type]
+    return oof["net"].to_numpy(float) * k
 
+
+def seed_verdicts(oof: pd.DataFrame, seeds: Sequence[int]) -> dict[str, Any]:
+    """ADR 0106 "results stable across at least 5 random seeds" (model_quality.seed_stability): per learner, the mean
+    net R per OOF row for each seed. L-cw and HB are closed forms: every seed gives the same edge, and the verdict
+    records that (detail.seed_invariant)."""
+    from goldbot.research import model_quality as MQ
+    out: dict[str, Any] = {}
+    if not len(oof):
+        return out
+    for name in BUILT:
+        kind = L.LEARNERS[name].kind or "gross"
+        cols = {sd: f"v_{name}@{sd}" for sd in seeds if f"v_{name}@{sd}" in oof}
+        if name in ("L-cw", "HB"):
+            cols = dict.fromkeys(seeds, f"v_{name}")
+        if len(cols) != len(seeds):
+            continue
+        edges = {sd: float(row_edge(oof, kind, c).mean()) for sd, c in cols.items()}
+        v = MQ.seed_stability(edges)
+        out[name] = v.model_copy(update={"detail": {**v.detail, "seed_invariant": bool(np.ptp(list(edges.values()))
+                                                                                       == 0)}})
+    return out
+
+
+FAMILY: dict[str, str] = {"L-cw": "F", "B8": "F", "HB": "F", "G-cw": "C", "D-40": "C", "AVG": "G"}
+BUILDER = "goldbot.research.sr_v3_train:build_artifact"
+
+
+def plan_dict(plan: UnitPlan) -> dict[str, Any]:
+    return {"unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
+            "lcw_columns": list(plan.lcw_columns), "first_oof": plan.first_oof, "lam_a": plan.lam_a,
+            "design_effect": plan.design_effect, "stage0": plan.stage0}
+
+
+def plan_of(d: Mapping[str, Any]) -> UnitPlan:
+    return UnitPlan(unit=str(d["unit"]), tfs=tuple(d["tfs"]), members=tuple(d["members"]),
+                    lcw_columns=tuple(d["lcw_columns"]), first_oof=int(d["first_oof"]), lam_a=float(d["lam_a"]),
+                    design_effect=float(d["design_effect"]), stage0=dict(d.get("stage0") or {}))
+
+
+def hb_from_plans(data: UnitData, plans: Sequence[UnitPlan], *, seed: int) -> dict[int, L.HbArtifact]:
+    """HB per fold over every listed unit's (tf, class) cells: each cell imputed with its unit's smallest-fold medians,
+    with its unit's design effect; the class prior is the largest of the units' λ_a."""
+    moms: dict[int, dict[tuple[str, str], L.Moments]] = {}
+    imp: dict[tuple[str, str], np.ndarray] = {}
+    deff: dict[tuple[str, str], float] = {}
+    lam_a: dict[str, float] = {}
+    idx = [V.P30.index(c) for c in HB_COLUMNS]
+    for plan in plans:
+        col = collect(data, plan, seed=seed)
+        lam_a[plan.unit] = plan.lam_a
+        for y, cells in col.hb.items():
+            for k, m in cells.items():
+                moms.setdefault(y, {})[k] = m
+                imp[k], deff[k] = col.impute[idx], plan.design_effect
+    return {y: hb_fit(c, {k: imp[k] for k in c}, {k: deff[k] for k in c}, lam_a) for y, c in moms.items()}
+
+
+def run_settings(plan: UnitPlan, learner: str, source: Mapping[str, Any], hb_plans: Sequence[UnitPlan]) -> dict[str, Any]:
+    """Everything `build_artifact` reads besides the data files and seeds (the manifest's settings)."""
+    return {"sr_v3": {"learner": learner, "plan": plan_dict(plan), "hb_plans": [plan_dict(p) for p in hb_plans],
+                      "source": dict(source)}, "frozen": settings()}
+
+
+def frames_file(data: FrameData, path: Path) -> Path:
+    """One parquet of every frame (the rebuild's data file for in-memory data)."""
+    pd.concat([f for _, f in sorted(data.frames.items(), key=lambda kv: kv[0])], ignore_index=True).to_parquet(
+        path, index=False)
+    return path
+
+
+def frames_from(path: Path | str) -> FrameData:
+    f = pd.read_parquet(path)
+    from goldbot.data import holdout_guard
+    holdout_guard.refuse(f, what=f"sr-v3 frames {path}", col="decision_utc")
+    yr = pd.DatetimeIndex(pd.to_datetime(f["decision_utc"], utc=True)).year.to_numpy()
+    out = {}
+    for key, g in f.assign(_y=yr).groupby(["instrument", "tf", "_y"], sort=True):
+        i, t, y = (str(x) for x in key)
+        out[(i, t, int(y))] = g.drop(columns="_y").reset_index(drop=True)
+    return FrameData(out)
+
+
+def build_artifact(spec: Any) -> bytes:
+    """run_manifest builder (`BuildSpec` -> artifact bytes): refits one learner's v0 exactly as `fit_unit` did.
+    Data: `frames.parquet` (in-memory data written by `frames_file`) or the stores named in settings, with the tiers
+    file named by `source.tiers_file`. Labels only through load_labels, as in the original run."""
+    cfg = spec.settings["sr_v3"]
+    if cfg["source"]["kind"] == "frames":
+        data: UnitData = frames_from(spec.data_files["frames.parquet"])
+    else:
+        st = cfg["source"]
+        data = StoreData(labels=Path(st["labels"]), features=Path(st["features"]),
+                         tiers_path=Path(spec.data_files[st["tiers_file"]]))
+    plan = plan_of(cfg["plan"])
+    seeds = tuple(int(s) for s in spec.seeds)
+    hb_plans = [plan_of(p) for p in cfg["hb_plans"]]
+    hb = hb_from_plans(data, hb_plans, seed=seeds[0]) if hb_plans else None
+    res = fit_unit(data, plan, hb_by_fold=hb, seeds=seeds, with_harness=False)
+    return res.artifacts[cfg["learner"]].encode()
+
+
+def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source: Mapping[str, Any],
+                data_version: str, data_root: Path, data_files: Sequence[str], hb_plans: Sequence[UnitPlan],
+                root: Path, repo: Path = ROOT) -> dict[str, Any]:
+    """Record every v0 artifact with research/run_manifest.py (ADR 0106 decision 7, ADR 0109): data version and file
+    shas, settings, seeds, code sha, train end, the builder, results and the quality verdicts. G-cw first: every other
+    learner's `beats_baseline` names the GBT manifest (ADR 0106 decision 3, reported for families F and G too)."""
+    from goldbot.research import model_quality as MQ
+    from goldbot.research import run_manifest as RM
+    oof = res.oof
+    verdicts = seed_verdicts(oof, seeds)
+    shift = (res.report.get("harness") or {}).get("parameter_shift") or {}
+    shas = {f: RM.file_sha256(Path(data_root) / f) for f in data_files}
+    end = pd.Timestamp(res.report.get("train_end") or WN.SPANS[WN.Window.LEARN][1])
+    order = ["G-cw", *[k for k in res.artifacts if k != "G-cw"]]
+    out: dict[str, Any] = {}
+    gbt_id: str | None = None
+    for name in order:
+        if name not in res.artifacts:
+            continue
+        q: list[Any] = []
+        if name in verdicts:
+            q.append(verdicts[name])
+        if name in shift:
+            q.append(MQ.QualityVerdict.model_validate(shift[name]))
+        if gbt_id is not None and name in BUILT and f"v_{name}" in oof:
+            ok = oof[f"v_{name}"].notna() & oof["v_G-cw"].notna()
+            o = oof[ok].reset_index(drop=True)
+            kind = L.LEARNERS[name].kind or "gross"
+            q.append(MQ.beats_baseline(pd.Series(row_edge(o, kind, f"v_{name}")), pd.Series(row_edge(o, "p", "v_G-cw")),
+                                       o["day"].astype(str), baseline_manifest_id=gbt_id))
+        m = RM.record(model=f"sr-v3:{plan.unit}:{name}", family=FAMILY[name],  # type: ignore[arg-type]
+                      artifact=res.artifacts[name].encode(), data_version=data_version,
+                      settings=run_settings(plan, name, source, hb_plans), seeds=seeds, train_end=end,
+                      scaler_fit_end=end, data_files=shas, builder=BUILDER,
+                      results=(res.report.get("learners", {}).get(name) or {}).get("read", {}), quality=q,
+                      spec_id=V.SPEC_VERSION, root=root, repo=repo)
+        out[name] = m
+        if name == "G-cw":
+            gbt_id = m.manifest_id
+    return out
 
 # ---------------------------------------------------------------------------------------------- the stores
 @dataclass
@@ -911,7 +1075,9 @@ class StoreData:
     features: Path
     tiers_path: Path
     weights: Path | None = None
+    ledger: Path = ROOT / "state" / WN.READS_LEDGER       # the read-once / consumption ledger (#482: load_labels' ledger)
     used: dict[str, Any] = field(default_factory=dict)
+    _cache: dict[tuple[str, str, tuple[int, ...]], pd.DataFrame] = field(default_factory=dict, repr=False)
 
     def _tiers(self, instrument: str) -> Any:
         from goldbot.research import feature_store as F
@@ -937,8 +1103,10 @@ class StoreData:
         return D._typed(pd.read_parquet(p))[["phase", "decision_utc", "u_tf", "w"]]
 
     def events(self, instrument: str, tf: str, years: Sequence[int]) -> pd.DataFrame:
-        """Stage 0's label-blind events: the skeleton's T2 long rows (one per bar), tier-usable under P30, with u."""
+        """Stage 0's label-blind events: the skeleton's T2 long rows (one per bar), tier-usable under P30, with u.
+        Refused while `sequencing_gaps` is not empty (no Stage 0 statistic before the quant sequencing holds)."""
         from goldbot.research import dense_labels as D
+        refuse_unsequenced(f"Stage 0 events {instrument} {tf}")
         ks = {(y, 0): k[0] for y in years if (k := self.keys(instrument, tf, y, 0)) is not None}
         if not ks:
             return pd.DataFrame(columns=["instrument", "tf", "phase", "decision_utc", "usable", "u"])
@@ -952,21 +1120,38 @@ class StoreData:
             ["instrument", "tf", "phase", "decision_utc", "usable", "u"]]
 
     def frame(self, instrument: str, tf: str, year: int, *, phases: Sequence[int] = (0,)) -> pd.DataFrame:
+        """One year of the instrument x tf's learn rows. The labels are loaded ONCE per (instrument, tf, phases) for
+        every learn year (#482: a consumption id procedure/instrument/tf/purpose is fixed by its first load's columns
+        and keys), then sliced; one (instrument, tf) is held at a time."""
+        k = (instrument, tf, tuple(sorted(int(p) for p in phases)))
+        if k not in self._cache:
+            self._cache.clear()
+            self._cache[k] = self._learn_frame(instrument, tf, k[2])
+        f = self._cache[k]
+        if not len(f):
+            return f
+        yr = pd.DatetimeIndex(pd.to_datetime(f["decision_utc"], utc=True)).year.to_numpy()
+        return f[yr == year].reset_index(drop=True)
+
+    def _learn_frame(self, instrument: str, tf: str, phases: Sequence[int]) -> pd.DataFrame:
         from goldbot.research import dense_labels as D
+        refuse_unsequenced(f"the label read {instrument} {tf}")
         from goldbot.research import feature_store as F
         from goldbot.research.self_retrain import design
-        ks = {(year, int(p)): k for p in phases if (k := self.keys(instrument, tf, year, int(p))) is not None}
+        ks = {(y, int(p)): k for y in V.LEARN_YEARS for p in phases
+              if (k := self.keys(instrument, tf, y, int(p))) is not None}
         if not ks:
             return pd.DataFrame(columns=list(ROW_COLS))
         tiers = self._tiers(instrument)
-        lab, meta = D.load_labels(self.labels, instrument=instrument, tf=tf, years=[year], tiers=tiers,
-                                  columns=V.P30, keys={k: v[0] for k, v in ks.items()},
-                                  window=WN.SPANS[WN.Window.LEARN], purpose="train", phases=sorted(p for _, p in ks),
+        years = sorted({y for y, _ in ks})
+        # #482 (quant L1): every load is a ledgered consumption row with procedure "sr-v3", which the X6 guard reads
+        lab, meta = D.load_labels(self.labels, procedure=V.SPEC_VERSION, ledger=self.ledger, instrument=instrument,
+                                  tf=tf, years=years, tiers=tiers, columns=V.P30, keys={k: v[0] for k, v in ks.items()},
+                                  window=WN.SPANS[WN.Window.LEARN], purpose="train", phases=list(phases),
                                   templates=("T0", V.JUDGED_HEAD))
-        feats, fmeta = F.load(self.features, instrument=instrument, tf=tf, years=[year], tiers=tiers,
-                              phases=sorted(p for _, p in ks), purpose="train",
-                              expect_keys={k: v[1] for k, v in ks.items()})
-        self.used.setdefault("labels", {})[f"{instrument}:{tf}:{year}"] = {
+        feats, fmeta = F.load(self.features, instrument=instrument, tf=tf, years=years, tiers=tiers,
+                              phases=list(phases), purpose="train", expect_keys={k: v[1] for k, v in ks.items()})
+        self.used.setdefault("labels", {})[f"{instrument}:{tf}"] = {
             "keys": meta["keys"], "tiers_sha256": meta["tiers_sha256"], "rows": meta["rows"],
             "dropped_tier": meta.get("dropped_tier"), "fs_keys": fmeta["keys"]}
         t2 = lab[lab["template"] == V.JUDGED_HEAD]
@@ -1009,5 +1194,6 @@ class StoreData:
 
 __all__ = ["BUILT", "CODE_FILES", "MAX_TREE_ROWS", "OUT", "ROW_COLS", "SEEDS", "Collected", "FrameData",
            "StoreData", "UnitData", "UnitPlan", "UnitResult", "buy_and_hold", "code_version", "collect", "cost_of", "cost_parts",
-           "fit_unit", "gap", "hb_fit", "harness", "paired_d", "plan_from_stage0", "rebuild", "report_md", "settings",
+           "fit_unit", "gap", "hb_fit", "harness", "paired_d", "plan_from_stage0", "build_artifact", "record_unit",
+           "hb_from_plans", "frames_file", "frames_from", "seed_verdicts", "report_md", "settings",
            "stage0", "stage0_counts", "train_mask", "twin_expectation", "write_unit"]
