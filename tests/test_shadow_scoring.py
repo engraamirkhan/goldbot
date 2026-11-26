@@ -436,8 +436,8 @@ def test_a_scoring_failure_is_logged_counted_skipped_and_never_reaches_the_engin
     eng, pb = _engine(tmp_path, [_arm("a")])
     tick = _at(eng, pb, CLOSE)
     _scoring(eng)
+    _store(tmp_path, "a", _model(0.6))                                 # before the patch: the fixture computes features
     monkeypatch.setattr(fs, "decision_features", boom)
-    _store(tmp_path, "a", _model(0.6))
     exploration.on_pass(eng, tick)
     _drain(eng)
     assert len(_sent(eng)) == 1                                        # sent as without scoring
