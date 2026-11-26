@@ -1471,6 +1471,22 @@ def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- feed reconcile (D12)
+def broker_m1_copy(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily (ADR 0105 (ii)): the reference account's broker M1 from the store into raw/broker_m1/ (previous and
+    current month, sha256 per file, gap log; goldbot/data/broker_capture.py). Reads the store only: no broker call, no
+    order path. A missed due session day fails the job as well as `learning:broker_m1_capture`."""
+    from goldbot.data import broker_capture as BC
+    bars = BC.read_capture(ctx.store, BC.REFERENCE_ACCOUNT,
+                           start=max(BC.CAPTURE_FROM, (BC._utc(slot).tz_localize(None).to_period("M") - 1)
+                                     .to_timestamp().tz_localize("UTC")))
+    out = BC.copy_months(bars, slot, raw_dir=BC.RAW_DIR)
+    status, reason = BC.judge(bars, slot, raw_dir=BC.RAW_DIR)
+    out["capture"] = reason
+    if status == "fail" and BC.due_day(slot) is not None and "capture missed" in reason:
+        raise RuntimeError(f"broker_m1_copy: {reason}")
+    return out
+
+
 def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily (design: Data architecture, D12/D20): per enabled account, the engine's tick-built 1m bars against the
     broker's own M1 over the last day (goldbot/data/crossfeed.py) -> dq_events, bars_1m_broker, state/reconcile_<acc>.json."""
@@ -2097,6 +2113,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "broker_m1_copy": broker_m1_copy,             # ADR 0105 (ii): reference broker M1 -> raw/broker_m1 (read-only)
     "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup

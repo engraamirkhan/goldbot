@@ -129,6 +129,7 @@ from goldbot.ops.checks.bridge import (
     check_server_clock,
     check_terminal,
 )
+from goldbot.ops.checks.capture import check_broker_m1_capture  # ADR 0105 (ii) capture guard (registers it)
 from goldbot.ops.checks.compaction import check_compaction
 from goldbot.ops.checks.cpcv import check_cpcv_evidence
 from goldbot.ops.checks.discovery import check_discovery_last_run  # ADR 0090 SRE GO (registers it)
@@ -340,6 +341,7 @@ __all__ = [
     "check_object_storage",
     "check_bridge",
     "check_bridge_compat",
+    "check_broker_m1_capture",
     "check_compaction",
     "check_costs",
     "check_cost_of_record",
