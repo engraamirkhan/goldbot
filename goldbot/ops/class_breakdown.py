@@ -27,7 +27,8 @@ Design rules kept:
   tests/test_asset_class_reporting.py keeps the false-flag rate near 5% or under). Descriptive: the flag changes no
   read, gate, share or order.
 * A gross-only fill (no net P&L) carries no R here: nothing gross is read as net. Demo learning cohort fills (ADR
-  0095, evidence `learning_cohort`) are in no class figure in any reader; their money stays in the totals.
+  0095, evidence `learning_cohort`) and model-gate exploration samples (ADR 0101, `explore_sample`; both
+  `evidence_exclusions.NOT_EDGE_EVIDENCE`) are in no class figure in any reader; their money stays in the totals.
 """
 from __future__ import annotations
 

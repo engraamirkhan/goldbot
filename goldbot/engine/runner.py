@@ -60,6 +60,7 @@ from goldbot.engine import (
     order_send,
     pilot,
     shadow_replay,
+    shadow_scoring,
     state_heartbeat,
     terminal_account,
     unconfirmed,
@@ -195,7 +196,7 @@ class ConstantModel(Record):
         return np.full(len(X), self.p)
 
 
-class EngineConfig(Record):
+class EngineConfig(shadow_scoring.ModelScoringConfig):     # shadow_score, model_gate (ADR 0101)
     account_id: str
     broker_name: str
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
@@ -3042,7 +3043,7 @@ class Engine:
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
             "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
             **key_zones.published(self),     # the dashboard's key zones: display only, never read for an order
-            **books.published(self),               # each instrument's own view; gold's hot-loaded arm registry (R7)
+            **books.published(self), **shadow_scoring.published(self),  # books, arm registry (R7); ADR 0101
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

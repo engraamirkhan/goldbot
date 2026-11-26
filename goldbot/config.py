@@ -648,6 +648,10 @@ class SelfRetrainSettings(_Section):
     # a model passing the gate becomes ACTIVE (a demo-only entry filter, once the engine serves it); off: every model
     # stays shadow and any active one is demoted
     serve: bool = True
+    # lifecycle W1 (ADR 0101, goldbot/engine/shadow_scoring.py): every active or shadow model with verified provenance
+    # scores each gold exploration candidate of its arm off the tick, logged on the candidate; never gates (no
+    # decision reads a score). Off: nothing is scored and health model_influence WARNs at 0 % scored
+    shadow_score: bool = True
 
 
 class ArmLifecycleSettings(_Section):

@@ -63,6 +63,7 @@ from goldbot.api.strategy_labels import Catalog
 from goldbot.data.timeutil import ROLLOVER_UTC_H
 from goldbot.ops.class_breakdown import ClassFigures, asset_class_of, class_order, cr1_t, split_test
 from goldbot.ops.report_days import day_bounds, report_day
+from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE
 from goldbot.telegram.labs import _TF_STYLE
 
 __all__ = ["ALPHA", "HEADING", "MIN_DAYS", "MIN_FILLS", "RANKING_READERS", "WINDOW_DAYS", "Ranker", "rank",
@@ -213,7 +214,7 @@ def _index(rows: Iterable[TradeRow], cat: Catalog, class_void: Collection[str] =
                 prog_day.append(_oday(r.opened_utc.timestamp()))       # a session day "with a counted fill"
         # ADR 0095: cohort fills ("learning_cohort") are never ranked; engine rows are "not_evidence" and rank (code
         # review of PR #445, HIGH: skipping "not_evidence" dropped every engine strategy)
-        if r.r is None or r.pnl is None or r.evidence in ("excluded", "learning_cohort"):
+        if r.r is None or r.pnl is None or r.evidence == "excluded" or r.evidence in NOT_EDGE_EVIDENCE:   # + ADR 0101
             continue
         tf = r.timeframe or ""
         meta: _Meta

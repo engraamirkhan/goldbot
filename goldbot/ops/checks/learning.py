@@ -27,7 +27,9 @@ switch failing on any one of them):
                    model_version or bandit_version set) and changed (a block reason a model gave, MODEL_BLOCK_PREFIXES),
                    cached INFLUENCE_CACHE_S per host (index exploration_obs_decision, migration 44). WARN at 0 % scored
                    with candidates in the window; never FAIL: a statistical gate that lets no model through is honest,
-                   and a FAIL would push to loosen it (statistical gates are not limits).
+                   and a FAIL would push to loosen it (statistical gates are not limits). Also from the database (ADR
+                   0101, trading-safety F5 of #463): the eligible candidates (an arm with a served self-retrain model,
+                   decided after its cutoff) and how many carry a score; WARN below MIN_ELIGIBLE_SCORED of them.
 
 Reads aux.db read-only (`mode=ro`), the watcher files, state/deploys.jsonl and git ancestry (read-only, cached). No
 order path, no write.
@@ -58,6 +60,7 @@ _CONTAINS: dict[str, bool | None] = {}                        # deploy commit ->
 FAIL_AFTER_H = 48.0                # a WARN that has held this long FAILs (SRE plan item 1: "FAIL after 48 h of WARN")
 FILL_DRIVEN_CADENCE_H = 72.0       # SRE review M5: a learner fed by fills writes nothing over a weekend
 INFLUENCE_WINDOW_H = 24.0          # SRE plan item 1: "model-influence % is 0 over 24 h"
+MIN_ELIGIBLE_SCORED = 0.9          # ADR 0101: below this share of eligible candidates scored, shadow scoring WARNs
 INFLUENCE_CACHE_S = 900.0          # SRE review M1: the 24 h count is read at most every 15 min per host
 MODEL_BLOCK_PREFIXES = ("model_", "meta_")   # a candidate's block reason that a model, not a rule or a cap, gave
 WATCH_STATUSES = ("active", "shadow")        # self_retrain models drift_watch must cover (plan: "every shadow and
@@ -147,6 +150,11 @@ class Influence(FrozenRecord):
     n: int
     scored: int
     changed: int
+    # ADR 0101 (trading-safety F5 of #463), from the database: candidates a served model should have scored (its arm
+    # has an active or shadow self-retrain model with recorded provenance whose data cutoff precedes the decision) and
+    # those that carry a score. eligible - eligible_scored are the ones lost (a full queue, an expired job, a restart)
+    eligible: int = 0
+    eligible_scored: int = 0
 
     @property
     def scored_pct(self) -> float:
@@ -224,7 +232,18 @@ def influence(con: sqlite3.Connection, *, since: pd.Timestamp, until: pd.Timesta
         f"SUM(CASE WHEN {like} THEN 1 ELSE 0 END) "
         "FROM exploration_obs WHERE decision_ns >= ? AND decision_ns < ?",
         (*(f"{p}%" for p in MODEL_BLOCK_PREFIXES), int(since.value), int(until.value))).fetchone()
-    return Influence(n=int(row[0] or 0), scored=int(row[1] or 0), changed=int(row[2] or 0))
+    eligible = eligible_scored = 0
+    if _has_table(con, "self_retrain_models") and "model_sha256" in {
+            r[1] for r in con.execute("PRAGMA table_info(self_retrain_models)")}:
+        got = con.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN o.meta_p IS NOT NULL THEN 1 ELSE 0 END) FROM exploration_obs o "
+            "WHERE o.decision_ns >= ? AND o.decision_ns < ? AND EXISTS (SELECT 1 FROM self_retrain_models m "
+            "WHERE m.broker = o.broker AND m.arm_id = o.arm_id AND m.status IN ('active', 'shadow') "
+            "AND m.model_sha256 IS NOT NULL AND m.cutoff_ns < o.decision_ns)",
+            (int(since.value), int(until.value))).fetchone()
+        eligible, eligible_scored = int(got[0] or 0), int(got[1] or 0)
+    return Influence(n=int(row[0] or 0), scored=int(row[1] or 0), changed=int(row[2] or 0), eligible=eligible,
+                     eligible_scored=eligible_scored)
 
 
 def _contains_change(to: str, repo: Path) -> bool | None:
@@ -439,8 +458,12 @@ def check_model_influence(ctx: HealthContext) -> Check:
     if inf.n == 0:
         return Check(name="model_influence", status="ok", reason=f"no candidates in the last {win}")
     line = (f"{inf.scored} of {inf.n} candidates in {win} scored by a model ({inf.scored_pct:.1f} % scored), "
-            f"{inf.changed} changed ({inf.changed_pct:.1f} %)")
+            f"{inf.changed} changed ({inf.changed_pct:.1f} %); {inf.eligible_scored} of {inf.eligible} eligible "
+            "(an arm with a served model, decided after its cutoff) scored")
     if inf.scored == 0:
         return Check(name="model_influence", status="warn",
                      reason=f"{line}: no model touches a decision (learning reaches nothing)")
+    if inf.eligible and inf.eligible_scored < MIN_ELIGIBLE_SCORED * inf.eligible:
+        return Check(name="model_influence", status="warn",
+                     reason=f"{line}: shadow scoring is losing candidates (below {MIN_ELIGIBLE_SCORED:.0%})")
     return Check(name="model_influence", status="ok", reason=line)

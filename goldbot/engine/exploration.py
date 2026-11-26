@@ -129,6 +129,7 @@ from goldbot.engine import (
     entry_refusals,
     long_bars,
     order_send,
+    shadow_scoring,
     weekend_lane,
 )
 from goldbot.engine.cost_record import version as cost_version_of
@@ -891,6 +892,8 @@ class Exploration:
         self.registry_core: Database | None = None     # core.db: the verified tip kept outside aux.db (R1)
         self.start_held: frozenset[str] = frozenset()  # remembered at a start that could not load: no entry (R3)
         self.orphan_hold_from: pd.Timestamp | None = None
+        # ADR 0101: started at the first candidate queued while research.self_retrain.shadow_score is on
+        self.shadow_scorer: shadow_scoring.ShadowScorer | None = None
         arm_registry.init(eng, self)
 
     @classmethod
@@ -1412,15 +1415,19 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     ex = eng.exploration
     if ex is None:
         return
-    now = eng._now(tick)
-    _pyramid(eng, ex, now, tick)        # safety S3: the group stops first, in their own try, whatever fails after
-    sent = _fast(eng, ex, now, tick)
-    if sent is None:                    # it raised: no 15m+ work this pass either, as before
-        return
-    if eng.__dict__.get(SPLIT):
-        ex.slow_owed = (tick, now, sent)
-        return
-    _slow(eng, ex, tick, now, sent)
+    shadow_scoring.mark_pass(ex, True)  # ADR 0101 (F1 of #463): the scoring worker waits while a pass runs
+    try:
+        now = eng._now(tick)
+        _pyramid(eng, ex, now, tick)    # safety S3: the group stops first, in their own try, whatever fails after
+        sent = _fast(eng, ex, now, tick)
+        if sent is None:                # it raised: no 15m+ work this pass either, as before
+            return
+        if eng.__dict__.get(SPLIT):
+            ex.slow_owed = (tick, now, sent)
+            return
+        _slow(eng, ex, tick, now, sent)
+    finally:
+        shadow_scoring.mark_pass(ex, False)
 
 
 def on_pass_slow(eng: Engine) -> None:
@@ -1431,7 +1438,11 @@ def on_pass_slow(eng: Engine) -> None:
         return
     tick, at, sent = ex.slow_owed
     ex.slow_owed = None
-    _slow(eng, ex, tick, at, sent)
+    shadow_scoring.mark_pass(ex, True)
+    try:
+        _slow(eng, ex, tick, at, sent)
+    finally:
+        shadow_scoring.mark_pass(ex, False)
 
 
 def _fast(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> int | None:
@@ -2178,7 +2189,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
         else:
             keep.append(s)
     ex.queue = keep
-    due = [s for s in ex.queue if not _waits(ex, s, now)]
+    # ADR 0101: a model-gated demo signal also waits (at most GATE_WAIT_S) for its vector, built off the tick
+    due = [s for s in ex.queue if not _waits(ex, s, now) and not shadow_scoring.gate_waits(eng, ex, s, now)]
     if not due or limit <= 0 or _unsettled(eng, now):
         return 0
     if paused(eng, now):
@@ -2228,7 +2240,9 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick, limit: i
         ex.queue.remove(s)
         if ps.why != "duplicate":
             # a control's admission draw (quant Q1 2026-11-06): its p is the propensity, taken or thinned
-            mu = ps.mu if res == "sent" or ps.why == "control_thinned" else None
+            # ADR 0101: a model-gate refusal carries the exploration sample's propensity (ADR 0098 section 3)
+            mu = ps.mu if res == "sent" or ps.why == "control_thinned" or \
+                (ps.why or "").startswith(shadow_scoring.GATE_REFUSAL) else None
             candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id), mu=mu)
         if res == "sent":
             sent += 1
@@ -2285,7 +2299,8 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     branch takes an admissible candidate when u < PI_RANDOM (mu = PI_RANDOM); a candidate a cap, the budget, the gate,
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
     unbiased). The arm's share of its pot goes with it (quant Q3). The feature snapshot is not built in the engine
-    yet (None). Best effort: never raises."""
+    yet (None). Once the row is written the candidate is queued for shadow scoring (engine/shadow_scoring.py, ADR 0101:
+    its frozen models' scores are logged on it later and no decision reads them). Best effort: never raises."""
     from goldbot.research.arm_rule_versions import rule_version
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
@@ -2293,10 +2308,11 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     branch = policy(ex, arm.style, now)
     u = draw(cid)
     taken = blocked is None
+    decision = long_bars.origin(arm.tf, s.bar_ts, s.decision_utc)
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
                          family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side,
-                         decision_utc=long_bars.origin(arm.tf, s.bar_ts, s.decision_utc), stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
+                         decision_utc=decision, stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
                          mu=mu if mu is not None else PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
@@ -2305,6 +2321,8 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
                          boot_id=eng.cfg.boot_id)              # the deciding start (ADR 0091)
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
+        return
+    shadow_scoring.submit(eng, ex, arm, s, cid, decision)      # after the record: nothing here reads a score
 
 
 
@@ -2418,6 +2436,23 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         # ADR 0061 amendment 2026-11-02: its fills and loss are not known (no read of the ledger yet, or it failed)
         refuse("learning_unread")
         return "refused"
+    # ADR 0101 (shipped off: accounts `model_gate` false and GATE_SPECS empty): a demo arm's gating model keeps the
+    # candidate, or rejects it; a rejected one is still sent as an exploration sample when its draw is under
+    # EXPLORE_P (propensity logged, evidence explore_sample), else refused here, before the RiskGate. None: not gated
+    # or a fail-open, the existing rule decides. Drop-only: it never adds an order or changes a size
+    sampled = False
+    if (gv := shadow_scoring.gate(eng, ex, arm, s, pid)) is not None and not gv.keep:
+        # F6 of #463: the draw is journalled; `pid` is the candidate id, so research can recompute it (`explore_u`)
+        applied.update(meta_p=round(gv.score, 6), model_version=gv.model_version, admission_p=gv.propensity,
+                       explore_u=None if gv.u is None else round(gv.u, 9))
+        base = ps.mu if ps.mu is not None else PI_RANDOM
+        ps.mu = base * shadow_scoring.EXPLORE_P
+        if not gv.sample:
+            refuse(shadow_scoring.GATE_REFUSAL + gv.model_version)
+            return "refused"
+        sampled = True
+        eng.decisions.append({"ts": now.isoformat(), "agent": tag, "proposal": pid,
+                              "action": "exploration_model_sample", **applied})
     from goldbot.engine import exploration_cohort
     in_cohort = arm.arm_id in exploration_cohort.members(ex)
     if in_cohort and not ex.cohort_ok and not free:
@@ -2574,8 +2609,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             stop_loss=round(at_stop, 2), cost=round(cost, 2), cost_version=cost_version,
             fx_acct_per_usd=terms.get("acct_per_usd"),
             decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id,
-            evidence_class=exploration_cohort.EVIDENCE_CLASS if in_cohort else
-            EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
+            evidence_class=shadow_scoring.EXPLORE_EVIDENCE if sampled else
+            exploration_cohort.EVIDENCE_CLASS if in_cohort else EVIDENCE_CLASS.get(arm.spec.role, arm.spec.role), in_blackout=bool(eng.state.in_blackout),
             blackout_kind=eng.state.blackout_kind if eng.state.in_blackout else None,
             symbol=eng.cfg.instrument,      # the instrument KEY (never the store symbol): never pooled with XAUUSD
             limits_epoch=LIMITS_EPOCH if free else None,

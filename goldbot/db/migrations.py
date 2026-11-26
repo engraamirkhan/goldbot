@@ -1001,6 +1001,34 @@ AUX: tuple[Migration, ...] = (
     Migration(version=44, name="exploration_obs_decision", additive=True, statements=(
         "CREATE INDEX IF NOT EXISTS exploration_obs_decision ON exploration_obs(decision_ns)",
     )),
+    # additive (lifecycle plan W1, owner 2026-11-25; goldbot/engine/shadow_scoring.py, ADR 0101):
+    # `exploration_model_scores`: every frozen self-retrain model's score of every candidate of its arm, with the
+    # model's sha256, the feature version and the vector's sha256 (the nightly snapshot's, so an engine-vs-snapshot
+    # parity read is a join), append-only; read by research and health only, never by a decision.
+    # `self_retrain_models.model_sha256` / `feature_versions`: the provenance the scorer verifies before it serves a
+    # model (a row without them is refused). A release without them never reads them
+    Migration(version=45, name="model_shadow_scores", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_model_scores (
+               candidate_id TEXT NOT NULL,
+               model_version TEXT NOT NULL,
+               model_sha256 TEXT NOT NULL,
+               spec_version TEXT NOT NULL,
+               feature_version TEXT NOT NULL,
+               vector_sha256 TEXT NOT NULL,
+               score REAL NOT NULL CHECK (score >= 0 AND score <= 1),
+               is_primary INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
+               decision_ns INTEGER NOT NULL,
+               scored_ns INTEGER NOT NULL,
+               PRIMARY KEY (candidate_id, model_version)
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS exploration_model_scores_model ON exploration_model_scores(model_version, "
+        "decision_ns)",
+        *(f"""CREATE TRIGGER IF NOT EXISTS exploration_model_scores_no_{op.lower()} BEFORE {op}
+              ON exploration_model_scores BEGIN SELECT RAISE(ABORT, 'exploration_model_scores is append-only'); END"""
+          for op in ("UPDATE", "DELETE")),
+    ), add_columns=(("self_retrain_models", "model_sha256", "TEXT"),
+                    ("self_retrain_models", "feature_versions",
+                     "TEXT CHECK (feature_versions IS NULL OR json_valid(feature_versions))"))),
 )
 
 CORE: tuple[Migration, ...] = (

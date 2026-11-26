@@ -35,6 +35,7 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.ops.gates_phase import ClosedTrade
+from goldbot.research.evidence_exclusions import NOT_EDGE_EVIDENCE
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -136,7 +137,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp, *, include_ex
             side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
             commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
             censored=r.censored, voided=r.evidence == "excluded", exit_reason=r.exit_reason, symbol=r.symbol,
-            class_void=r.evidence == "learning_cohort"
+            class_void=r.evidence in NOT_EDGE_EVIDENCE        # cohort (ADR 0095) and model-gate samples (ADR 0101)
             or (r.kind in ("exploration", "control") and order_id(r) in ledger.class_void), limits_epoch=r.limits_epoch,
             **_excursion(bodies.get(r.trade_id))))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])

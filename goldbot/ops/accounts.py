@@ -357,6 +357,10 @@ class Account(Record):
     # engine has no live agents and refuses any entry that is not a cost probe or an exploration arm (fail closed,
     # Engine._execute). Amendment 6: a probe host runs cost probes with the shadow book, or exploration, or both
     probe_only: bool = False
+    # ADR 0101 (owner 2026-11-25; shipped off): a gating model may refuse this DEMO account's exploration entries
+    # before the RiskGate, a randomised 10 % of rejected ones still taken (ADR 0098 section 3). Refused at load on a
+    # live account. Off on every account until the new pipeline's first trained model and its training report
+    model_gate: bool = False
     # PD decision 2026-10-26 (ADR 0043 host cap): the RiskGate's open-position cap for THIS account, replacing
     # risk.max_positions_per_account (2) here only. Accepted on a demo probe_only account only (refused at load
     # otherwise); None = the global value
@@ -507,6 +511,14 @@ class Account(Record):
         cap = self.daily_loss_limit_abs
         if self.cost_probe.enabled and cap is not None and self.cost_probe.max_loss > self.cost_probe.budget_share * cap:
             raise ValueError("cost_probe.max_loss must fit inside budget_share x daily_loss_limit_abs (ADR 0037)")
+        return self
+
+    @model_validator(mode="after")
+    def _model_gate_demo_only(self) -> Account:
+        """ADR 0101: a model may gate exploration entries on a demo account only. A live account with model_gate set
+        fails at load, loudly (the engine also checks `risk.gate.is_demo` at every gated signal)."""
+        if self.model_gate and self.mode != "demo":
+            raise ValueError("model_gate is allowed on demo accounts only (ADR 0101): real money is never model-gated")
         return self
 
     @model_validator(mode="after")

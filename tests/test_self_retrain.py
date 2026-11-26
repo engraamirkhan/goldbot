@@ -681,13 +681,19 @@ def test_a_model_row_a_newer_release_wrote_with_an_extra_field_still_reads():
     assert sr._model(newer) == m
 
 
-def test_no_engine_or_execution_module_reads_the_self_retrain_tables():
+def test_no_engine_or_execution_module_reads_the_self_retrain_tables_except_the_shadow_scorer():
+    """ADR 0101: engine/shadow_scoring.py is the one engine module that reads `self_retrain_models` (scores logged;
+    a gate only on a demo account whose flag is on, with a spec in its GATE_SPECS). No other engine, execution or risk
+    module names the tables or imports the trainer."""
     root = Path(__file__).resolve().parents[1] / "goldbot"
     for sub in ("engine", "execution", "risk"):
         for f in (root / sub).rglob("*.py"):
             text = f.read_text()
-            assert "self_retrain" not in text, f
             ast.parse(text)
+            if f.name == "shadow_scoring.py":
+                continue
+            assert "self_retrain_models" not in text and "self_retrain_runs" not in text, f
+            assert "import self_retrain" not in text and "research.self_retrain import" not in text, f
 
 
 def test_the_run_counts_the_candidates_voided_for_a_stop_inside_the_spread(db):
@@ -701,3 +707,19 @@ def test_the_run_counts_the_candidates_voided_for_a_stop_inside_the_spread(db):
     ex.void_inside_spread(db, ["tiny"])
     _, counts = sr.load_rows(db, broker="icm", cutoff=START + pd.Timedelta(days=4), holdout=None)
     assert counts["stop_inside_spread"] == 1
+
+
+def test_the_trainer_records_each_models_sha256_and_training_feature_versions(db):
+    """Provenance for the shadow scorer (engine/shadow_scoring.py, ADR 0101): each model row carries the sha256 of its
+    stored JSON text and the feature versions of the snapshots it trained on, and passes the scorer's load checks."""
+    from goldbot.engine import shadow_scoring
+    _populate(db)
+    _run(db)
+    with db.connection() as conn:
+        rows = conn.execute("SELECT model, model_sha256, feature_versions FROM self_retrain_models").fetchall()
+    assert rows
+    for body, sha, fvs in rows:
+        assert sha == sr.model_sha256(body) == hashlib.sha256(body.encode()).hexdigest()
+        assert json.loads(fvs) == ["f-test"]
+    got, problems = shadow_scoring.load_models(db, "icm")
+    assert got and not problems
