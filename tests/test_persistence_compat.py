@@ -599,6 +599,24 @@ def test_every_persisted_record_model_has_a_compat_case():
 # Direct model_validate / model_validate_json calls allowed in goldbot/, keyed by (file, enclosing function, receiver).
 # Everything else must use load_record / load_record_json. Keep each entry's reason; remove it when its call goes away.
 STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
+    # history models (ADR 0107, ADR 0109): artifacts and build settings are hashed into a run manifest, so a field
+    # this release does not know would change the bytes the manifest's sha names; they are refused, never dropped
+    ("goldbot/research/seq1.py", "load", "Seq1Artifact"):
+        "strict: a sha-checked SEQ-1 artifact (the sha covers every field; a tolerant read would serve other weights)",
+    ("goldbot/research/seq1.py", "load_bundle", "Seq1Bundle"):
+        "strict: the SEQ-1 seed bundle whose bytes a run manifest hashes (ADR 0109 rebuild must match exactly)",
+    ("goldbot/research/seq1_embed.py", "load", "EmbedArtifact"):
+        "strict: a sha-checked, outcome-free SEQ-1 embedding artifact (quant R-c)",
+    ("goldbot/research/rl_exits.py", "load", "ExitPolicy"):
+        "strict: a sha-checked RL-X1 policy (the sha covers every field; never live)",
+    ("goldbot/research/history_runs.py", "build_seq1", "S.Seq1Spec"):
+        "strict: the settings a run manifest recorded for a rebuild; an unknown key must fail, not be ignored",
+    ("goldbot/research/history_runs.py", "build_seq1_embed", "E.EmbedSpec"):
+        "strict: the settings a run manifest recorded for a rebuild; an unknown key must fail, not be ignored",
+    ("goldbot/research/history_runs.py", "build_rlx1", "X.RlSpec"):
+        "strict: the settings a run manifest recorded for a rebuild; an unknown key must fail, not be ignored",
+    ("goldbot/research/history_runs.py", "build_rlx1", "SimCosts"):
+        "strict: the simulator costs a run manifest recorded for a rebuild; an unknown key must fail",
     ("goldbot/data/era_quality.py", "load_history_sources", "HistorySources"):
         "strict: config/history_sources.yaml, versioned config (a misspelt key, a band that cannot catch a x10 error "
         "or a moved holdout cut must fail the load; lane W1-E, PR #453)",

@@ -23,7 +23,9 @@ tf in the fold), learn 2010-01..2017-12 only. Each fold refits from scratch; tes
 
 A8 parity on the 8 dims (`parity`): the same decisions embedded from two inputs (two sources, or batch vs serving)
 compared per dimension (max abs diff, NaN-mask difference, correlation). `embed_row` equals `embed` on the batch.
-Run log (ADR 0106 7): `run_log_of` / `rebuild` reproduce the artifact sha exactly.
+Run record (ADR 0106 7, ADR 0109): `history_runs.record_seq1_embed` fits through a builder and writes the run
+manifest (`run_manifest`); `run_manifest.rebuild` reproduces the artifact sha exactly. An embedding is an input
+block of zoo-v2, never served alone: its manifest carries no serving verdict.
 """
 from __future__ import annotations
 
@@ -38,7 +40,6 @@ from pydantic import field_serializer, field_validator
 from goldbot.base import FrozenRecord
 from goldbot.config import tf_seconds
 from goldbot.research import feature_store as F
-from goldbot.research import run_log as RL
 from goldbot.research import seq1 as S
 from goldbot.research import windows as WN
 from goldbot.research.dense_labels import H_BY_TF
@@ -304,24 +305,6 @@ def parity(art: EmbedArtifact, X_a: np.ndarray, X_b: np.ndarray) -> Parity:
                   corr=tuple(corr))
 
 
-# ---------------------------------------------------------------------------------------------- run log, rebuild
-CODE_FILES: tuple[str, ...] = ("goldbot/research/seq1_embed.py", *S.CODE_FILES)
-
-
-def run_log_of(art: EmbedArtifact, data: S.Seq1Data, results: Mapping[str, Any] | None = None) -> RL.RunLog:
-    return RL.new(model="seq1-embed", spec_id=art.spec.spec_id, data=S.data_version(data),
-                  settings=art.spec.model_dump(mode="json"), seed=art.seed, code=RL.code_sha(CODE_FILES),
-                  artifact_sha=art.sha256, results={"best_epoch": art.best_epoch, "val_loss": art.val_loss,
-                                                    "torch_version": art.torch_version, **(results or {})})
-
-
-def rebuild(log: RL.RunLog, data: S.Seq1Data) -> EmbedArtifact:
-    RL.check_inputs(log, data=S.data_version(data), code=RL.code_sha(CODE_FILES))
-    art = fit(data, seed=log.seed, spec=EmbedSpec.model_validate(log.settings))
-    RL.check_artifact(log, art.sha256)
-    return art
-
-
 __all__ = ["DIM", "SPEC", "EmbedArtifact", "EmbedSpec", "Parity", "SeedStability", "build", "embed", "embed_row",
-           "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_targets", "rebuild", "rows",
-           "run_log_of", "seed_stability"]
+           "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_targets", "rows",
+           "seed_stability"]

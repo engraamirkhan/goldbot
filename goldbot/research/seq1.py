@@ -33,12 +33,11 @@ The card, as coded:
   that select on their own metric" (for the quant to confirm on the card).
 - Normalisation from past data only (ADR 0106): every input is scaled inside its own window by the ATR known at the
   decision; nothing is fitted across rows, so no future row moves a past input.
-- Baseline (ADR 0106 3: "Every deep model (A, B) must beat the gradient-boosted baseline (C) out of sample after
-  costs or it is not deployed"): `read` takes the GBT baseline's keep on the same judged rows and reports the paired
-  D = S(SEQ-1) - S(GBT) per seed with its day-block lower bound (`objective.paired_delta`); `deployable_vs_gbt` needs a
-  READ verdict and every seed's lower bound > 0. The GBT itself is the tabular trainer's (C).
-- Run log (ADR 0106 7): `run_log_of` records data version, settings, seed, code sha and results; `rebuild` refits
-  from a log and must reproduce the artifact sha exactly.
+- Served form and baseline (ADR 0106 3: "Every deep model (A, B) must beat the gradient-boosted baseline (C) out of
+  sample after costs or it is not deployed"; ADR 0109): the served model is the seed ensemble (`Seq1Bundle`, mean
+  prediction); `read` returns its keep on the judged rows, and `history_runs.seq1_quality` turns the read into
+  `model_quality.seed_stability` and `model_quality.beats_baseline` (against the GBT run manifest) verdicts for its
+  run manifest (`run_manifest`, one record format). This module imports neither: it stays on the obj-v1 guarded list.
 - Determinism: torch on CPU, `use_deterministic_algorithms`, fixed thread count and seed; the artifact
   (`Seq1Artifact`) holds the float32 weights and their sha256 (over spec, seed, names, shapes and bytes); loading
   recomputes it and refuses a mismatch. `score` and `score_row` agree (tested).
@@ -68,7 +67,6 @@ from pydantic import ConfigDict, field_serializer, field_validator
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
 from goldbot.research import objective as O
-from goldbot.research import run_log as RL
 from goldbot.research import windows as WN
 
 SPEC_ID = "seq1-v1"
@@ -474,30 +472,39 @@ def fit(data: Seq1Data, *, seed: int, spec: Seq1Spec = SPEC) -> Seq1Artifact:
                         sha256=weights_sha(spec, seed, names, shapes, blob))
 
 
-# ---------------------------------------------------------------------------------------------- run log, rebuild
-CODE_FILES: tuple[str, ...] = ("goldbot/research/seq1.py", "goldbot/research/objective.py",
-                               "goldbot/research/windows.py", "goldbot/research/run_log.py")
+# ---------------------------------------------------------------------------------------------- the served form
+class Seq1Bundle(FrozenRecord):
+    """The seed ensemble of one fit: one artifact per seed of the spec, scored as their mean (ADR 0106: "train several
+    seeds per model"; ADR 0109's serving rule reads seed stability over the run manifest's own seeds, >= 5). The bytes
+    a run manifest records are `bundle_bytes` (research/history_runs.py)."""
+    artifacts: tuple[Seq1Artifact, ...]
+
+    @property
+    def seeds(self) -> tuple[int, ...]:
+        return tuple(a.seed for a in self.artifacts)
 
 
-def data_version(data: Seq1Data) -> str:
-    return RL.data_version([data.X, data.y, data.w], [data.keys])
+def fit_bundle(data: Seq1Data, spec: Seq1Spec = SPEC) -> Seq1Bundle:
+    return Seq1Bundle(artifacts=tuple(fit(data, seed=s, spec=spec) for s in spec.seeds))
 
 
-def run_log_of(art: Seq1Artifact, data: Seq1Data, results: Mapping[str, Any] | None = None) -> RL.RunLog:
-    """The run log of one fit on `data` (ADR 0106 7)."""
-    return RL.new(model="seq1", spec_id=art.spec.spec_id, data=data_version(data),
-                  settings=art.spec.model_dump(mode="json"), seed=art.seed, code=RL.code_sha(CODE_FILES),
-                  artifact_sha=art.sha256, results={"best_epoch": art.best_epoch, "val_loss": art.val_loss,
-                                                    "n_train": art.n_train, "n_val": art.n_val,
-                                                    "torch_version": art.torch_version, **(results or {})})
+def score_bundle(bundle: Seq1Bundle, X: np.ndarray) -> np.ndarray:
+    """Mean E[gross R | x] over the bundle's seeds, (n, 2)."""
+    return np.mean([score(a, X) for a in bundle.artifacts], axis=0)
 
 
-def rebuild(log: RL.RunLog, data: Seq1Data) -> Seq1Artifact:
-    """Refit from the log on the same data and code; the artifact sha must equal the logged one."""
-    RL.check_inputs(log, data=data_version(data), code=RL.code_sha(CODE_FILES))
-    art = fit(data, seed=log.seed, spec=Seq1Spec.model_validate(log.settings))
-    RL.check_artifact(log, art.sha256)
-    return art
+def bundle_bytes(bundle: Seq1Bundle) -> bytes:
+    return bundle.model_dump_json().encode()
+
+
+def load_bundle(raw: bytes | str) -> Seq1Bundle:
+    """Strict: every artifact's sha must match its weights (a field this release does not know would change the
+    bytes the run manifest hashed, so it is refused, never dropped)."""
+    b = Seq1Bundle.model_validate_json(raw)
+    bad = [a.seed for a in b.artifacts if a.compute_sha256() != a.sha256]
+    if bad:
+        raise ValueError(f"SEQ-1 bundle: artifact sha mismatch for seeds {bad}")
+    return b
 
 
 def _net_of(art: Seq1Artifact) -> Any:
@@ -569,17 +576,16 @@ class Seq1Read(FrozenRecord):
     s_mean: float
     keep_share: float
     per_tf: dict[str, float]
-    vs_gbt: tuple[tuple[float, float], ...] | None     # (D, lower bound) per seed vs the GBT baseline's keep
-    deployable_vs_gbt: bool | None                      # READ and every seed's D lower bound > 0
+    keep_ensemble: np.ndarray                           # per judged row: keep_rule on the seeds' mean prediction
     reads: tuple[O.ObjectiveRead, ...]
 
 
-def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec = SPEC, boot: int = O.BOOT,
-         gbt_keep: np.ndarray | None = None) -> Seq1Read:
+def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec = SPEC,
+         boot: int = O.BOOT) -> Seq1Read:
     """Fit every seed on `train`, keep test rows by `objective.keep_rule` (pred - cost(x) > 0), read obj-v1 S on the
-    pooled unit per seed; INCONCLUSIVE when the seed SD is not below MIN_EDGE / 2. `gbt_keep`: the GBT baseline's keep
-    on the same `rows` (ADR 0106 3), read as the paired D per seed."""
-    reads, shas, per_tf_s, vs = [], [], [], []
+    pooled unit per seed; INCONCLUSIVE when the seed SD is not below MIN_EDGE / 2. `keep_ensemble` is the served
+    bundle's keep (the seeds' mean prediction), the rows `history_runs.seq1_quality` compares with the GBT baseline."""
+    reads, shas, per_tf_s, preds = [], [], [], []
     for sd in spec.seeds:
         art = fit(train, seed=sd, spec=spec)
         pred = score(art, test.X)[rows["row"].to_numpy(), rows["col"].to_numpy()]
@@ -589,9 +595,7 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec 
                     cost_x=rows["cost_x"].to_numpy(), boot=boot)
         reads.append(rd)
         shas.append(art.sha256)
-        if gbt_keep is not None:
-            vs.append(O.paired_delta(rows["net_r"].to_numpy(), keep, np.asarray(gbt_keep, dtype=bool), day,
-                                     boot=max(boot, 1)))
+        preds.append(pred)
         tfs = rows["judged_tf"].to_numpy()
         per_tf_s.append({str(t): O.s_statistic(O.clip_r(rows["net_r"].to_numpy()[tfs == t]),
                                                keep[tfs == t].astype(float)) for t in np.unique(tfs)})
@@ -601,12 +605,11 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec 
     return Seq1Read(spec_id=spec.spec_id, seeds=spec.seeds, shas=tuple(shas), s_by_seed=tuple(s), seed=chk,
                     verdict="INCONCLUSIVE" if chk.inconclusive else "READ", s_mean=float(np.mean(s)),
                     keep_share=float(np.mean([r.keep_share for r in reads])), per_tf=per_tf,
-                    vs_gbt=tuple(vs) if gbt_keep is not None else None,
-                    deployable_vs_gbt=(not chk.inconclusive and all(lo > 0 for _, lo in vs))
-                    if gbt_keep is not None else None, reads=tuple(reads))
+                    keep_ensemble=O.keep_rule(np.mean(preds, axis=0), rows["cost_x"].to_numpy()),
+                    reads=tuple(reads))
 
 
 __all__ = ["CHANNELS", "SPEC", "Seq1Artifact", "Seq1Data", "Seq1Read", "Seq1Spec", "SeedCheck", "bar_windows",
-           "TorchState", "build_net", "data_version", "design", "fit", "inner_split", "judged_rows", "judged_tf", "load", "n_inputs", "param_count", "read",
-           "rebuild", "receptive_field", "run_log_of", "save", "score", "score_row", "seed_check", "split", "state_bytes", "tf_channels", "torch_module",
+           "Seq1Bundle", "TorchState", "build_net", "bundle_bytes", "fit_bundle", "load_bundle", "score_bundle", "design", "fit", "inner_split", "judged_rows", "judged_tf", "load", "n_inputs", "param_count", "read",
+           "receptive_field", "save", "score", "score_row", "seed_check", "split", "state_bytes", "tf_channels", "torch_module",
            "weights_sha", "window_start"]

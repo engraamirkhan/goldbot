@@ -53,7 +53,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   label read: `learn_labels.load_learn` is the single route (learn 2010-17, train, phase 0, no booked read) and stays
   sealed until ADR 0085 A4 records the tiers sha (PR #482). torch is the optional `dl` group (`uv sync --extra dl`,
   CPU wheels; Linux from the PyTorch CPU index); scripts/check_env.py now accepts a package locked once per platform.
-  Run logs rebuild exactly (`run_log`). Open: quant ruling on the validation stop (ADR 0107 1), the GBT keep from the
+  Run records are ADR 0109 run manifests (`history_runs` builders; rebuild reproduces the sha); this branch merges
+  PR #494 and lands after it. Open: quant ruling on the validation stop (ADR 0107 1), the GBT keep from the
   tabular trainer for SEQ-1's paired D, a runner script for the first real fit.
 - **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,

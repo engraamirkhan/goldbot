@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 from goldbot.research import rl_exits as X
-from goldbot.research import run_log as RL
 from goldbot.research.rl_sim import SimCosts
 from goldbot.research.windows import HoldoutSealed
 
@@ -120,17 +119,6 @@ def test_the_policy_is_deterministic_round_trips_with_its_sha_and_score_row_matc
         X.load(a.model_dump_json().replace(a.sha256, "0" * 64))
 
 
-def test_a_policy_rebuilds_exactly_from_its_run_log(tmp_path: Path):
-    eps = _world(60, 6, reverting=True)
-    pol = X.fit(X.transitions(eps, costs=FREE), n_episodes=len(eps))
-    log = X.run_log_of(pol, eps, {"delta": 0.1}, costs=FREE)
-    RL.append(tmp_path / "runs.jsonl", log)
-    back = RL.read(tmp_path / "runs.jsonl")[0]
-    assert X.rebuild(back, eps).sha256 == pol.sha256
-    with pytest.raises(RL.RebuildMismatch):
-        X.rebuild(back, eps[1:])
-
-
 # ------------------------------------------------------------------------------------------------ bars, windows
 def _bars(start: str, n: int) -> pd.DataFrame:
     ts = pd.date_range(start, periods=n, freq="1h", tz="UTC")
@@ -179,7 +167,8 @@ def test_episodes_need_tier_usable_a_or_a_consistent_rows():
 
 
 # ------------------------------------------------------------------------------------------------ never live
-@pytest.mark.parametrize("mod", ["rl_exits", "rl_sim", "seq1", "seq1_embed", "agg_v1", "learn_labels", "run_log"])
+@pytest.mark.parametrize("mod", ["rl_exits", "rl_sim", "seq1", "seq1_embed", "agg_v1", "learn_labels",
+                                 "history_runs"])
 def test_the_history_models_import_nothing_on_the_order_path(mod: str):
     tree = ast.parse((ROOT / f"goldbot/research/{mod}.py").read_text())
     names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}

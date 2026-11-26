@@ -30,14 +30,14 @@ The problem, as coded:
   ending outside learn are refused (the holdout first), and every entry must carry the tier filter of
   `learn_labels.load_learn` (`usable` True, `tier` A or A-consistent when present). learn_old is not used (gold has no
   A month there). The test_old read is the card's, under its booked id; nothing here opens it.
-- Run log (ADR 0106 7): `run_log_of` / `rebuild` reproduce the policy's sha from its data version, spec and code.
+- Run record (ADR 0106 7, ADR 0109): `history_runs.record_rlx1` fits through a builder and writes the run manifest
+  (family D); it carries no serving verdict, so `model_quality.require_servable` refuses it: RL-X1 is never live.
 """
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from collections.abc import Callable, Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -45,7 +45,6 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
 from goldbot.labels.triple_barrier import rollover_nights
-from goldbot.research import run_log as RL
 from goldbot.research import windows as WN
 from goldbot.research.rl_sim import SimCosts
 
@@ -404,32 +403,3 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC,
                          delta_per_day_lo=_day_block_lo(days, boot=spec.boot, seed=spec.seed,
                                                         mean_block=spec.mean_block_days),
                          shuffled_delta_mean=float((pc - f).mean()), action_counts=counts)
-
-
-# ---------------------------------------------------------------------------------------------- run log, rebuild
-CODE_FILES: tuple[str, ...] = ("goldbot/research/rl_exits.py", "goldbot/research/rl_sim.py",
-                               "goldbot/research/run_log.py")
-
-
-def data_version(eps: Sequence[Episode]) -> str:
-    arrays = [np.concatenate([np.r_[e.k, e.weight], e.open_r, e.high_r, e.low_r, e.close_r, e.swap_r]) for e in eps]
-    return RL.data_version(arrays, [pd.DataFrame({"day": [e.day for e in eps]})])
-
-
-def run_log_of(pol: ExitPolicy, eps: Sequence[Episode], results: Mapping[str, Any] | None = None,
-               costs: SimCosts | None = None) -> RL.RunLog:
-    """Settings = the spec and the simulator costs the policy was fitted under."""
-    settings = {"spec": pol.spec.model_dump(mode="json"), "costs": (costs or SimCosts.w2()).model_dump(mode="json")}
-    return RL.new(model="rlx1", spec_id=pol.spec.spec_id, data=data_version(eps),
-                  settings=settings, seed=pol.spec.seed, code=RL.code_sha(CODE_FILES),
-                  artifact_sha=pol.sha256, results=json.loads(json.dumps(dict(results or {}), default=str)))
-
-
-def rebuild(log: RL.RunLog, eps: Sequence[Episode]) -> ExitPolicy:
-    """Refit from the log on the same episodes and code; the policy sha must equal the logged one."""
-    RL.check_inputs(log, data=data_version(eps), code=RL.code_sha(CODE_FILES))
-    spec = RlSpec.model_validate(log.settings["spec"])
-    costs = SimCosts.model_validate(log.settings["costs"])
-    pol = fit(transitions(eps, spec, costs), spec, n_episodes=len(eps))
-    RL.check_artifact(log, pol.sha256)
-    return pol

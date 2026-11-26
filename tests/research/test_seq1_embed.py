@@ -1,6 +1,6 @@
 """SEQ-1's primary path under quant ruling R-c (goldbot/research/seq1_embed.py): an outcome-free pretext read from the
 window only, an 8-dim embedding refit per outer fold on purged training rows (embargo >= TCN window + H), learn only,
-5-seed stability, A8 parity on the 8 dims, exact rebuild."""
+5-seed stability, A8 parity on the 8 dims (the run record and rebuild: test_history_runs)."""
 from __future__ import annotations
 
 import ast
@@ -64,10 +64,20 @@ def test_the_linear_cka_is_one_for_a_rotation_and_low_for_noise():
     assert E.linear_cka(a, rng.normal(0, 1, (500, 8))) < 0.1
 
 
-torch = pytest.importorskip("torch")
+def _has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+needs_torch = pytest.mark.skipif(not _has_torch(),
+                                 reason="the optional dl group (torch) is not installed")
 FAST = E.SPEC.model_copy(update={"base": S.SPEC.model_copy(update={"max_epochs": 2, "batch": 128, "threads": 1})})
 
 
+@needs_torch
 def test_the_fold_purges_training_rows_within_window_plus_horizon_of_the_test_rows_and_refits():
     data, _ = _rows()
     d = pd.DatetimeIndex(data.keys["decision_utc"])
@@ -85,19 +95,17 @@ def test_the_fold_purges_training_rows_within_window_plus_horizon_of_the_test_ro
         E.fold_embed(data, np.ones(len(data), bool), np.asarray(test), spec=FAST)
 
 
-def test_the_embedding_is_deterministic_rebuilds_from_its_log_and_round_trips(tmp_path: Path):
-    from goldbot.research import run_log as RL
+@needs_torch
+def test_the_embedding_is_deterministic_and_round_trips_with_its_sha():
     data, _ = _rows()
     a, b = E.fit(data, seed=7, spec=FAST), E.fit(data, seed=7, spec=FAST)
     assert a.sha256 == b.sha256 == a.compute_sha256() and a.outcome_free
     np.testing.assert_array_equal(E.embed(E.load(a.model_dump_json()), data.X[:30]), E.embed(a, data.X[:30]))
-    log = E.run_log_of(a, data)
-    RL.append(tmp_path / "r.jsonl", log)
-    assert E.rebuild(RL.read(tmp_path / "r.jsonl")[0], data).sha256 == a.sha256
     with pytest.raises(ValueError, match="sha"):
         E.load(a.model_dump_json().replace(a.sha256, "1" * 64))
 
 
+@needs_torch
 def test_embed_row_matches_the_batch_and_parity_is_exact_on_identical_inputs():
     data, _ = _rows()
     art = E.fit(data, seed=3, spec=FAST)
@@ -111,6 +119,7 @@ def test_embed_row_matches_the_batch_and_parity_is_exact_on_identical_inputs():
     assert max(E.parity(art, data.X[:200], noisy).max_abs_diff) > 0
 
 
+@needs_torch
 def test_the_embedding_ignores_bars_after_the_decision():
     data, bars = _rows()
     art = E.fit(data, seed=3, spec=FAST)
@@ -121,6 +130,7 @@ def test_the_embedding_ignores_bars_after_the_decision():
     np.testing.assert_array_equal(E.embed(art, full), E.embed(art, pref))
 
 
+@needs_torch
 def test_seed_stability_fits_every_seed_and_reports_pairwise_cka():
     data, _ = _rows()
     st = E.seed_stability(data, data.X[:200], FAST)

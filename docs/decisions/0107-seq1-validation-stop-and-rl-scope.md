@@ -24,17 +24,20 @@ ruled RL-X1 the one RL item this quarter (R7a) and declined PPO/DQN until RL-X1 
    R), patience 3, cap 30 epochs. No AUC, accuracy or log-loss is computed. seq1 is added to `GUARDED_MODULES`, so
    the guard keeps holding for it. Why not "fixed epochs" instead: ADR 0106 is the newer, owner-set rule and asks for
    early stopping; a stop on the objective of record within a time-split fold meets both.
-2. **The GBT comparison is part of SEQ-1's read.** `seq1.read(gbt_keep=...)` reports the paired D = S(SEQ-1) − S(GBT)
-   per seed with its day-block lower bound (`objective.paired_delta`); `deployable_vs_gbt` needs a READ verdict
-   (seed SD < MIN_EDGE/2) and every seed's lower bound > 0 (ADR 0106 3). It is necessary, not sufficient: the card's
-   gate legs and K stay as they are.
+2. **The GBT comparison is a serving verdict.** `seq1.read` returns the bundle's keep on the judged rows;
+   `history_runs.seq1_quality` reads `model_quality.beats_baseline` (paired, after costs, day-block bootstrap) against
+   the GBT run manifest on the same rows (ADR 0106 3). It is necessary, not sufficient: the card's obj-v1 gate legs,
+   the seed-SD rule and K stay as they are.
 3. **RL scope.** RL-X1 (fitted-Q exits on top of the T2 template's stop and target, shielded actions hold / close /
    breakeven) counts as execution under ADR 0106 and stays offline, never live. The sizing scaffold size-v1
    (`rl_sim`) is closed form: fraction of equity = min(1 %, 0.5 % / vol ratio), with the 2 % daily stop applied before
    a trade (a trade whose full stop could cross it is skipped) and the 15 % drawdown halt. PPO/SAC/TD3 are allowed by
    ADR 0106 inside the simulator but none is fitted now (R7d); size-v1 is the baseline any learned sizer must beat.
-4. **Run log.** Every SEQ-1 and RL-X1 fit can log data version, settings, seed, code sha and results (`run_log`), and
-   `rebuild` must reproduce the artifact sha exactly (tested).
+4. **Run record: one format, ADR 0109's run manifest.** Every SEQ-1 bundle, embedding and RL-X1 fit goes through a
+   builder in `history_runs` and `run_manifest.fit_and_record`; `run_manifest.rebuild` reproduces the sha (tested on
+   a clean checkout). SEQ-1's served form is the 5-seed bundle; its manifest carries `model_quality.seed_stability`
+   and `beats_baseline` against the GBT manifest (`history_runs.seq1_quality`). The embedding (an input block) and
+   RL-X1 (never live) record no serving verdict, so `require_servable` refuses them.
 
 ## Consequences
 - Quant to confirm point 1 on the SEQ-1 card; if refused, set `patience = max_epochs` (no stop) by a spec change

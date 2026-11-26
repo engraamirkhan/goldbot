@@ -187,7 +187,16 @@ def test_seq1_is_on_the_obj_v1_guarded_list():
 
 
 # ------------------------------------------------------------------------------------------------ the network
-torch = pytest.importorskip("torch")
+def _has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+needs_torch = pytest.mark.skipif(not _has_torch(),
+                                 reason="the optional dl group (torch) is not installed")
 
 
 @pytest.fixture(scope="module")
@@ -197,11 +206,14 @@ def small() -> tuple[S.Seq1Data, S.Seq1Spec]:
     return data, S.SPEC.model_copy(update={"max_epochs": 2, "batch": 128, "threads": 1})
 
 
+@needs_torch
 def test_the_network_has_about_sixty_thousand_parameters():
     assert 45_000 <= S.param_count(S.SPEC) <= 75_000
 
 
+@needs_torch
 def test_the_convolutions_are_causal_a_later_position_never_moves_an_earlier_output():
+    import torch
     net = S.build_net(S.SPEC, seed=1).eval()            # eval: dropout off, as when scoring
     x = torch.randn(2, S.n_inputs(S.SPEC), S.SPEC.window)
     y = x.clone()
@@ -212,6 +224,7 @@ def test_the_convolutions_are_causal_a_later_position_never_moves_an_earlier_out
     assert not torch.equal(a[:, :, 40:], b[:, :, 40:])
 
 
+@needs_torch
 def test_a_fit_is_deterministic_on_cpu_and_its_sha_names_the_weights(small):
     data, spec = small
     a, b = S.fit(data, seed=spec.seeds[0], spec=spec), S.fit(data, seed=spec.seeds[0], spec=spec)
@@ -220,6 +233,7 @@ def test_a_fit_is_deterministic_on_cpu_and_its_sha_names_the_weights(small):
     assert a.sha256 == a.compute_sha256() and a.objective_id == O.OBJECTIVE_ID
 
 
+@needs_torch
 def test_the_fit_stops_on_the_validation_loss_and_records_the_best_epoch(small):
     data, _ = small
     spec = S.SPEC.model_copy(update={"max_epochs": 12, "patience": 2, "batch": 128, "threads": 1})
@@ -227,22 +241,7 @@ def test_the_fit_stops_on_the_validation_loss_and_records_the_best_epoch(small):
     assert 1 <= art.best_epoch <= 12 and np.isfinite(art.val_loss) and art.n_val > 0
 
 
-def test_a_model_rebuilds_exactly_from_its_run_log_and_refuses_other_data(small, tmp_path: Path):
-    from goldbot.research import run_log as RL
-    data, spec = small
-    art = S.fit(data, seed=spec.seeds[2], spec=spec)
-    log = S.run_log_of(art, data, {"s": 0.01})
-    RL.append(tmp_path / "runs.jsonl", log)
-    back = RL.read(tmp_path / "runs.jsonl")[0]
-    assert back.data_version == S.data_version(data) and back.seed == spec.seeds[2] and back.code_sha
-    assert S.rebuild(back, data).sha256 == art.sha256
-    other = data.take(np.arange(len(data)) > 0)
-    with pytest.raises(RL.RebuildMismatch, match="data version"):
-        S.rebuild(back, other)
-    with pytest.raises(RL.RebuildMismatch, match="artifact"):
-        S.rebuild(back.model_copy(update={"artifact_sha": "0" * 64}), data)
-
-
+@needs_torch
 def test_the_artifact_round_trips_through_json_and_refuses_a_tampered_blob(small, tmp_path: Path):
     data, spec = small
     art = S.fit(data, seed=spec.seeds[0], spec=spec)
@@ -255,6 +254,7 @@ def test_the_artifact_round_trips_through_json_and_refuses_a_tampered_blob(small
         S.load(p)
 
 
+@needs_torch
 def test_score_row_matches_the_batch_score(small):
     data, spec = small
     art = S.fit(data, seed=spec.seeds[0], spec=spec)
@@ -263,6 +263,7 @@ def test_score_row_matches_the_batch_score(small):
         np.testing.assert_allclose(S.score_row(art, data.X[i]), batch[i], rtol=1e-5, atol=1e-6)
 
 
+@needs_torch
 def test_the_full_path_from_bars_to_score_ignores_bars_after_the_decision(small):
     data, spec = small
     art = S.fit(data, seed=spec.seeds[0], spec=spec)
@@ -275,6 +276,7 @@ def test_the_full_path_from_bars_to_score_ignores_bars_after_the_decision(small)
                                   S.score(art, np.concatenate([w_pref, tf], axis=1)))
 
 
+@needs_torch
 def test_fitting_learns_a_planted_signal_in_the_offset_form(small):
     data, _ = small
     spec = S.SPEC.model_copy(update={"max_epochs": 15, "patience": 15, "batch": 64, "threads": 1})
@@ -284,17 +286,15 @@ def test_fitting_learns_a_planted_signal_in_the_offset_form(small):
         assert np.corrcoef(pred[:, j], data.y[:, j])[0, 1] > 0.3
 
 
+@needs_torch
 def test_the_walk_forward_read_runs_every_seed_and_marks_a_wide_seed_spread_inconclusive(small):
     data, spec = small
     spec = spec.model_copy(update={"seeds": spec.seeds[:3]})
     at = pd.Timestamp(data.keys["decision_utc"].iloc[400])
     tr, te = S.split(data, at)
     rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05))
-    gbt = np.zeros(len(rows), dtype=bool)                  # a GBT baseline that keeps nothing
-    rd = S.read(tr, te, rows, spec=spec, boot=0, gbt_keep=gbt)
-    assert rd.vs_gbt is not None and len(rd.vs_gbt) == 3 and rd.deployable_vs_gbt is not None
-    if rd.verdict == "INCONCLUSIVE":
-        assert rd.deployable_vs_gbt is False
+    rd = S.read(tr, te, rows, spec=spec, boot=0)
+    assert rd.keep_ensemble.shape == (len(rows),) and rd.keep_ensemble.dtype == bool
     assert len(rd.seeds) == 3 and len(rd.shas) == 3 and len(rd.s_by_seed) == 3
     assert rd.verdict in ("READ", "INCONCLUSIVE")
     assert rd.verdict == ("INCONCLUSIVE" if rd.seed.inconclusive else "READ")
