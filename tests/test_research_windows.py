@@ -1,6 +1,8 @@
 """W2 research windows (ADR research-windows-w2): frozen spans, entry-time rule, test_old flag, embargo, holdout sealed."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -152,3 +154,75 @@ def test_the_label_embargo_is_one_day_or_the_longest_hold_whichever_is_longer():
     assert w.label_embargo(pd.Timedelta(0)) == pd.Timedelta(days=1)
     with pytest.raises(ValueError):
         w.label_embargo(pd.Timedelta(hours=-1))
+
+
+# ------------------------------------------------------------------ read ledger: fail closed (code review on PR #478)
+def test_a_complete_row_without_its_newline_still_counts(tmp_path: Path) -> None:
+    """MEDIUM-1: a recorded read whose newline was lost is a real row: a second read of that window is refused, and
+    the next append gives the row its newline (it is never moved to .torn)."""
+    import json as _json
+
+    from goldbot.research import windows as WN
+    ledger = tmp_path / WN.READS_LEDGER
+    WN.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"stage": "C"})
+    ledger.write_text(ledger.read_text().rstrip("\n"))          # the newline is lost
+    with pytest.raises(WN.AlreadyRead):
+        WN.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"stage": "C"})
+    WN.record_read_once(ledger, "model_zoo_fusion", "learn", ref={"stage": "L"})
+    rows = [_json.loads(x) for x in ledger.read_text().splitlines()]
+    assert [r["window"] for r in rows] == ["confirm", "learn"]
+    assert not (tmp_path / (WN.READS_LEDGER + ".torn")).exists()
+
+
+def test_a_short_write_records_nothing_and_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """MEDIUM-1: a short os.write is cut back to the size before it and raises, so no partial row is left to be
+    evicted later; the read is recorded only by a complete write, after which a second read is refused."""
+    import os as _os
+
+    from goldbot.research import windows as WN
+    ledger = tmp_path / WN.READS_LEDGER
+    WN.record_read_once(ledger, "model_zoo_fusion", "learn", ref={"stage": "L"})
+    before = ledger.read_bytes()
+    real = _os.write
+
+    def short(fd: int, buf: bytes) -> int:
+        return real(fd, buf[: len(buf) // 2])
+
+    monkeypatch.setattr(_os, "write", short)
+    with pytest.raises(OSError, match="short write"):
+        WN.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"stage": "C"})
+    monkeypatch.setattr(_os, "write", real)
+    assert ledger.read_bytes() == before                         # nothing partial left behind
+    WN.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"stage": "C"})
+    with pytest.raises(WN.AlreadyRead):
+        WN.record_read_once(ledger, "model_zoo_fusion", "confirm", ref={"stage": "C"})
+
+
+def test_windows_imports_without_fcntl_and_refuses_to_write_unlocked(tmp_path: Path) -> None:
+    """LOW-1: windows.py imports on a platform without fcntl (the native Windows VPS takes msvcrt instead); with no
+    lock at all a ledger write raises rather than writing unlocked."""
+    import subprocess
+    import sys
+    import textwrap
+
+    root = Path(__file__).resolve().parents[1]
+    code = textwrap.dedent(f"""
+        import importlib.util, sys, types
+        sys.modules["fcntl"] = None
+        stub = types.ModuleType("goldbot.data.release")
+        stub.BAR_FILE_PREFIX = "x"
+        stub.read_bar_files = lambda *a, **k: None
+        sys.modules["goldbot.data.release"] = stub
+        spec = importlib.util.spec_from_file_location("w", r"{root / 'goldbot' / 'research' / 'windows.py'}")
+        w = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(w)
+        assert w.fcntl is None
+        try:
+            with w.locked_ledger(r"{tmp_path / 'l.jsonl'}"):
+                pass
+        except w.LedgerLockUnavailable:
+            print("refused")
+    """)
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=root, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "refused"
