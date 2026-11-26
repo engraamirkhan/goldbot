@@ -150,7 +150,9 @@ def test_tampered_artefact_is_refused(tmp_path):
     reg.promote(e.version)
     (tmp_path / e.artefact).write_bytes(b"not the model")
     with pytest.raises(ValueError, match="checksum"):
-        reg.champion_models()
+        reg.load(reg.champion("x"))
+    # ADR 0109 serving rule (#494): a champion whose artefact fails its checksum is left out, logged, never served
+    assert reg.champion_models() == {}
 
 
 @pytest.mark.integration

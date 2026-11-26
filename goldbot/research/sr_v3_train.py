@@ -67,6 +67,13 @@ SEEDS: tuple[int, ...] = tuple(MQ.seed_list(MANIFEST_KEY))
 CANARY_DELTAS: tuple[float, ...] = (0.03, 0.05, 0.10)
 
 
+def one_thread() -> Any:
+    """One BLAS/OpenMP thread, as `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit of
+    a fit and so the artifact sha (every fit whose bytes a manifest records runs under it)."""
+    from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
+    return threadpool_limits(limits=1)
+
+
 class SequencingRefused(PermissionError):
     """An sr-v3 label value or Stage 0 statistic was asked for before the quant sequencing holds."""
 
@@ -343,7 +350,13 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
             n_hint: int | None = None) -> Collected:
     """One streamed pass: medians from the smallest fold's rows (2010-11, in every fold's training set), then per year
     the L-cw moments (members) and HB moments (tf, class) of every fold it trains, the fold priors, and the thinned
-    sample. Folds: the OOF years plus 2018 (v0: every learn row)."""
+    sample. Folds: the OOF years plus 2018 (v0: every learn row). On one thread (`one_thread`): the moments are sums
+    a rebuild must reproduce to the last bit."""
+    with one_thread():
+        return _collect(data, plan, seed=seed, phases=phases, n_hint=n_hint)
+
+
+def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int], n_hint: int | None) -> Collected:
     folds = (*plan.oof_years, V.LEARN_YEARS[-1] + 1)
     first = [f for f in _years(data, plan, (2010, 2011), phases)]
     base = pd.concat(first, ignore_index=True) if first else pd.DataFrame(columns=list(ROW_COLS))
@@ -397,10 +410,11 @@ def hb_fit(moms: Mapping[tuple[str, str], L.Moments], impute: Mapping[tuple[str,
            design_effect: Mapping[tuple[str, str], float], lam_a: Mapping[str, float], *,
            lam_rw: float = LAMBDA_RW, lam0: float = V.LAMBDA_ROWS) -> L.HbArtifact:
     """HB over the tf ladder present in `moms`; the class prior is the largest λ_a of the units' buckets (the tighter
-    prior, pre-named) so one solve covers every rung."""
+    prior, pre-named) so one solve covers every rung. On one thread (`one_thread`), as the rebuild runs it."""
     tfs = tuple(t for t in V.H_S if any(k[0] == t for k in moms))
-    return L.fit_hb(moms, impute, HB_COLUMNS, tf_order=tfs, lam0=lam0, lam_rw=lam_rw,
-                    lam_c=max(lam_a.values()) if lam_a else V.LAMBDA_ROWS, design_effect=design_effect)
+    with one_thread():
+        return L.fit_hb(moms, impute, HB_COLUMNS, tf_order=tfs, lam0=lam0, lam_rw=lam_rw,
+                        lam_c=max(lam_a.values()) if lam_a else V.LAMBDA_ROWS, design_effect=design_effect)
 
 
 def _sample_td(s: pd.DataFrame, cols: Sequence[str], pri: DC.CostPriors, plan: UnitPlan) -> L.TrainData:
@@ -775,8 +789,7 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
     """Walk-forward fit, OOF scoring, v0 artifacts and the report for one unit (see the module docstring). The run is
     recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here. Fits on one BLAS/OpenMP thread, as
     `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit and so the artifact sha."""
-    from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
-    with threadpool_limits(limits=1):
+    with one_thread():
         return _fit_unit(data, plan, hb_by_fold=hb_by_fold, seeds=seeds, col=col, harness_rows=harness_rows,
                          with_harness=with_harness)
 
