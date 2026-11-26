@@ -238,15 +238,6 @@ def test_the_nightly_cost_job_snapshots_after_the_learner_and_a_snapshot_failure
     assert out["feature_snapshots"] == {"error": "RuntimeError"}
 
 
-def _full_budget_start() -> pd.Timestamp:
-    """A job start whose deadline (`snapshot_deadline`) is a full SNAPSHOT_BUDGET after the real clock, which the
-    snapshot loop reads: now, or the research window's end (04:05 UTC) when now is in the window or too close before
-    it. The test then passes at any time of day (CI issue #470: it failed whenever it ran inside 00:45-04:05 UTC)."""
-    now = pd.Timestamp.now(tz="UTC")
-    day = now.normalize()
-    return day + fs.QUIET_TO if fs.QUIET_FROM - fs.SNAPSHOT_BUDGET <= now - day < fs.QUIET_TO else now
-
-
 def test_the_snapshot_job_writes_nothing_when_switched_off_and_reports_the_days_coverage_when_on(tmp_path, minutes):
     from types import SimpleNamespace
 
@@ -263,6 +254,9 @@ def test_the_snapshot_job_writes_nothing_when_switched_off_and_reports_the_days_
     slot = DECISIONS[0] + pd.Timedelta(hours=2)
     off_ctx = SimpleNamespace(settings=off, store=store, state_dir=tmp_path, accounts=[acc])
     assert jobs.feature_snapshots(off_ctx, slot) == {"enabled": False}  # type: ignore[arg-type]
-    on_ctx = SimpleNamespace(settings=s, store=store, state_dir=tmp_path, accounts=[acc], clock=_full_budget_start)
+    # a fixed clock outside the 00:45-04:05 UTC research window: the job's answer never depends on when CI runs it
+    # (issue #470: a run at 03:xx UTC got {"skipped": ...})
+    fixed = pd.Timestamp("2026-11-20 12:00", tz="UTC")
+    on_ctx = SimpleNamespace(settings=s, store=store, state_dir=tmp_path, accounts=[acc], clock=lambda: fixed)
     rep = jobs.feature_snapshots(on_ctx, slot)  # type: ignore[arg-type]
     assert rep["written"] == 1 and rep["coverage_1d"]["with_features"] == 1

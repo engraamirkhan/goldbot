@@ -4,16 +4,17 @@
 # supply: n_eff by the card's method (2.2, rho_day 0.25, outcome-blind counts of 2026-11-26) until D-5 measures each
 # cell; null = not counted yet. Counts only: no market data lives in this file.
 card_dated: "2026-11-26"
-counted_by: "sr-v3 card rev 2 section 2.2 (outcome-blind; gold untiered until D-1)"
+counted_by: "sr-v3 card rev 2 section 2.2 (outcome-blind); gold, metals/crosses and index/energy recounted 2026-11-26 from the D-1 served r11-v2.1 tiers (scripts/research/sufficiency_counts.py, tiers sha256 ff653ea7; intraday A/A-cons, B at 1d/1w only)"
 requirement: {inputs: 10, keep_share: 0.33, objective: obj-v1, label_templates: "T0-T7 (D-4)"}
 tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w]
 units:
   gold:
-    label: "Gold (Dukascopy XAUUSD; A/A-cons once graded)"
+    label: "Gold (Dukascopy XAUUSD; D-1 r11-v2.1 grade: A/A-cons intraday, B too at 1d/1w)"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
-    ungraded_projection: "UNMEASURED (D-1)"     # quant C2: no tier survival count before Dukascopy gold is graded
-    learn: [7328, 5443, 4054, 2683, 2071, 1035, 414, 207, 104]
-    judge: [7085, 5263, 3919, 2594, 2002, 1001, 400, 200, 100]
+    # learn 1,473 intraday / 1,754 daily days; judge 149 days (2018 only: 2019-2025-09 are C under r11-v2.1, and
+    # r11-v2.2 is VOID, tol 39 bp > 15 bp; item D-1)
+    learn: [5212, 3872, 2883, 1909, 1473, 736, 295, 175, 88]
+    judge: [527, 392, 292, 193, 149, 74, 30, 15, 7]
     items: [D-1, D-2, D-3, D-4, D-5gold]
   fx10:
     label: "FX10 pooled (HistData, A/A-cons)"
@@ -25,40 +26,43 @@ units:
     label: "Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close)"
     tiers_kept: B
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
-    learn: null
-    judge: null
-    items: [D-2, D-3, D-4, D-5fx, COUNT-mc]
+    # COUNT-mc (k 5): learn 465 A/A-cons + 6,872 A/A-cons/B days, judge 62 + 3,416 (intraday cells load nothing: B)
+    learn: [548, 407, 303, 201, 155, 78, 31, 229, 115]
+    judge: [73, 54, 40, 27, 21, 10, 4, 114, 57]
+    items: [D-2, D-3, D-4, D-5fx]
   index_energy_b:
     label: "Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows)"
     tiers_kept: B
     windows: {learn: "2018-01..2021-12", judge: "2022-01..2025-09"}
-    learn: null
-    judge: [8332, 6189, 4609, 3051, 2355, 1177, 471, 235, 118]
-    items: [D-2, D-3, D-4, D-5ie, COUNT-ie]
+    # COUNT-ie (k 6): learn 2018-21 80 A/A-cons + 4,092 B days, judge 2022-01..2025-09 0 + 4,229 (the old judge row
+    # was the card's 2018-25 count, 8,241 days, which overlaps this unit's learn window)
+    learn: [81, 60, 45, 30, 23, 11, 5, 117, 58]
+    judge: [0, 0, 0, 0, 0, 0, 0, 121, 60]
+    items: [D-2, D-3, D-4, D-5ie]
   independent_new:
-    label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); ranked by |daily corr with gold| and independent graded days"
+    label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: null
     judge: null
     items: [D-13, D-14, D-2, D-5ie]
 items:
-  D-13: {gap: "too few independent instruments x days: the binding constraint, not rows", plan: "rank candidates by outcome-blind |daily close corr with gold| and A/B days available; pull Dukascopy 1m (bid+ask) for the top set back to 2003 where listed; grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only under R11 (crypto, agri): add a reference era or a quant ruling first", owner: "data-engineer; quant (references)", due: "2026-12-11", status: not started, risk: AT RISK}
+  D-13: {gap: "too few independent instruments x days: the binding constraint, not rows", plan: "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first", owner: "data-engineer; quant (references)", due: "2026-12-11", status: not started, risk: AT RISK}
   D-14: {gap: "HistData months graded C have no second source", plan: "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)", owner: data-engineer, due: "2026-12-09", status: not started, risk: AT RISK}
-  D-1: {gap: "Dukascopy XAUUSD has no r11-v2.1 grade: gold rows are untiered", plan: "grade 2003-2025 under r11-v2.1 (frozen hash) against HistData + the LBMA fix; A16 precedence manifest", owner: data-engineer, due: "2026-12-02", status: not started, risk: AT RISK}
+  D-1: {gap: "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)", plan: "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm", owner: "data-engineer (monthly grade, broker M1 capture) + quant-reviewer", due: "2026-12-02 (plan); read date set by graded n_eff", status: "fallback (i) closed 2026-11-26 (none admitted); (ii) active. Broker MT5 M1 from 2026-10-01 is captured daily by the brain's `feed_reconcile` (copy_rates_range, read-only bridge) into `bars_1m_broker`. That table has no retention pruning and is in the backup set (D-11/N13). A missed trading day raises the learning-liveness alert the same day. `scripts/broker_m1_capture.py` copies each closed month into raw/broker_m1/ with a sha256 per file and a gap log within 5 days of month-end, and before any grade. A month without a complete capture grades C. MT5 bars are Bid-built (MT5 Help, 'Charts', cited). The broker reference must pass (a)-(c) per month before it grades. Reference for (ii): icm-demo (the traded ICM feed). Fixed 2026-11-26, before any grade. Vantage and icm-probe are not graded against Dukascopy for D-1. If icm-demo fails (a)-(c) in a month, that month grades C. There is no switch to another account. Same-day alert and month copy: ops PR #471 (checks learning:broker_m1_capture and learning:broker_m1_copy, job broker_m1_copy); live after its deploy. Acceptance: the (ii) grading PR calls frozen_copy_for_grade and writes the returned sha into its tiers rows. Gate: no fallback-(ii) grade runs until learning:broker_m1_capture has passed once on the brain after deploy. Freeze: A closed month's copy must exist within 5 days of month-end (`learning:broker_m1_copy` FAILs otherwise). It stays rewritable until the broker back-fill window closes and freezes at day 8, after the last daily copy. No fallback-(ii) grade reads a month before it freezes; the grade records the frozen copy's sha256 in its tiers rows. A rewrite after the freeze gets a new sha256 and an entry in the gap log and `rewrites.jsonl`, and is graded only under the sha recorded in its tiers rows. If the feed_reconcile back-fill window changes, the freeze moves to (window + 1) days, in the same PR. Deadline: if #471 is not live by 2026-12-05, October and November are copied from the Mac by then and their sha256 recorded here. Owner data-engineer + SRE", risk: AT RISK}
   D-2: {gap: "fs-v1 feature store not merged", plan: "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)", owner: data-engineer, due: "2026-12-04", status: PR open, risk: on track}
   D-3: {gap: "no side-aware r3 labels, synthetic ask, ub95 cost per class", plan: "W2-2 / A9 implementation", owner: implementer + microstructure-researcher, due: "2026-12-04", status: not started (not data-owned), risk: AT RISK}
   D-4: {gap: "exit templates T0-T7 not frozen", plan: "freeze W3-1 / RL-1 templates", owner: exits-researcher, due: "2026-12-02", status: unknown, risk: watch}
   D-5gold: {gap: "no dense labels: gold n_eff is projected, not measured", plan: "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-11", status: "hook designed (fs-v1 phase, group_id, judge refusal); factory not started", risk: AT RISK}
   D-5fx: {gap: "no dense labels for FX10 and metals/crosses", plan: "dense label factory, FX10 + metals/crosses (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-16", status: not started, risk: watch}
   D-5ie: {gap: "no dense labels for index and energy", plan: "dense label factory, index + energy (B close-to-close) Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-21", status: not started, risk: watch}
-  COUNT-mc: {gap: "metals/crosses n_eff not counted", plan: "outcome-blind n_eff count by the card 2.2 method from the r11 tiers", owner: data-engineer, due: "2026-11-28", status: not started, risk: on track}
-  COUNT-ie: {gap: "index/energy learn 2018-2021 (R-L) n_eff not counted", plan: "outcome-blind count, after the N8 class-window card is frozen", owner: data-engineer, due: "2026-11-28", status: not started, risk: on track}
   TF-2h: {gap: "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)", plan: "add 2h to config.TF_SECONDS / Timeframe with its engine tests (architect + trading-safety), then fs-v1 builds it with no change", owner: "data-engineer (raise), architect + implementer", due: "2026-12-04", status: found 2026-11-25, risk: AT RISK}
 # per-timeframe items, added to every unit's cell at that tf
 tf_items:
   2h: [TF-2h]
 # items that hold no training cell but are owned here (listed in the table, not in a cell's certificate)
 other_items:
+  COUNT-mc: {gap: "metals/crosses n_eff not counted", plan: "outcome-blind n_eff count by the card 2.2 method from the r11 tiers", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26 (scripts/research/sufficiency_counts.py)", risk: done}
+  COUNT-ie: {gap: "index/energy learn 2018-2021 (R-L) n_eff not counted", plan: "outcome-blind count with the unit's R-L windows", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26; judge row corrected to 2022-01..2025-09", risk: done}
   D-6: {gap: "X1 macro series lack actual release times", plan: "point-in-time X1 with release times (D9)", owner: macro-researcher + data-engineer, due: "2026-12-05", status: not started, risk: watch}
   D-7: {gap: "live engine serves 3 d1 inputs from 90k minutes (2 NaN, d1_slope_ema20 short-window) and, at 4h, decision columns from < 800 bars (tsmom_score NaN, atr_ratio_14_100 0.049, vol_tercile 1 class); 1d/1w get no snapshot",  plan: "X2 closed-HTF store live parity (W3-3); engine reads goldbot/data/htf_bars", owner: "implementer; trading-safety, sre", due: "2026-12-14", status: "store built in fs-v1; engine side not started", risk: watch}
   D-8: {gap: "no X3 baskets, X4 calendar as-of, X5 COT release-time join", plan: "build on fs-v1 as blocks", owner: data-engineer, due: "2026-12-11", status: not started, risk: watch}
