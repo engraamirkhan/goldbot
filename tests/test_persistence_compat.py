@@ -607,6 +607,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/research/learners.py", "load_artifact", "cls"):
+        "strict: an sr-v3 / zoo-v2 learner artifact (ADR 0108, card A19 fail-closed load): a model with an unknown "
+        "field must refuse, never serve with the field dropped",
     ("goldbot/ops/findings.py", "load_register", "Register"):
         "strict: config/findings.yaml, versioned config (a misspelt key or an unknown check must fail the load)",
     ("goldbot/ops/finding_checks.py", "parse_params", "spec.params"):
