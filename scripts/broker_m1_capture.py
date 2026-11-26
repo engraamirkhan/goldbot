@@ -1,7 +1,8 @@
 """Broker MT5 M1 capture for the D-1 fallback (ii) forward window (ADR 0105): the traded broker's own M1 from 2026-10-01
 copied into the git-ignored raw/ before the terminal's history rolls off. Read-only end to end.
 
-The broker's M1 is already captured daily on the brain by the scheduler's `feed_reconcile` (MT5 copy_rates_range
+No scheduled job of its own (PD ruling 2026-11-26): it runs as the first step of each monthly grade. The capture
+record is the brain store: the broker's M1 is captured daily on the brain by the scheduler's `feed_reconcile` (MT5 copy_rates_range
 through the read-only bridge into the store table `bars_1m_broker`; holes back-filled with `m1-backfill`). This script
 copies that table, per account, into raw/broker_m1/<account>/<account>_m1_<YYYY-MM>.parquet with a sha256 per file,
 and logs the gaps (missing minutes inside a trading session). No order, no engine or bridge restart, no trading config:

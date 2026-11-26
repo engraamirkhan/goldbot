@@ -206,9 +206,19 @@ manifest and gold's n_eff stay as they are. **D-1 goes to fallback (ii):** the p
 **Forexite closed (quant C2, verbatim).** Forexite is closed for D-1 and the 2018-25 confirm window: single use; a later documentation of its price field does not reopen it, and its (a)/(b*) figures are never cited as independence evidence.
 
 **(ii) broker capture (quant C3, verbatim).** Broker MT5 M1 capture from 2026-10-01 runs now and then daily (copy_rates_range to raw/, sha256 per file, gaps logged); a month without a complete capture grades C. MT5 bars are Bid-built for CFD symbols (MetaQuotes documentation, cited): price field documented; the broker reference must pass (a)-(c) per month before it grades.
-- Capture state, 2026-11-26. The traded broker's M1 is captured daily on the ops host by the scheduler's
-  `feed_reconcile` (copy_rates_range through the read-only bridge into `bars_1m_broker`). `scripts/broker_m1_capture.py`
-  copies it into raw/broker_m1/<account>/ with a sha256 per month file and a gap log.
+- Where the capture lives (PD ruling, 2026-11-26; the quant wording above is unchanged): no new scheduled job.
+  - **The capture record is the brain store table `bars_1m_broker`.** The existing scheduler job `feed_reconcile`
+    fills it daily: copy_rates_range through the read-only bridge.
+  - **The copy into raw/** (`scripts/broker_m1_capture.py`: a sha256 per month file, gaps logged) runs as the first
+    step of each monthly grade, and once on 2026-11-26.
+- Retention and backup, checked 2026-11-26:
+  - No job prunes or rotates `bars_1m_broker`, so no exemption is needed. The store only rewrites a partition on a
+    dedupe append (rows kept). Compaction covers other tables only (decisions, fills, dq_events, observe_ticks, ticks)
+    and keeps every row. Tick retention (`ticks.retain_days`) applies to state/ticks, not to this table.
+  - The table is in the daily restic backup to Object Storage. Only the `dukascopy` and `fred` sources and the
+    `features` and `labels` tables are excluded. The brain's last backup was ok at 2026-11-25 22:24 UTC.
+  - Snapshot retention is daily 14, weekly 8, monthly 12, run from the owner's Mac. So every month stays recoverable
+    from a monthly snapshot for a year.
 - Citation: MetaTrader 5 Help, "Charts" (metatrader5.com/en/terminal/help/charts_analysis/charts, fetched
   2026-11-26): "Bid prices are used for constructing charts."
 - First copy, 2026-10-01..2026-11-25 23:19 UTC:
