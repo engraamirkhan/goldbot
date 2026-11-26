@@ -13,10 +13,10 @@
    "max_inputs": 12,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -84,10 +84,10 @@
    "max_inputs": 9,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -163,10 +163,10 @@
    "max_inputs": 6,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -242,10 +242,10 @@
    "max_inputs": 4,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -321,10 +321,10 @@
    "max_inputs": 3,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -408,10 +408,10 @@
      "item": "TF-2h"
     },
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -487,10 +487,10 @@
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -566,10 +566,10 @@
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },
@@ -645,10 +645,10 @@
    "max_inputs": 0,
    "gaps": [
     {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months) and r11-v2.2 VOID (tol 39 bp > 15 bp: 37 of 38 calibration months need every fix day within tol); 2003-08 C (no independent minute reference)",
-     "plan": "single-use rule (ADR 0105): no r11-v2.3 on the gold fix; gold confirm goes to the fallback: (i) a second independent 1m source for 2019-25 graded under v2.1, else (ii) a forward window from 2026-10-01 pre-registered with the same gates; the holdout is never confirm",
-     "owner": "quant-reviewer (fallback choice) + data-engineer (source search)",
-     "due": "2026-12-02",
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
      "blocks": true,
      "item": "D-1"
     },

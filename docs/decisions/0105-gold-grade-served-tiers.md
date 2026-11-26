@@ -178,4 +178,27 @@ free_forex_quotes, the archive pages forex_history_arhiv*.html (Russian; fetched
   - HistData-vs-Dukascopy: 2019 1.000, 2012 0.114;
   - +37c synthetic 2019: 0.548, the rounding defect above.
 
-**Source choice (i):** not yet made.
+**Admission run (2026-11-26).** Script `scripts/research/gold_second_source_admission.py` at commit 32930508. The
+script sha256 and every figure below are in raw/forexite_m1/_reports/admission.json (sha256 1bcb932d...). The controls
+were computed first, in the same run.
+- Negative control, HistData vs Dukascopy 2010-18, (b*) per year: 2010 0.037, 2011 0.074, 2012 0.114, 2013 0.160,
+  2014 0.247, 2015 0.155, 2016 0.170, 2017 0.174, 2018 0.111. Six years are ≥ 0.10, so the bound becomes the 2010-18
+  maximum, 0.247.
+- Positive control, HistData vs Dukascopy 2019-25: 0.99996-1.00000 every year. The +37c synthetic is 1.000 every year.
+  Both positive controls are valid.
+- Forexite 2019-2025-09:
+  - coverage 1.00 every year (258/256/257/257/256/259/193 session days);
+  - r11 clock offset 0 min every year after the converter;
+  - (a): 0.006, 0.020, 0.011, 0.017, 0.013, 0.017, 0.045;
+  - (b*): 0.072, 0.038, 0.041, 0.041, 0.044, 0.038, 0.035.
+- Input error, found after the run and disclosed here. The inputs above recorded Forexite's XAUUSD grid as 0.01. The
+  files actually quote gold on a 0.1 grid: no 2019 or 2023 price has a non-zero cent digit. The ruling's "coarser
+  tick grid" is therefore 0.1. The (a) and (b*) above, computed on 0.01, understate equality and are not evidence of
+  passing. They are not recomputed: single use.
+
+**Decision: Forexite is NOT admitted.** Its price field is not documented by the source (inputs above), and the ruling
+fixes the price field from documentation before grading. That alone refuses it, whatever (a) and (b*) show. No other
+candidate passes the precondition (broker MT5 terminals hold about 3 months of M1; FXCM's archive is behind a login;
+CME GC is refused). **Source choice (i): none.** Nothing is graded against a second source. The served tiers, the A16
+manifest and gold's n_eff stay as they are. **D-1 goes to fallback (ii):** the pre-registered forward window from
+2026-10-01, above. The holdout is never confirm.
