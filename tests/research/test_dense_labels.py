@@ -491,31 +491,61 @@ def _race_consume(ledger: str, columns: list[str], start: Any, out: Any) -> None
         out.put("refused")
 
 
-def test_consume_is_atomic_across_processes(tmp_path: Path) -> None:
-    """Code review LOW-A: two processes consuming one booked id with different column sets at the same instant:
-    exactly one is accepted, the ledger holds exactly one consumption row."""
+@pytest.mark.parametrize("locked", [True, False], ids=["with-lock", "lock-removed"])
+def test_consume_is_atomic_across_processes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, locked: bool) -> None:
+    """Code review LOW-A / LOW-2: two processes consume one booked id with different column sets, and a barrier right
+    after each one's read of the ledger forces the interleaving (both read before either appends, unless the lock
+    keeps the second out). With the lock exactly one is accepted and one consumption row is written; with the lock
+    removed both are accepted, which is the race the lock prevents."""
+    import contextlib
     import multiprocessing as mp
+    import os
+    import threading
+    from collections.abc import Iterator
+
+    from goldbot.research import windows as WN
     ctx = mp.get_context("fork")
+    barrier = ctx.Barrier(2)
+    orig = D._consumptions
+
+    def read_then_wait(ledger: Path, read_id: str) -> list[dict[str, Any]]:
+        rows = orig(ledger, read_id)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            barrier.wait(timeout=2.0)          # with the lock the other process never gets here: timeout, go on
+        return rows
+
+    @contextlib.contextmanager
+    def no_lock(path: Path | str) -> Iterator[int]:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            yield fd
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(D, "_consumptions", read_then_wait)
+    if not locked:
+        monkeypatch.setattr(WN, "locked_ledger", no_lock)
     ledger = tmp_path / "window_reads.jsonl"
-    for _ in range(5):                                   # several rounds: an unlocked check would let both through
-        ledger.unlink(missing_ok=True)
-        start, out = ctx.Event(), ctx.Queue()
-        ps = [ctx.Process(target=_race_consume, args=(str(ledger), cols, start, out))
-              for cols in (list(CORE6), list(D.COLUMN_SETS["P30"]))]
-        for p in ps:
-            p.start()
-        start.set()
-        for p in ps:
-            p.join(30)
-        got = sorted(out.get(timeout=5) for _ in ps)
-        assert got == ["ok", "refused"]
-        rows = [json.loads(x) for x in ledger.read_text().splitlines()]
-        assert sum(r.get("type") == "consumption" for r in rows) == 1
+    start, out = ctx.Event(), ctx.Queue()
+    ps = [ctx.Process(target=_race_consume, args=(str(ledger), cols, start, out))
+          for cols in (list(CORE6), list(D.COLUMN_SETS["P30"]))]
+    for p in ps:
+        p.start()
+    start.set()
+    for p in ps:
+        p.join(30)
+    got = sorted(out.get(timeout=5) for _ in ps)
+    rows = [json.loads(x) for x in ledger.read_text().splitlines()]
+    n_cons = sum(r.get("type") == "consumption" for r in rows)
+    if locked:
+        assert got == ["ok", "refused"] and n_cons == 1
+    else:
+        assert got == ["ok", "ok"] and n_cons == 2
 
 
 def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
-    """Code review LOW-B: one unterminated final line is left out and reported (and cut before the next append); a
-    malformed line in the middle refuses the ledger. The windows read-once ledger shares the reader."""
+    """Code review LOW-B: one unparsable unterminated final line is left out and reported (and cut before the next
+    append); a malformed line in the middle refuses the ledger. The windows read-once ledger shares the reader."""
     from goldbot.research import windows as WN
     ledger = tmp_path / "window_reads.jsonl"
     good = '{"family": "sr_v3", "window": "confirm", "status": "started", "key": "r", "ref": {"spec_hash": "s"}}'

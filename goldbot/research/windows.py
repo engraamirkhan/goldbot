@@ -32,10 +32,11 @@ read once, winner only (`windows.allow_test_old_for`, CONFIRM-SEEN rule)".
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
+import sys
+import time
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import StrEnum
@@ -49,6 +50,42 @@ from goldbot.data.holdout_guard import HOLDOUT_START, HoldoutSealed
 from goldbot.data.release import BAR_FILE_PREFIX, read_bar_files
 
 log = logging.getLogger(__name__)
+
+# The read ledger's lock (code review LOW-1 on PR #478): flock on POSIX, msvcrt.locking on byte 0 on Windows (the VPS
+# runs goldbot natively; as data/store.py). Neither available: a ledger write refuses (`LedgerLockUnavailable`).
+if sys.platform == "win32":                # pragma: no cover - exercised on the Windows VPS
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                time.sleep(0.01)
+
+    def _unlock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    try:
+        import fcntl
+    except ImportError:                    # pragma: no cover - a platform with neither lock
+        fcntl = None  # type: ignore[assignment]
+
+    def _lock_fd(fd: int) -> None:
+        if fcntl is None:
+            raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock_fd(fd: int) -> None:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+class LedgerLockUnavailable(RuntimeError):
+    """The platform offers no file lock: a read-once ledger is never written unlocked."""
 
 
 class Window(StrEnum):
@@ -201,10 +238,20 @@ class LedgerCorrupt(ValueError):
     """A read ledger line before the last one does not parse: the ledger is refused, never guessed around."""
 
 
+def _tail_row(torn: str) -> dict[str, Any] | None:
+    """An unterminated final line that parses as a JSON object is a complete row whose newline was lost."""
+    try:
+        v = json.loads(torn)
+    except json.JSONDecodeError:
+        return None
+    return v if isinstance(v, dict) else None
+
+
 def parse_ledger(text: str, *, where: str = "ledger") -> list[dict[str, Any]]:
-    """The rows of a JSONL read ledger. Every newline-terminated line must parse (`LedgerCorrupt` otherwise); at
-    most one unterminated final line (a writer that died mid-write) is tolerated, left out and reported (code review
-    LOW-B on PR #472)."""
+    """The rows of a JSONL read ledger. Every newline-terminated line must parse (`LedgerCorrupt` otherwise). An
+    unterminated final line that parses as a JSON object is a real row (its newline was lost) and counts; only an
+    unparsable final fragment (a writer that died mid-write) is left out and reported (code review MEDIUM-1 on
+    PR #478: a recorded read never disappears)."""
     parts = text.split("\n")
     torn = parts.pop()                      # "" when the text ends with a newline
     rows = []
@@ -216,7 +263,12 @@ def parse_ledger(text: str, *, where: str = "ledger") -> list[dict[str, Any]]:
         except json.JSONDecodeError as exc:
             raise LedgerCorrupt(f"{where}: line {i + 1} does not parse: {exc}") from None
     if torn.strip():
-        log.warning("%s: an unterminated final line (%d bytes) was left out: a torn write", where, len(torn))
+        row = _tail_row(torn)
+        if row is not None:
+            rows.append(row)
+        else:
+            log.warning("%s: an unparsable unterminated final line (%d bytes) was left out: a torn write", where,
+                        len(torn))
     return rows
 
 
@@ -227,30 +279,51 @@ def read_ledger(path: Path | str) -> list[dict[str, Any]]:
 
 @contextmanager
 def locked_ledger(path: Path | str) -> Iterator[int]:
-    """An O_APPEND descriptor on the ledger under an exclusive flock, for read-check-append (LOW-A). A torn final
-    line is moved to `<ledger>.torn` and cut before anything is appended, so it never becomes a middle line."""
+    """An O_APPEND descriptor on the ledger under an exclusive lock, for read-check-append. An unterminated final
+    line that parses as a JSON object gets its newline (it stays a row); an unparsable one is moved to
+    `<ledger>.torn` and cut, so it never becomes a middle line."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
+        locked = True
         data = p.read_bytes()
         if data and not data.endswith(b"\n"):
             keep = data.rfind(b"\n") + 1
-            with open(p.with_name(p.name + ".torn"), "ab") as fh:
-                fh.write(data[keep:] + b"\n")
-            os.ftruncate(fd, keep)
-            log.warning("%s: a torn final line (%d bytes) moved to %s.torn", p, len(data) - keep, p.name)
+            tail = data[keep:].decode("utf-8", errors="replace")
+            if _tail_row(tail) is not None:
+                _write_all(fd, b"\n")
+            else:
+                with open(p.with_name(p.name + ".torn"), "ab") as fh:
+                    fh.write(data[keep:] + b"\n")
+                os.ftruncate(fd, keep)
+                log.warning("%s: a torn final line (%d bytes) moved to %s.torn", p, len(data) - keep, p.name)
         yield fd
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if locked:
+            _unlock_fd(fd)
         os.close(fd)
 
 
-def append_row(fd: int, row: Mapping[str, Any]) -> None:
-    """One row, one os.write on the O_APPEND descriptor, then fsync."""
-    os.write(fd, (json.dumps(row, default=str) + "\n").encode("utf-8"))
+def _write_all(fd: int, buf: bytes) -> None:
+    """One os.write of `buf`; a short write is cut back to the size before it and raises (never a partial row)."""
+    before = os.fstat(fd).st_size
+    try:
+        n = os.write(fd, buf)
+    except OSError:
+        os.ftruncate(fd, before)
+        raise
+    if n != len(buf):
+        os.ftruncate(fd, before)
+        raise OSError(f"short write to the read ledger ({n} of {len(buf)} bytes): cut back, nothing recorded")
     os.fsync(fd)
+
+
+def append_row(fd: int, row: Mapping[str, Any]) -> None:
+    """One row, one os.write on the O_APPEND descriptor (all of it or nothing), then fsync."""
+    _write_all(fd, (json.dumps(row, default=str) + "\n").encode("utf-8"))
 
 
 def reads_of(ledger: Path | str, family: str) -> set[Window]:

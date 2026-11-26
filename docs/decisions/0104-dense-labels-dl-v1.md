@@ -92,9 +92,15 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      - A spike bar is displaced whole, open to close, by a random sign.
      - Tightness looks for the bar-just-inside failure on the 8 CI seeds first, then on the rest of the 32, because
        the seed that binds L can be any of them.
-     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`. A shrink below
-       it fails the guard test unless `registry.COLUMN_LOOKBACK_REREVIEW` names the column with its re-review
-       reference.
+     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`, floor sha256
+       b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166. A test pins this sha, so the floor changes
+       only together with this ADR.
+     - A declared lookback below the floor needs a marker in `registry.COLUMN_LOOKBACK_REREVIEW` (code review LOW-3
+       on #478):
+       - the marker carries a "PR #N" or "ADR NNNN" reference;
+       - it carries the newly signed value for every floor tf, and the declaration must equal it;
+       - a marker with no value below the floor is stale and fails.
+     - Against the base branch (when the checkout has it), no floor value may go down without such a marker.
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
@@ -117,9 +123,15 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      - Read, check and append run under an exclusive `fcntl.flock`. Each row is one `os.write` on an O_APPEND
        descriptor followed by fsync (code review LOW-A on #472), so two concurrent first loads cannot both be
        first.
-     - The ledger reader tolerates one unterminated final line (a torn write). It reports the line and moves it to
-       `<ledger>.torn` before the next append. A malformed line before the last one refuses the ledger (LOW-B).
-       `windows.record_read_once` uses the same reader, lock and write.
+     - Read-once fails closed (code review MEDIUM-1 on #478):
+       - A write is complete or nothing: a short `os.write` is cut back to the size before it, and it raises.
+       - An unterminated final line that parses as a JSON object is a real row (its newline was lost). It counts,
+         and the next append gives it its newline.
+       - Only an unparsable final fragment is reported and moved to `<ledger>.torn`.
+       - A malformed line before the last one refuses the ledger (LOW-B).
+       - `windows.record_read_once` uses the same reader, lock and write.
+     - The lock is `fcntl.flock` on POSIX and `msvcrt.locking` on byte 0 on Windows, as `data/store.py` does (LOW-1).
+       With neither available, a ledger write raises; it is never done unlocked.
    - It refuses:
      - a read without tiers or without `columns`;
      - a sealed store;

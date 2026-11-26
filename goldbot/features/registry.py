@@ -124,9 +124,11 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
 }
 
 
-# Columns whose declared lookback may go below the signed floor (tests/fixtures/column_lookbacks_floor.json), each with
-# its quant re-review reference (ADR 0104 4: "Declared lookbacks never shrink without a quant re-review").
-COLUMN_LOOKBACK_REREVIEW: dict[str, str] = {}
+# Columns whose declared lookback may go below the signed floor (tests/fixtures/column_lookbacks_floor.json; ADR 0104 4:
+# "Declared lookbacks never shrink without a quant re-review"). Each marker carries the re-review reference ("PR #N" or
+# "ADR NNNN") and the newly signed value per tf of the floor; the declaration must equal it, and a marker none of whose
+# values is below the floor is stale and fails (tests/test_column_lookbacks.py).
+COLUMN_LOOKBACK_REREVIEW: dict[str, dict[str, Any]] = {}
 
 
 def column_lookback(column: str, tf: str) -> int:
