@@ -72,9 +72,10 @@ def _shadow(**kw) -> PerfStats:
 
 # ADR 0106: a paired read past the live model (60 days, final) and a clean as-if real-money read, so each test below
 # exercises the gate it names (tests/test_promotion_adr0106.py covers those two)
-PAIRED = PairedRead(n_days=60, window_start=pd.Timestamp("2026-03-02").date(), window_end=pd.Timestamp("2026-05-22").date(),
-                    capped=False, live_present=True, mean_diff=0.002, lower_bound=0.0005, alpha_look=0.05 / 7,
-                    mean_block=5.0, resamples=10_000)
+PAIRED = PairedRead(procedure="proc", status="look", n_days=60, window_start=pd.Timestamp("2026-03-02").date(),
+                    window_end=pd.Timestamp("2026-05-22").date(), capped=False, live_present=True, mean_diff=0.002,
+                    lower_bound=0.0005, alpha_look=0.03502, mean_episode_days=1.0, mean_block=5.0, resamples=10_000,
+                    challenger_shas=["c0ffee1"])
 AS_IF = AsIfReport(equity_start=1250.0, equity_end=1300.0, n_trades=60, n_sized=60, n_sized_days=60, below_min_lot=0,
                    excluded={}, breaches=[], worst_day_loss=0.01, max_drawdown=0.03, worst_trade_loss=0.01,
                    overshoots=0, daily={}, trades=[])

@@ -135,7 +135,7 @@ def test_trades_below_the_minimum_lot_are_reported_and_not_counted(tmp_path):
 def test_a_day_past_the_two_percent_stop_when_re_sized_fails_the_gate(tmp_path):
     state, trials = full_state(tmp_path)
     paper = trades_over(150, 0.001001, 790, 410)
-    crash = [paper[-1].model_copy(update={"exit_utc": paper[-1].exit_utc + pd.Timedelta(hours=k), "r": -3.0})
+    crash = [paper[-1].model_copy(update={"exit_utc": paper[-1].exit_utc + pd.Timedelta(hours=k), "r": -5.0})
              for k in (1, 2)]
     with_paper(state, paper + [c.model_copy(update={"entry_utc": c.exit_utc - pd.Timedelta(hours=1)}) for c in crash])
     it = item_of(report(state, trials), "paper_to_tiny_live", "as_if_real_money")
@@ -147,3 +147,34 @@ def test_unknown_reference_volume_refuses_every_trade_so_the_item_fails_closed(t
     rep = evaluate_gates(state, SETTINGS, NOW, trials_path=trials, buy_hold=BUY_HOLD)
     it = item_of(rep, "paper_to_tiny_live", "as_if_real_money")
     assert not it.met and "adv_unknown 150" in it.evidence
+
+
+def test_buy_and_hold_is_not_met_when_nothing_could_be_sized_even_against_a_falling_market(tmp_path):
+    state, trials = full_state(tmp_path)
+    falling = {GOLD: BUY_HOLD[GOLD].model_copy(update={"net_ret": -0.2})}
+    rep = evaluate_gates(state, SETTINGS, NOW, trials_path=trials, buy_hold=falling)     # no ADV: nothing sized
+    assert not item_of(rep, "paper_to_tiny_live", "beats_buy_and_hold").met
+
+
+def test_the_paper_sharpe_is_the_lower_of_naive_and_lo_2002_so_autocorrelation_cannot_inflate_it():
+    import math
+    from datetime import date
+
+    import numpy as np
+
+    from goldbot.research.promotion import session_days
+    grid = session_days(date(2026, 1, 5), date(2026, 12, 31))
+    rng = np.random.default_rng(4)
+    e = rng.standard_normal(len(grid))
+    x = np.convolve(e, np.ones(4) / 4, mode="same") * 0.002 + 0.0004    # positively autocorrelated (MA(3))
+    daily = dict(zip(grid, x.tolist(), strict=True))
+    naive = float(np.mean(x) / np.std(x, ddof=1) * math.sqrt(260))
+    got = gates_phase.daily_sharpe(daily, grid[0], grid[-1])
+    assert got is not None and got < naive - 0.5
+    iid = dict(zip(grid, (rng.standard_normal(len(grid)) * 0.002 + 0.0004).tolist(), strict=True))
+    y = np.array(list(iid.values()))
+    got = gates_phase.daily_sharpe(iid, grid[0], grid[-1])
+    assert got is not None and got <= float(np.mean(y) / np.std(y, ddof=1) * math.sqrt(260)) + 1e-12
+    # a series the Lo formula cannot annualise (alternating signs: its denominator is not positive) fails closed
+    alt = {d: (0.001 if i % 2 else -0.0005) for i, d in enumerate(grid)}
+    assert gates_phase.daily_sharpe(alt, grid[0], grid[-1]) is None

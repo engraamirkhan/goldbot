@@ -37,10 +37,11 @@ def trade(ret: float, *, mode: str = "demo", broker: str = "icmarkets", days_ago
     costs: dict[str, Any] = (dict(commission=0.0, swap=0.0, pnl_basis="net") if gross_held_days is None else
                              dict(pnl_basis="gross", side=1, lots=0.1, entry_price=2_000.0,
                                   entry_utc=exit_utc - pd.Timedelta(days=gross_held_days)))
-    # ADR 0106 paper items (as-if sizing, cost share): long at $2,000 an hour before the exit, a $10 stop, a 20-point
-    # ($0.20) decision spread, and a net row's fill 1 bp better than its net return (its commission and swap)
-    fills = dict(side=1, entry_price=2_000.0, entry_utc=exit_utc - pd.Timedelta(hours=1), initial_sl=1_990.0,
-                 r=ret * 2_000.0 / 10.0, decision_spread_points=20.0,
+    # ADR 0106 paper items (as-if sizing, cost share): long at $2,000 an hour before the exit, a $5 stop (0.01 lot fits
+    # 0.5 % of $1,250), a 20-point ($0.20) decision spread, and a net row's fill 1 bp better than its net return (its
+    # commission and swap)
+    fills = dict(side=1, entry_price=2_000.0, entry_utc=exit_utc - pd.Timedelta(hours=1), initial_sl=1_995.0,
+                 r=ret * 2_000.0 / 5.0, decision_spread_points=20.0,
                  exit_price=2_000.0 * (1 + ret + (0.0001 if gross_held_days is None else 0.0)))
     return ClosedTrade(account_id=account or f"{broker}-{mode}", broker=broker, mode=mode,  # type: ignore[arg-type]
                        exit_utc=exit_utc, ret=ret, pnl=pnl if pnl is not None else ret * equity, equity_before=equity,

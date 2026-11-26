@@ -79,11 +79,8 @@ from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research import cpcv, cpcv_gate
 from goldbot.research.as_if_sizing import (
-    RM_DAILY_STOP,
-    RM_DD_HALT,
-    RM_MAX_ADV_SHARE,
-    RM_MAX_RISK_PER_TRADE,
     AsIfInput,
+    AsIfLimits,
     AsIfReport,
     as_if_real_money,
 )
@@ -113,9 +110,12 @@ EVIDENCE_NAMES = ("shuffle_auc", "asof_violations", "feed_mismatch_share", "chao
 MIN_TRADES_FOR_BOUND = 2           # fewer pooled trades: no lower bound (and no interval) can be estimated
 MAX_INCIDENTS = 5                  # stop-rule incidents listed (worst first); `incident_count` has them all
 TRADES_UNREADABLE = "closed-trade record"   # prefix of the error an unreadable closed-trade line gives
-# ADR 0106 cost share: the most of the paper trades whose cost cannot be measured (no side, fill prices or decision
-# spread) before the item fails closed; the share is measured on the rest (one in twenty, as `max_gross_share`'s 5%)
+# ADR 0106 cost share: the most of the as-if sized trades, by count and separately by as-if notional, whose cost
+# cannot be measured (no side, fill prices or decision spread) before the item fails closed (quant P6)
 COST_SHARE_MAX_UNMEASURED = 0.05
+# trading-safety review of #490 (F3): the ADR 0106 minimum equity for gold (~GBP 315: 0.01 lot at a typical stop at
+# 1 % risk); the as-if item also reports how many trades this equity would size (report only)
+AS_IF_MIN_EQUITY_USD = 400.0
 NEVER_UNLOCKS = ("This report never records a gate or unlocks live: record with `run.py record-gate`, "
                  "enable live with `accounts unlock-live` and the typed phrase.")
 
@@ -533,10 +533,12 @@ def _fmt(v: float | None, spec: str = ".5f") -> str:
 
 
 # ---------------------------------------------------------------------------------------------- ADR 0106 paper goals
-def as_if_inputs(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[list[AsIfInput], int]:
+def as_if_inputs(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[list[AsIfInput], list[ClosedTrade], int]:
     """The trades as the as-if replay reads them (research/as_if_sizing.py), with a gross row's R less its imputed
-    cost (unknown when the charge has no R); and how many had no entry time or price (they cannot be replayed)."""
+    cost (unknown when the charge has no R); the closed trades they came from, in the same order; and how many had no
+    entry time or price (they cannot be replayed)."""
     out: list[AsIfInput] = []
+    mapped: list[ClosedTrade] = []
     unmapped = 0
     for t in trades:
         if t.entry_utc is None or t.entry_price is None or not t.entry_price > 0:
@@ -546,56 +548,109 @@ def as_if_inputs(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[list[
         r = None if t.r is None or c.r is None else t.r - c.r
         out.append(AsIfInput(entry_utc=t.entry_utc, exit_utc=t.exit_utc, side=t.side, entry_price=t.entry_price,
                              initial_sl=t.initial_sl, r=r, symbol=t.symbol or GOLD,
-                             spread_points=t.decision_spread_points))
-    return out, unmapped
+                             spread_points=t.decision_spread_points, scoring_sha=t.model_version))
+        mapped.append(t)
+    return out, mapped, unmapped
+
+
+LO_LAGS = 5                        # quant ruling on #490 (P5): Lo (2002) annualisation with lags 1-5
 
 
 def daily_sharpe(daily: Mapping[date, float], start: date, end: date) -> float | None:
-    """Annualised Sharpe of a daily return series on every session day in [start, end] (a day without a close is 0),
-    SESSION_DAYS_PER_YEAR a year: the unit of the buy-and-hold Sharpe. None below two days or without dispersion."""
+    """The paper Sharpe floor (quant ruling on #490, P5): "`paper_sharpe` = min(naive sqrt(260) . mean/sd, the Lo (2002)
+    autocorrelation-adjusted annualisation using lags 1-5) on the as-if daily series, zero days kept. It must be above
+    `paper_min_sharpe` (1.0). It is a floor. Over about 182 days the sampling SE of an annual Sharpe is about 1.2, so
+    passing it is not evidence of an edge. The judged evidence is the paired read and the DSR gates."
+    The series is every session day in [start, end] (a day without a close is 0). Lo: SR_daily x q / sqrt(q + 2 sum
+    over k = 1..5 of (q - k) rho_k), q = SESSION_DAYS_PER_YEAR. None below LO_LAGS + 2 days, without dispersion, or
+    when the Lo denominator is not positive (fail closed)."""
     grid = sorted({*session_days(start, end), *(d for d in daily if start <= d <= end)})
     x = np.array([float(daily.get(d, 0.0)) for d in grid])
-    if len(x) < 2:
+    if len(x) < LO_LAGS + 2:
         return None
     sd = float(np.std(x, ddof=1))
-    return float(np.mean(x)) / sd * math.sqrt(SESSION_DAYS_PER_YEAR) if sd > 0 else None
+    if not sd > 0:
+        return None
+    sr = float(np.mean(x)) / sd
+    q = SESSION_DAYS_PER_YEAR
+    dev = x - x.mean()
+    var = float(dev @ dev)
+    rho = [float(dev[k:] @ dev[:-k]) / var for k in range(1, LO_LAGS + 1)]
+    inner = q + 2 * sum((q - k) * r for k, r in enumerate(rho, 1))
+    if not inner > 0:
+        return None
+    return min(sr * math.sqrt(q), sr * q / math.sqrt(inner))
 
 
-def cost_share(trades: list[ClosedTrade], imputer: CostImputer) -> tuple[float | None, int]:
-    """(costs over gross profit, trades whose cost could not be measured), in per-trade return units (currency-free,
-    each trade weighted as the expectancy items weigh it). A trade's cost is its fill-to-fill price return less its net
-    return (commission, swap and any imputed charge) plus the decision quote's spread over the entry price (the round
-    trip's spread from mid); gross = net + cost. Exit slippage beyond the fills is inside the fills. None when the
-    measured gross is not positive (no gross profit to share). A trade without a side, fill prices or the decision
-    spread is unmeasured."""
-    cost = gross = 0.0
-    unmeasured = 0
-    for t in trades:
-        if (t.side not in (1, -1) or t.entry_price is None or not t.entry_price > 0 or t.exit_price is None
-                or t.decision_spread_points is None):
-            unmeasured += 1
+def trade_cost(t: ClosedTrade, imputer: CostImputer) -> tuple[float, float] | None:
+    """(cost, net) of one trade as fractions of its notional, or None when unmeasured: cost is its fill-to-fill price
+    return less its net return (commission, swap and any imputed charge) plus the decision quote's spread over the
+    entry price (the round trip's spread from mid; counted once: gross = net + cost). Exit slippage is inside the
+    fills. Unmeasured: no side, fill prices or decision spread, or an unknown instrument."""
+    if (t.side not in (1, -1) or t.entry_price is None or not t.entry_price > 0 or t.exit_price is None
+            or t.decision_spread_points is None):
+        return None
+    try:
+        point = point_of(t.symbol or GOLD)
+    except KeyError:
+        return None
+    net = imputer.net_ret(t)
+    price_ret = t.side * (t.exit_price - t.entry_price) / t.entry_price
+    return price_ret - net + t.decision_spread_points * point / t.entry_price, net
+
+
+class CostShare(FrozenRecord):
+    """Quant ruling on #490 (P6): "`paper_cost_share` = sum cost_usd / sum gross_usd over the as-if sized trades (cost
+    and gross per trade x its as-if notional). Pass when <= 1/3 and sum gross_usd > 0. Fail closed when more than 5 %
+    of trades (by count, and separately by as-if notional) are unmeasured." """
+    share: float | None
+    n_sized: int
+    n_unmeasured: int
+    notional_usd: float
+    unmeasured_notional_usd: float
+
+    @property
+    def measurable(self) -> bool:
+        return (self.n_unmeasured <= COST_SHARE_MAX_UNMEASURED * self.n_sized
+                and self.unmeasured_notional_usd <= COST_SHARE_MAX_UNMEASURED * self.notional_usd)
+
+
+def cost_share(mapped: list[ClosedTrade], as_if: AsIfReport, imputer: CostImputer) -> CostShare:
+    """The P6 cost share on the as-if sized trades (`mapped[i]` is the closed trade of as-if input i)."""
+    cost = gross = notional = blind = 0.0
+    n = n_blind = 0
+    for a in as_if.trades:
+        if a.status != "sized":
             continue
-        try:
-            point = point_of(t.symbol or GOLD)
-        except KeyError:
-            unmeasured += 1
+        n += 1
+        notional += a.notional_usd
+        m = trade_cost(mapped[a.index], imputer)
+        if m is None:
+            n_blind += 1
+            blind += a.notional_usd
             continue
-        price_ret = t.side * (t.exit_price - t.entry_price) / t.entry_price
-        net = imputer.net_ret(t)
-        c = price_ret - net + t.decision_spread_points * point / t.entry_price
-        cost += c
-        gross += net + c
-    return (cost / gross if gross > 0 else None), unmeasured
+        c, net = m
+        cost += c * a.notional_usd
+        gross += (net + c) * a.notional_usd
+    return CostShare(share=cost / gross if gross > 0 else None, n_sized=n, n_unmeasured=n_blind,
+                     notional_usd=notional, unmeasured_notional_usd=blind)
 
 
-def _as_if_item(rep: AsIfReport, unmapped: int, cfg: GateSettings) -> GateItem:
+def _as_if_item(rep: AsIfReport, unmapped: int, cfg: GateSettings, small: AsIfReport,
+                no_adv: list[str]) -> GateItem:
+    """The replay on `as_if_equity_usd`; beside it, report only, how many trades the same replay sizes at
+    AS_IF_MIN_EQUITY_USD, the ADR 0106 minimum equity for gold (trading-safety F3). Without a reference daily volume
+    for a traded instrument the item says it is unmeetable (F4)."""
     met = rep.clean and rep.n_sized >= cfg.paper_min_trades
+    lead = (f"unmeetable until the ADV reference is filled (no reference daily volume for {', '.join(no_adv)}); "
+            if no_adv else "")
     return GateItem(name="as_if_real_money", met=met,
-                    evidence=rep.text() + (f"; {unmapped} without an entry time or price" if unmapped else ""),
-                    need=f"re-sized on ${cfg.as_if_equity_usd:,.0f} as one real-money account: no breach of "
-                         f"{RM_MAX_RISK_PER_TRADE:.0%}/trade, {RM_DAILY_STOP:.0%} daily stop, {RM_DD_HALT:.0%} drawdown, "
-                         f"{RM_MAX_ADV_SHARE:.0%} of daily volume, and >= {cfg.paper_min_trades} sized trades "
-                         "(ADR 0106 decision 2)",
+                    evidence=lead + rep.text() + (f"; {unmapped} without an entry time or price" if unmapped else "")
+                    + f"; at ${small.equity_start:,.0f} (ADR 0106 minimum equity for gold) {small.n_sized} of "
+                      f"{small.n_trades} would be sized",
+                    need=f"re-sized on ${cfg.as_if_equity_usd:,.0f} as one real-money account under the stricter of "
+                         f"ADR 0106 and the risk settings: no breach of {rep.limits.text()}, and >= "
+                         f"{cfg.paper_min_trades} sized trades (ADR 0106 decision 2)",
                     threshold="as_if_equity_usd",
                     progress=GateProgress(value=rep.n_sized, target=cfg.paper_min_trades, unit="trades"))
 
@@ -606,7 +661,8 @@ def _buy_hold_item(rep: AsIfReport, symbols: list[str], buy_hold: Mapping[str, B
     missing = [s for s in symbols if s not in buy_hold]
     reads = [buy_hold[s] for s in symbols if s in buy_hold]
     best = max((b.net_ret for b in reads), default=None)
-    met = (p_days >= cfg.paper_min_days and not missing and best is not None and ret > best)
+    met = (p_days >= cfg.paper_min_days and rep.n_sized >= cfg.paper_min_trades and not missing and best is not None
+           and ret > best)
     shown = "; ".join(b.text() for b in reads)
     if missing:
         shown = "; ".join(filter(None, [shown, f"no buy-and-hold read for {', '.join(missing)}"]))
@@ -873,25 +929,33 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         _gross_share_item("paper_gross_share", p_note, cfg.max_gross_share),
     ]
     # ADR 0106: the goals of record on the paper record as if traded on real money
-    inputs, unmapped = as_if_inputs(paper, imputer)
-    as_if = as_if_real_money(inputs, equity=cfg.as_if_equity_usd, adv_usd=adv_usd or {})
+    inputs, mapped, unmapped = as_if_inputs(paper, imputer)
+    limits = AsIfLimits.stricter(settings.risk)      # trading-safety F1: the stricter of ADR 0106 and the rails
+    as_if = as_if_real_money(inputs, equity=cfg.as_if_equity_usd, adv_usd=adv_usd or {}, limits=limits)
+    small = as_if_real_money(inputs, equity=AS_IF_MIN_EQUITY_USD, adv_usd=adv_usd or {}, limits=limits)
+    no_adv = sorted({i.symbol for i in inputs} - set(adv_usd or {}))
     d0 = opportunity_day(pd.DatetimeIndex([paper_start]))[0].date() if paper_start is not None else None
     d1 = opportunity_day(pd.DatetimeIndex([now]))[0].date()
     sharpe = daily_sharpe(as_if.daily, d0, d1) if d0 is not None else None
-    share, unmeasured = cost_share(paper, imputer)
-    share_ok = share is not None and (unmeasured <= COST_SHARE_MAX_UNMEASURED * len(paper))
+    cs = cost_share(mapped, as_if, imputer)
     items += [
-        _as_if_item(as_if, unmapped, cfg),
+        _as_if_item(as_if, unmapped, cfg, small, no_adv),
         GateItem(name="paper_sharpe", met=sharpe is not None and sharpe > cfg.paper_min_sharpe,
-                 evidence=f"as-if daily Sharpe {_fmt(sharpe, '.2f')} over the session days since backtest_to_paper",
-                 need=f"> {cfg.paper_min_sharpe} (ADR 0106 goal)", threshold="paper_min_sharpe"),
+                 evidence=f"as-if daily Sharpe {_fmt(sharpe, '.2f')} (the lower of naive and Lo 2002 lags 1-{LO_LAGS}) "
+                          "over the session days since backtest_to_paper",
+                 need=f"> {cfg.paper_min_sharpe}: a floor, not evidence of an edge (ADR 0106 goal)",
+                 threshold="paper_min_sharpe"),
         _buy_hold_item(as_if, sorted({t.symbol or GOLD for t in paper}), buy_hold or {}, p_days, cfg),
-        GateItem(name="paper_cost_share", met=share_ok and share is not None and share <= cfg.paper_max_cost_share,
-                 evidence=(f"costs {_fmt(share, '.1%')} of gross on {len(paper) - unmeasured} measured trades"
-                           + (f" ({unmeasured} of {len(paper)} unmeasured: no side, fill prices or decision spread)"
-                              if unmeasured else "")),
-                 need=f"<= {cfg.paper_max_cost_share:.1%} of gross profit, at most "
-                      f"{COST_SHARE_MAX_UNMEASURED:.0%} of trades unmeasured (ADR 0106 goal)",
+        GateItem(name="paper_cost_share",
+                 met=cs.measurable and cs.share is not None and cs.share <= cfg.paper_max_cost_share,
+                 evidence=(f"costs {_fmt(cs.share, '.1%')} of gross in as-if USD on "
+                           f"{cs.n_sized - cs.n_unmeasured} measured as-if sized trades"
+                           + (f" ({cs.n_unmeasured} of {cs.n_sized} unmeasured, "
+                              f"${cs.unmeasured_notional_usd:,.0f} of ${cs.notional_usd:,.0f} notional: no side, fill "
+                              "prices or decision spread)" if cs.n_unmeasured else "")),
+                 need=f"<= {cfg.paper_max_cost_share:.1%} of gross profit in as-if USD, at most "
+                      f"{COST_SHARE_MAX_UNMEASURED:.0%} of as-if sized trades unmeasured by count and by notional "
+                      "(ADR 0106 goal)",
                  threshold="paper_max_cost_share"),
         _shadow_item(state_dir),
     ]

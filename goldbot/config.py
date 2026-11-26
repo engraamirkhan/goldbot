@@ -1223,7 +1223,7 @@ class GateSettings(_Section):
     paper_max_cost_share: float = Field(1 / 3, gt=0, le=1 / 3)    # "Trading costs under one third of gross profit"
     # ADR 0106 decision 2: the paper record re-sized as one real-money account of this equity (research/as_if_sizing.py)
     # a simulation parameter of promotion reads, not live sizing (PD + CFO 2026-11-26: 1,250 USD, ~GBP 1,000)
-    as_if_equity_usd: float = Field(1250.0, gt=0)
+    as_if_equity_usd: float = Field(1250.0, gt=0, le=10_000)      # bounded (trading-safety F3): more equity sizes more
     live_min_trades: int = Field(300, ge=1)
     live_min_days: int = Field(365, ge=0)                         # PROPOSED: owner sign-off required (roadmap "12 months")
     live_expectancy_within: float = Field(0.4, gt=0, le=1)

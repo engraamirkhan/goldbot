@@ -121,3 +121,51 @@ def test_the_replay_reports_trades_in_entry_order_whatever_the_input_order():
     late, early = leg(1.0, day=1), leg(-1.0)
     rep = as_if_real_money([late, early], equity=12_500.0, adv_usd=ADV)
     assert [t.index for t in rep.trades] == [1, 0]
+
+
+def test_a_zero_length_trade_is_entered_before_it_is_closed_and_a_skewed_one_is_excluded():
+    zero = leg(1.0, hold_h=0.0)
+    skew = leg(1.0, day=1).model_copy(update={"exit_utc": T0})
+    rep = as_if_real_money([zero, skew], equity=1250.0, adv_usd=ADV)
+    assert rep.trades[0].status == "sized" and rep.excluded == {"bad_times": 1}
+
+
+def test_a_start_opens_the_account_and_earlier_entries_are_not_replayed():
+    rep = as_if_real_money([leg(1.0), leg(1.0, day=1)], equity=1250.0, adv_usd=ADV, start=T0 + pd.Timedelta(hours=12))
+    assert rep.excluded == {"before_start": 1} and rep.n_sized == 1 and rep.start_utc == T0 + pd.Timedelta(hours=12)
+
+
+def test_each_sized_row_keeps_its_scoring_sha_and_its_as_if_notional():
+    rep = as_if_real_money([leg(1.0).model_copy(update={"scoring_sha": "abc1234"})], equity=1250.0, adv_usd=ADV)
+    t = rep.trades[0]
+    assert t.scoring_sha == "abc1234" and t.notional_usd == pytest.approx(0.01 * 100 * 2000)
+    assert rep.shas_by_day == {t.entry_day: ["abc1234"]}
+
+
+def _stricter():
+    from goldbot.config import load_settings
+    from goldbot.research.as_if_sizing import AsIfLimits
+    return AsIfLimits.stricter(load_settings().risk)
+
+
+def test_the_replay_takes_the_stricter_of_adr_0106_and_the_risk_settings():
+    lim = _stricter()
+    assert (lim.risk_per_trade, lim.daily_stop, lim.dd_halt, lim.weekly_cap) == (0.005, 0.02, 0.12, 0.05)
+
+
+def test_a_thirteen_percent_drawdown_is_a_breach_under_the_settings_kill_switch():
+    # two ~1.9% losers a week (Monday and Wednesday): no day past 2%, no week past 5%, the drawdown reaches 12%+
+    losers = [leg(-4.0, day=7 * w + k) for w in range(6) for k in (0, 2)]
+    rep = as_if_real_money(losers, equity=12_500.0, adv_usd=ADV, limits=_stricter())
+    assert rep.breaches == ["drawdown_halt"] and 0.12 <= rep.max_drawdown < 0.15
+    from goldbot.research.as_if_sizing import AsIfLimits
+    adr_halt_only = AsIfLimits(risk_per_trade=0.005, weekly_cap=0.05)              # the same, halting at 15% only
+    alone = as_if_real_money(losers[:8], equity=12_500.0, adv_usd=ADV, limits=adr_halt_only)
+    assert alone.clean and 0.12 <= alone.max_drawdown < 0.15                       # 13%: clean at 15% only
+
+
+def test_a_six_percent_week_is_a_breach_and_the_weekly_cap_latches_entries():
+    week = [leg(-3.2, day=k) for k in range(5)]                 # ~1.5% a day, Monday to Friday
+    rep = as_if_real_money(week, equity=12_500.0, adv_usd=ADV, limits=_stricter())
+    assert "weekly_cap" in rep.breaches and rep.worst_week_loss > 0.05
+    assert rep.trades[-1].status == "weekly_stopped"
