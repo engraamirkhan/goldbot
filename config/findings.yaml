@@ -508,3 +508,12 @@ findings:
     source: trading-safety review of PR 491 (M3); the auto-rollback watcher can restore an older release that ignores the
       risk file's rm_daily_stop and has no real-money limits; needed before any live account is enabled
     check: {fn: manual, params: {}}
+
+  - id: ADR0106-REAL-MONEY-MISMATCH-HEALTH
+    title: Health FAILs (real_money_mismatch) and Telegram alerts when an engine started wound down without the real-money limits
+    owner: sre
+    severity: high
+    due: 2026-12-11
+    source: trading-safety sign-off of PR 491 (64bf4372); due before any unlock_live on icm-live or vantage-live, whichever
+      comes first; check in goldbot/ops/checks/engine.py reading the reason the engine writes to its state file
+    check: {fn: manual, params: {}}
