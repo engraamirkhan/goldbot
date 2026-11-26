@@ -6,6 +6,7 @@ record (load), the engine's start, and every refresh plus every auto entry (the 
 window, the kill switch and the owner's /mode propose still force propose on demo; exits are unchanged."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts as acc_mod
 from goldbot.risk.gate import Stage
+from goldbot.risk.real_money import AdvReference
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter
 from goldbot.telegram.bus import ApprovalBus
@@ -46,6 +48,11 @@ def _engine(tmp_path: Path, *, mode: str = "demo", approval: str = "auto", trade
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode=mode, approval_mode=approval, declared_class="raw",
                               state_dir=str(tmp_path), owner_user_id=OWNER),
                  pb, [spec], {"session_open": ConstantModel(p=0.65)}, center)
+    if trade_mode != "demo":
+        # a real terminal puts ADR 0106's real-money limits on, which refuse every entry without a reference daily
+        # volume (rm_volume_unknown); one is given so the entry reaches the approval layer these tests are about
+        eng.gate.limits.adv_reference = {"XAUUSD": AdvReference(adv_notional=1e11, currency="USD", source="test",
+                                                                as_of=dt.date(2025, 3, 1))}
     return eng, pb, center
 
 
