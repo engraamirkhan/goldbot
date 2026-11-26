@@ -75,34 +75,35 @@ def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, ta
 
 
 # Per-COLUMN lookbacks in decision bars, the current bar included (quant ruling on PR #472, ADR 0104 4): the oldest bar
-# whose perturbation can change the column by >= 1 % of its own scale (an EWM's 1 %-weight horizon included). An int
+# whose perturbation can change the column by >= 1 % of its own scale under either of two perturbations (a continuous
+# 3x-vol path; a +5 median-range shift with 1 % spikes of 20 median ranges), declared on 32 seeds. An int
 # holds at every timeframe; a dict is per timeframe (session-anchored columns read more bars at 1m). Measured and proved
 # by goldbot/research/column_lookback.py (tests/test_column_lookbacks.py: perturbing every bar older than the declared
 # lookback stays within the bound, the bar just inside breaks it). A d1_ context column reads its base column's "1d"
 # value in daily bars. Additive: the feature-level `lookback` above keeps its meaning (its only reader is
 # research/dense_labels.py; the engine reads neither).
 COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
-    "atr14_pct": 108,                # atr
-    "atr_ratio_14_100": 808,         # atr
+    "atr14_pct": 110,                # atr
+    "atr_ratio_14_100": 810,         # atr
     "compression_8_96": 97,          # breakout
     "tick_vol_ratio_20": 20,         # breakout
-    "em_atr_cost": 108,              # expected_move
+    "em_atr_cost": 110,              # expected_move
     "em_yz_16_cost": 96,             # expected_move
     "em_yz_48_cost": 96,             # expected_move
     "em_yz_4_cost": 96,              # expected_move
-    "bars_since_jump": 437,          # jumps
+    "bars_since_jump": 501,          # jumps
     "jump_z": 63,                    # jumps
     "bb_z_20": 20,                   # mean_reversion
-    "dist_vwap48_atr": 83,           # mean_reversion
-    "rsi14": 88,                     # mean_reversion
-    "spread_atr": 100,               # microstructure
+    "dist_vwap48_atr": 86,           # mean_reversion
+    "rsi14": 93,                     # mean_reversion
+    "spread_atr": 101,               # microstructure
     "spread_rel_median_48": 48,      # microstructure
     "tick_count_z_48": 48,           # microstructure
     "dist_ema50_atr": 163,           # moving_averages
-    "slope_ema20": {"1d": 81},       # moving_averages
+    "slope_ema20": {"1d": 92},       # moving_averages
     "slope_ema50": 165,              # moving_averages
     "rv_ratio": 101,                 # realised_vol
-    "vol_tercile": 320,              # realised_vol
+    "vol_tercile": 413,              # realised_vol
     "er_30": 31,                     # regime_stats
     "ret_16": 17,                    # returns
     "ret_4": 5,                      # returns
@@ -113,14 +114,21 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
     "min_since_newyork_open": 1,     # session
     "session_id": 1,                 # session
     # session_zones
-    "sess_high_dist_atr": {"1m": 475, "5m": 96, "15m": 93, "30m": 89, "1h": 86, "4h": 90, "1d": 89, "1w": 89},
-    "sess_low_dist_atr": {"1m": 451, "5m": 94, "15m": 79, "30m": 86, "1h": 81, "4h": 86, "1d": 91, "1w": 91},
-    "adx14": 120,                    # trend_strength
+    "sess_high_dist_atr": {"1m": 491, "5m": 100, "15m": 97, "30m": 89, "1h": 90, "4h": 91, "1d": 90, "1w": 90},
+    "sess_low_dist_atr": {"1m": 467, "5m": 99, "15m": 96, "30m": 98, "1h": 97, "4h": 91, "1d": 91, "1w": 91},
+    "adx14": 125,                    # trend_strength
     "donchian_pos_20": 20,           # trend_strength
     "tsmom_score": 481,              # tsmom
     "vol_of_vol_60": 80,             # vol_estimators
     "vol_ts_yz_20_60": 61,           # vol_estimators
 }
+
+
+# Columns whose declared lookback may go below the signed floor (tests/fixtures/column_lookbacks_floor.json; ADR 0104 4:
+# "Declared lookbacks never shrink without a quant re-review"). Each marker carries the re-review reference ("PR #N" or
+# "ADR NNNN") and the newly signed value per tf of the floor; the declaration must equal it, and a marker none of whose
+# values is below the floor is stale and fails (tests/test_column_lookbacks.py).
+COLUMN_LOOKBACK_REREVIEW: dict[str, dict[str, Any]] = {}
 
 
 def column_lookback(column: str, tf: str) -> int:
