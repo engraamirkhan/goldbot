@@ -976,9 +976,19 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         if not can_alarm(h, n_reach, d.cusum_k, p):
             out[agent_id] = {**info, "action": "cannot_alarm", "note": CANNOT_ALARM_NOTE}
         elif cusum_alarm(rets, bt.mean_ret, bt.std_ret, k=d.cusum_k, h=h):
-            restored = ctx.models.restore_previous(
-                agent_id, f"CUSUM alarm on {len(rets)} shadow trades in the new-champion watch (h {h:.3f})")
-            out[agent_id] = {**info, "action": "restored_previous", "restored": restored.version}
+            why = f"CUSUM alarm on {len(rets)} shadow trades in the new-champion watch (h {h:.3f})"
+            prev = ctx.models.by_agent(agent_id, "previous")
+            refused = ctx.models.serving_refusal(prev[-1]) if prev else None
+            if refused is not None:
+                # trading-safety L1 on #494: never restore a model the serving rule refuses; the alarmed champion is
+                # retired anyway (the agent then trades no model) and health fails on the action
+                ctx.models.retire(ch.version, f"{why}; previous not restored: {refused}")
+                log.error("model_watch: %s alarmed, previous %s would not serve: %s", agent_id, prev[-1].version,
+                          refused)
+                out[agent_id] = {**info, "action": "restore_refused", "refused": refused}
+            else:
+                restored = ctx.models.restore_previous(agent_id, why)
+                out[agent_id] = {**info, "action": "restored_previous", "restored": restored.version}
         else:
             out[agent_id] = {**info, "action": "ok"}
     write_atomic(ctx.state_dir / MODEL_WATCH_FILE, json.dumps({"ts": slot.isoformat(), "agents": out}, default=str))

@@ -1112,9 +1112,9 @@ class ModelQualitySettings(_Section):
     here may tighten a study, never loosen it."""
     param_shifts: list[float] = Field(default_factory=lambda: [0.1, 0.2])   # +- each fraction of every parameter
     baseline_alpha: float = Field(0.05, gt=0, le=0.05)       # beats_baseline: bootstrap p must be <= this
-    baseline_boot: int = Field(2000, ge=1000)                 # stationary day-block bootstrap draws
-    # "package.module:function" trainers the monthly job calls with (window_end, manifests_root); each must finish well
-    # inside the scheduler's single thread (run its fit in a bounded child, as discovery_nightly does)
+    baseline_boot: int = Field(10_000, ge=10_000)             # stationary day-block bootstrap draws (card minimum)
+    # "package.module:function" trainers the monthly job calls with (window_end, manifests_root). Refused while non-empty
+    # until the job runs each one in a niced, budgeted, killable child (trading-safety M1 on #494)
     monthly_trainers: list[str] = Field(default_factory=list)
 
     @field_validator("param_shifts")
@@ -1127,10 +1127,11 @@ class ModelQualitySettings(_Section):
     @field_validator("monthly_trainers")
     @classmethod
     def _dotted(cls, v: list[str]) -> list[str]:
-        import re
-        bad = [t for t in v if not re.fullmatch(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*", t)]
-        if bad:
-            raise ValueError(f"model_quality.monthly_trainers must be 'package.module:function': {bad}")
+        """Trading-safety M1 on #494: the scheduler is single-threaded, so no trainer is listed until the job runs
+        each one in a niced child process with a time budget and a kill, as discovery_nightly does."""
+        if v:
+            raise ValueError("model_quality.monthly_trainers must stay empty until the monthly_walkforward job runs "
+                             "each trainer in a niced child process with budget_s and a kill (trading-safety M1)")
         return v
 
 

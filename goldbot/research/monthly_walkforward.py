@@ -10,7 +10,8 @@ The scheduler job `monthly_walkforward` (goldbot/ops/jobs.py) runs on the 1st of
 
 and refits on data strictly before `window_end`, recording one run manifest per artifact (run_manifest.record /
 fit_and_record with schedule="monthly_walkforward"). The job checks each returned manifest (stored, on schedule, train
-end and scaler fit end before the window end) and reports them. It never promotes, restores or changes any model's
+end, label end (quant Q4: "The run manifest records `label_end_max`, the latest horizon end among training rows.
+`_problems` refuses a manifest whose `label_end_max >= window_end`.") and scaler fit end before the window end) and reports them. It never promotes, restores or changes any model's
 status: a refit artifact is a challenger at most, and promotion stays with the promotion gates (ADR 0106 decision 6).
 One trainer's failure never skips another; any failure or bad manifest fails the job after all have run, so health
 shows `job:monthly_walkforward` FAIL.
@@ -56,6 +57,8 @@ def _problems(m: rm.RunManifest, end: pd.Timestamp, root: Path) -> list[str]:
         out.append(f"{m.manifest_id[:12]} schedule is {m.schedule}, not monthly_walkforward")
     if m.train_end >= end:
         out.append(f"{m.manifest_id[:12]} train_end {m.train_end} is not before the window end {end}")
+    if m.label_end_max >= end:      # quant Q4: purge by label end, not by decision time
+        out.append(f"{m.manifest_id[:12]} label_end_max {m.label_end_max} is not before the window end {end}")
     if m.scaler_fit_end >= end:
         out.append(f"{m.manifest_id[:12]} scaler_fit_end {m.scaler_fit_end} is not before the window end {end}")
     try:
