@@ -468,6 +468,11 @@ def _refused(value, path, sha, match):
         _settings(value, path, sha)
 
 
+def _refused_file(value, made, match):
+    path, sha = made
+    _refused(value, str(path), sha, match)
+
+
 def test_d12_a_valid_pinned_measurement_admits_rho_day_le_60m_at_0_05(tmp_path):
     f, sha = rho_file(tmp_path)
     pf = _settings(0.05, str(f), sha)
@@ -488,11 +493,11 @@ def test_d12_refused_unless_the_file_matches_its_pinned_sha(tmp_path):
 
 def test_d12_refused_for_a_control_grid_only_file_or_one_with_judged_families(tmp_path):
     grid = [{"kind": "control", "name": "control_grid"}]
-    _refused(0.05, *map(str, rho_file(tmp_path, candidates=grid)), ">= 2 replayed families")
+    _refused_file(0.05, rho_file(tmp_path, candidates=grid), ">= 2 replayed families")
     judged = grid + [{"kind": "family", "name": "box_break_close", "arms": ["MB1H"]},      # an H-102 arm
                      {"kind": "family", "name": "sr-v3", "arms": []},
                      {"kind": "family", "name": "sweep_absorb", "arms": ["MSA15"]}]
-    _refused(0.05, *map(str, rho_file(tmp_path, candidates=judged)), ">= 2 replayed families")
+    _refused_file(0.05, rho_file(tmp_path, candidates=judged), ">= 2 replayed families")
 
 
 def test_d12_refused_below_the_files_binding_for_any_class(tmp_path):
@@ -529,11 +534,11 @@ def test_d12_refused_when_the_cells_file_differs_from_its_sha(tmp_path):
 
 
 def test_d12_refused_for_an_old_schema_or_a_window_outside_learn(tmp_path):
-    _refused(0.05, *map(str, rho_file(tmp_path, schema="rho_day_measurement/v1")), "v2 or later")
+    _refused_file(0.05, rho_file(tmp_path, schema="rho_day_measurement/v1"), "v2 or later")
     learn = {"name": "learn", "from": "2010-01-01 00:00:00+00:00", "to_exclusive": "2018-01-01 00:00:00+00:00"}
     for w in (learn | {"to_exclusive": "2018-02-01 00:00:00+00:00"}, learn | {"from": "2006-02-01 00:00:00+00:00"},
               learn | {"name": "confirm"}):
-        _refused(0.05, *map(str, rho_file(tmp_path, window=w)), "learn within")
+        _refused_file(0.05, rho_file(tmp_path, window=w), "learn within")
 
 
 def test_d12_the_committed_measurement_matches_the_committed_script_and_its_cells():
