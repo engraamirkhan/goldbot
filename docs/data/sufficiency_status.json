@@ -2752,11 +2752,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/5m",
-   "n_eff_learn": 3847,
+   "n_eff_learn": 3846,
    "n_eff_judge": 392,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 453,
+   "short_learn": 454,
    "short_judge": 717,
    "status": "SHORT",
    "routes": [
@@ -2774,11 +2774,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/15m",
-   "n_eff_learn": 2708,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1592,
+   "short_learn": 1593,
    "short_judge": 817,
    "status": "SHORT",
    "routes": [
@@ -2796,11 +2796,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/30m",
-   "n_eff_learn": 1644,
+   "n_eff_learn": 1643,
    "n_eff_judge": 193,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 2656,
+   "short_learn": 2657,
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
@@ -2818,11 +2818,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3232,
+   "short_learn": 3233,
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
@@ -2833,7 +2833,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 567,
+   "residual_learn": 566,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -3635,7 +3635,7 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/5m",
-   "n_eff_learn": 3847,
+   "n_eff_learn": 3846,
    "n_eff_judge": 392,
    "need_train": 2580,
    "need_judge": 1109,
@@ -3657,7 +3657,7 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/15m",
-   "n_eff_learn": 2708,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 2580,
    "need_judge": 1109,
@@ -3679,11 +3679,11 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/30m",
-   "n_eff_learn": 1644,
+   "n_eff_learn": 1643,
    "n_eff_judge": 193,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 936,
+   "short_learn": 937,
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
@@ -3701,11 +3701,11 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1512,
+   "short_learn": 1513,
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
@@ -4518,11 +4518,11 @@
   {
    "consumer": "x6",
    "cell": "gold/5m",
-   "n_eff_learn": 3847,
+   "n_eff_learn": 3846,
    "n_eff_judge": 392,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 1313,
+   "short_learn": 1314,
    "short_judge": 717,
    "status": "SHORT",
    "routes": [
@@ -4540,11 +4540,11 @@
   {
    "consumer": "x6",
    "cell": "gold/15m",
-   "n_eff_learn": 2708,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2452,
+   "short_learn": 2453,
    "short_judge": 817,
    "status": "SHORT",
    "routes": [
@@ -4562,11 +4562,11 @@
   {
    "consumer": "x6",
    "cell": "gold/30m",
-   "n_eff_learn": 1644,
+   "n_eff_learn": 1643,
    "n_eff_judge": 193,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 3516,
+   "short_learn": 3517,
    "short_judge": 916,
    "status": "SHORT",
    "routes": [
@@ -4577,18 +4577,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 411,
+   "residual_learn": 410,
    "residual_judge": 0,
    "max_inputs_after": 11
   },
   {
    "consumer": "x6",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4092,
+   "short_learn": 4093,
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
@@ -4599,7 +4599,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1427,
+   "residual_learn": 1426,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -5379,11 +5379,11 @@
   {
    "consumer": "seq-1",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 17200,
    "need_judge": 1109,
-   "short_learn": 16132,
+   "short_learn": 16133,
    "short_judge": 960,
    "status": "SHORT",
    "routes": [
@@ -5394,7 +5394,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 13467,
+   "residual_learn": 13466,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -5792,11 +5792,11 @@
   {
    "consumer": "rl-x1",
    "cell": "gold/5m",
-   "n_eff_learn": 3847,
+   "n_eff_learn": 3846,
    "n_eff_judge": 392,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 6903,
+   "short_learn": 6904,
    "short_judge": 2936,
    "status": "SHORT",
    "routes": [
@@ -5807,18 +5807,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1503,
+   "residual_learn": 1502,
    "residual_judge": 0,
    "max_inputs_after": 21
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/15m",
-   "n_eff_learn": 2708,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 8042,
+   "short_learn": 8043,
    "short_judge": 3036,
    "status": "SHORT",
    "routes": [
@@ -5829,18 +5829,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3767,
+   "residual_learn": 3766,
    "residual_judge": 183,
    "max_inputs_after": 16
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/30m",
-   "n_eff_learn": 1644,
+   "n_eff_learn": 1643,
    "n_eff_judge": 193,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9106,
+   "short_learn": 9107,
    "short_judge": 3135,
    "status": "SHORT",
    "routes": [
@@ -5851,18 +5851,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 6001,
+   "residual_learn": 6000,
    "residual_judge": 1247,
    "max_inputs_after": 11
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9682,
+   "short_learn": 9683,
    "short_judge": 3179,
    "status": "SHORT",
    "routes": [
@@ -5873,7 +5873,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7017,
+   "residual_learn": 7016,
    "residual_judge": 1722,
    "max_inputs_after": 8
   },
@@ -6453,7 +6453,7 @@
   {
    "consumer": "agg-v1",
    "cell": "gold/15m",
-   "n_eff_learn": 2708,
+   "n_eff_learn": 2707,
    "n_eff_judge": 292,
    "need_train": 0,
    "need_judge": 200,
@@ -6475,7 +6475,7 @@
   {
    "consumer": "agg-v1",
    "cell": "gold/1h",
-   "n_eff_learn": 1068,
+   "n_eff_learn": 1067,
    "n_eff_judge": 149,
    "need_train": 0,
    "need_judge": 200,
@@ -6811,13 +6811,13 @@
    "gain": {
     "gold/1m": 2922,
     "gold/1m:judge": 3838,
-    "gold/5m": 2210,
+    "gold/5m": 2211,
     "gold/5m:judge": 2851,
-    "gold/15m": 1702,
+    "gold/15m": 1703,
     "gold/15m:judge": 2122,
-    "gold/30m": 1190,
+    "gold/30m": 1191,
     "gold/30m:judge": 1405,
-    "gold/1h": 956,
+    "gold/1h": 957,
     "gold/1h:judge": 1084,
     "gold/2h:judge": 542,
     "gold/4h": 240,
@@ -6835,8 +6835,8 @@
    "due": "2026-12-04",
    "status": "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)",
    "pr": "",
-   "counted": 21475,
-   "per_day": 9663.8
+   "counted": 21479,
+   "per_day": 9665.6
   },
   {
    "id": "D-14",
@@ -6890,10 +6890,10 @@
    "title": "gold 2010-17: lift the 27 non-A months (14 C close_vs_ref 0.95-0.957, 13 B range2_extremes) by a second graded minute source (HistData XAUUSD 2009+, if independent of Dukascopy) or a quant ruling that feature-lookback months need B, not A; ceiling = untiered - T2",
    "gain": {
     "gold/1m": 2112,
-    "gold/5m": 1676,
-    "gold/15m": 1471,
-    "gold/30m": 1207,
-    "gold/1h": 1203,
+    "gold/5m": 1677,
+    "gold/15m": 1472,
+    "gold/30m": 1208,
+    "gold/1h": 1204,
     "gold/4h": 481,
     "gold/1d": 298,
     "gold/1w": 208
@@ -6907,8 +6907,8 @@
    "due": "2026-12-04",
    "status": "not started; delegated 2026-11-26",
    "pr": "",
-   "counted": 8656,
-   "per_day": 1154.1
+   "counted": 8660,
+   "per_day": 1154.7
   },
   {
    "id": "BROKER-M1",
