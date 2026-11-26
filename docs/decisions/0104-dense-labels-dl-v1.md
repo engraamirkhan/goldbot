@@ -112,6 +112,12 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
        - the tightness half does not apply. Over-declaring costs warm-up and embargo, never a leaked bar.
        `column_lookback` gains an optional fixture length `n` (default 4,000, unchanged for fs-v1), because the X6
        level columns read up to 8,880 bars at 1m. The #478 no-shrink guard applies to the X6 declarations.
+       - **X6 adoption moment: `X6_ADOPTED_UTC` = 2026-11-26T09:45:00+00:00** (`price_action_x6.X6_ADOPTED_UTC`, frozen;
+         the push applying the #484 code review). The card rev 7 legitimacy test
+         (`tests/test_price_action_x6.py::test_no_sr_v3_label_read_existed_when_x6_was_adopted`) fails only on an sr-v3
+         row of the read-once or dl-v1 consumption ledger dated before it, or with no parseable `ts`. A row counts as
+         sr-v3 when its `family`, `id` or `key` field names sr-v3 or H-103; free text never counts. sr-v3 rows from
+         Stage 0 on pass (code review MEDIUM-1 / LOW-1 on #484).
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
