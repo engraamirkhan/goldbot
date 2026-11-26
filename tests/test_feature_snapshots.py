@@ -250,6 +250,9 @@ def test_the_snapshot_job_writes_nothing_when_switched_off_and_reports_the_days_
     slot = DECISIONS[0] + pd.Timedelta(hours=2)
     off_ctx = SimpleNamespace(settings=off, store=store, state_dir=tmp_path, accounts=[acc])
     assert jobs.feature_snapshots(off_ctx, slot) == {"enabled": False}  # type: ignore[arg-type]
-    on_ctx = SimpleNamespace(settings=s, store=store, state_dir=tmp_path, accounts=[acc])
+    # a fixed clock outside the 00:45-04:05 UTC research window: the job's answer never depends on when CI runs it
+    # (issue #470: a run at 03:xx UTC got {"skipped": ...})
+    fixed = pd.Timestamp("2026-11-20 12:00", tz="UTC")
+    on_ctx = SimpleNamespace(settings=s, store=store, state_dir=tmp_path, accounts=[acc], clock=lambda: fixed)
     rep = jobs.feature_snapshots(on_ctx, slot)  # type: ignore[arg-type]
     assert rep["written"] == 1 and rep["coverage_1d"]["with_features"] == 1

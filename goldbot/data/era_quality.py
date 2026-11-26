@@ -754,7 +754,8 @@ class MonthGradeV2(FrozenRecord):
 def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame | None, session_minutes: int,
                    reference_native: bool, *, weekend: bool = False, quarantined: bool = False,
                    clock_offset: int | None = None, same_source: bool = False, fix: pd.DataFrame | None = None,
-                   fix_status: str = "none", partial_share: bool = False) -> MonthGradeV2:
+                   fix_status: str = "none", partial_share: bool = False,
+                   fix_result: tuple[float | None, int] | None = None) -> MonthGradeV2:
     """One instrument-month's R11 v2.1 tier. `partial_share`: the year shares >= 0.10 (but < 0.50) of its
     hour-ending closes with Dukascopy (B3): A then also needs the independent fix (FX), else the month caps at B. `ref`: the reference HOURLY bars of at least this month (ts_utc, high, low,
     close, spread). `fix_status`: "ok" (fix given), "cap_b" (only fix carries a CFD basis), "pending" (not fetched)."""
@@ -788,7 +789,9 @@ def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame |
         close_share = float((bp <= R11_V2["close_bp"]).mean())
         if reference_native and ref is not None:
             r2_share, r2_ratio = range_v2(d, ref_daily, ref) if ref_daily is not None else (None, None)
-    fix_share, fix_days = fix_close_share(bars, fix) if fix is not None else (None, 0)
+    # fix_result: (share, days) of a later rule's fix check (r11-v2.2 gold window); None = the v2.1 check
+    fix_share, fix_days = fix_result if fix_result is not None else \
+        (fix_close_share(bars, fix) if fix is not None else (None, 0))
     lr = np.diff(np.log(bars["bid_close"].to_numpy(dtype="float64"))) if n > 2 else np.array([])
     rv = float(np.sqrt(np.sum(lr ** 2))) if len(lr) else None
     # close checks
@@ -869,3 +872,105 @@ def grade_month_v2(key: str, month: str, bars: pd.DataFrame, ref: pd.DataFrame |
                         range2_ratio_median=r2_ratio, close_day_share=close_share, fix_share=fix_share,
                         fix_days=fix_days, fix_status=fix_status, reference=kind, rv=rv,
                         partial_share=partial_share)
+
+
+# =============================================================================================== R11 v2.2 (quant ruling)
+# r11-v2.2 (quant ruling on D-1, 2026-11-26): the GOLD fix check only. Every other v2.1 constant and the FX H.10 check
+# are unchanged. Mechanism (ADR 0105): the v2.1 check compares the bar closing at the nominal 15:00 London with a price
+# the LBMA PM auction discovers minutes later; 0 of 78 months graded A against independent HistData minutes passed it.
+# v2.2: per fix day d = min over the 1m bid closes of bars closing in (15:00, 15:10] Europe/London of
+# |ln(close / fix)| x 1e4; a day with fewer than 5 of those 10 bars is dropped (counted). A month passes when the share
+# of days with d <= tol is >= fix_day_share_min with >= fix_days_min days. tol is calibrated once, on Dukascopy
+# XAUUSD months graded A under v2.1 against independent HistData minutes in 2015-04..2018-12 (IBA era) only: the
+# smallest value on a 0.5 bp grid at which all but one calibration month pass. Power: the fix shifted by +-2 tol must
+# fail >= 95 % of the calibration months; tol > 15 bp or a failed power check voids v2.2. Single use: no v2.3 on the
+# gold fix for 2018-25 (ADR 0105).
+R11_V22_ID = "r11-v2.2-2026-11-26"
+R11_V22: dict[str, float] = {
+    **R11_V21,
+    "gold_fix_window_min": 10.0,         # bars CLOSING in (fix, fix + 10 min]
+    "gold_fix_min_bars": 5.0,            # fewer bars in the window: the day is dropped
+    "gold_tol_grid_bp": 0.5,
+    "gold_tol_max_bp": 15.0,             # above: v2.2 void
+    "gold_calib_fail_max": 1.0,          # calibration months allowed to fail at tol (37 of 38 pass)
+    "gold_power_shift_tol_mult": 2.0,
+    "gold_power_fail_min": 0.95,
+}
+GOLD_CALIB_MONTHS = ("2015-04", "2018-12")   # inclusive; never 2009-01..2015-03 (pre-IBA fix) nor 2019-25
+
+
+def gold_fix_window_d(bars: pd.DataFrame, fix: pd.DataFrame) -> tuple[np.ndarray, int]:
+    """(d per kept fix day in bp, days dropped for fewer than gold_fix_min_bars bars). d = min |ln(bid_close / fix)|
+    x 1e4 over the 1m bars closing in (fix_utc, fix_utc + 10 min] (the bar opening at ts closes at ts + 1 min)."""
+    if not len(fix) or not len(bars):
+        return np.array([], dtype="float64"), 0
+    close_t = epoch_ns_utc(bars["ts_utc"]) + 60_000_000_000
+    order = np.argsort(close_t, kind="stable")
+    close_t = close_t[order]
+    c = bars["bid_close"].to_numpy(dtype="float64")[order]
+    f_t = epoch_ns_utc(fix["fix_utc"])
+    v = fix["value"].to_numpy(dtype="float64")
+    lo = np.searchsorted(close_t, f_t, side="right")                     # first close strictly after the fix
+    hi = np.searchsorted(close_t, f_t + int(R11_V22["gold_fix_window_min"] * 60e9), side="right")
+    out, dropped = [], 0
+    for a, b, val in zip(lo, hi, v, strict=True):
+        if b - a < R11_V22["gold_fix_min_bars"]:
+            dropped += 1
+            continue
+        out.append(float(np.min(np.abs(np.log(c[a:b] / val))) * 1e4))
+    return np.array(out, dtype="float64"), dropped
+
+
+def gold_fix_month_pass(d: np.ndarray, tol: float) -> bool:
+    return len(d) >= R11_V22["fix_days_min"] and float((d <= tol).mean()) >= R11_V22["fix_day_share_min"]
+
+
+class GoldFixCalibration(FrozenRecord):
+    r11_id: str = R11_V22_ID
+    months: list[str]
+    tol_bp: float | None
+    passing: int
+    power_fail_share: float | None
+    power_fail_plus: int
+    power_fail_minus: int
+    void: bool
+    reason: str
+
+
+def calibrate_gold_tol(month_d: dict[str, np.ndarray],
+                       shifted: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+                       grid_max_bp: float = 100.0) -> GoldFixCalibration:
+    """tol and the power check from the calibration months. `month_d`: month -> d per day at the true fix;
+    `shifted`: month -> (d with the fix x exp(+2 tol / 1e4), d with x exp(-2 tol / 1e4)), computed by the caller at
+    the returned tol (`calibrate_gold_tol(month_d)` first, then `power_check`). Void when tol > gold_tol_max_bp."""
+    months = sorted(month_d)
+    need = len(months) - int(R11_V22["gold_calib_fail_max"])
+    step = R11_V22["gold_tol_grid_bp"]
+    tol: float | None = None
+    for k in range(1, int(grid_max_bp / step) + 1):
+        if sum(gold_fix_month_pass(month_d[m], k * step) for m in months) >= need:
+            tol = k * step
+            break
+    passing = sum(gold_fix_month_pass(month_d[m], tol) for m in months) if tol is not None else 0
+    void = tol is None or tol > R11_V22["gold_tol_max_bp"]
+    cal = GoldFixCalibration(months=months, tol_bp=tol, passing=passing, power_fail_share=None, power_fail_plus=0,
+                             power_fail_minus=0, void=void,
+                             reason=(f"tol {tol} bp > {R11_V22['gold_tol_max_bp']} bp (or none on the grid)" if void
+                                     else "power not checked"))
+    return power_check(cal, shifted) if (shifted is not None and not void) else cal
+
+
+def power_check(cal: GoldFixCalibration, shifted: dict[str, tuple[np.ndarray, np.ndarray]]) -> GoldFixCalibration:
+    """Shifted fixes (+-2 tol) must FAIL >= gold_power_fail_min of the shifted calibration months, else void."""
+    assert cal.tol_bp is not None
+    plus = sum(not gold_fix_month_pass(shifted[m][0], cal.tol_bp) for m in cal.months)
+    minus = sum(not gold_fix_month_pass(shifted[m][1], cal.tol_bp) for m in cal.months)
+    share = (plus + minus) / (2 * len(cal.months)) if cal.months else 0.0
+    ok = share >= R11_V22["gold_power_fail_min"]
+    return cal.model_copy(update={"power_fail_share": share, "power_fail_plus": plus, "power_fail_minus": minus,
+                                  "void": not ok,
+                                  "reason": "ok" if ok else f"power {share:.3f} < {R11_V22['gold_power_fail_min']}"})
+
+
+def shift_fix(fix: pd.DataFrame, bp: float) -> pd.DataFrame:
+    return fix.assign(value=fix["value"].to_numpy(dtype="float64") * float(np.exp(bp / 1e4)))

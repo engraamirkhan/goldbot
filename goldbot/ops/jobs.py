@@ -385,7 +385,8 @@ def feature_snapshots(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     db = Database.open(ctx.state_dir, "aux")
     rep = fs.snapshot_pending(db, ctx.store, broker_of={acc.account_id: acc.broker for acc in ctx.accounts},
                               symbol_of=gold_symbols(ctx.accounts), as_of=slot, max_decisions=e.snapshot_max_decisions,
-                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline)
+                              quotas=fs.scaled_quotas(fs.TF_QUOTAS, e.snapshot_max_decisions), deadline=deadline,
+                              clock=clock)      # the deadline is checked on the clock it was computed from
     rep["coverage_1d"] = fs.coverage(db, since=slot - pd.Timedelta(days=1))
     return rep
 
