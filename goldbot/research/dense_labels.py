@@ -73,7 +73,7 @@ from goldbot.data.daily import session_date
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features import build_features
-from goldbot.features.registry import FEATURES as REGISTRY
+from goldbot.features.registry import column_lookback
 from goldbot.research import decision_cost as DC
 from goldbot.research import feature_store as F
 from goldbot.research import windows as WN
@@ -469,9 +469,9 @@ def column_producers() -> dict[str, tuple[str, str]]:
 
 
 def input_lookback(tf: str, columns: Sequence[str], spec: LabelSpec = SPEC) -> pd.Timedelta:
-    """ADR 0104 4 (quant C-3 / R-a): the maximum over `columns` of the registry `lookback` of the feature producing
-    them, in decision bars x 7/5 below 1w; with any d1_ column on a tf that has the d1 context, the d1 context
-    lookback (max of `ctx_lookback_days` and the producing context feature's lookback in days x 7/5) is included."""
+    """ADR 0104 4 (quant ruling, 2026-11-26): the maximum over `columns` of each column's own declared lookback
+    (`registry.column_lookback`), in decision bars x 7/5 below 1w; a d1_ column's lookback is its base column's "1d"
+    lookback in daily bars x 7/5 (on a tf that carries the d1 context), replacing a fixed context lookback."""
     prod = column_producers()
     cols = [c for c in columns if c != "side"]
     unknown = sorted(set(cols) - set(prod))
@@ -479,12 +479,13 @@ def input_lookback(tf: str, columns: Sequence[str], spec: LabelSpec = SPEC) -> p
         raise ValueError(f"no fs-v1 feature produces {unknown}: the input lookback cannot be computed")
     sec = tf_seconds(tf)
     wk = 1.0 if tf == "1w" else 7 / 5
-    bars = max((REGISTRY[prod[c][0]].lookback for c in cols if prod[c][1] == "decision"), default=0)
-    t = bars * sec * wk
-    d1 = [c for c in cols if prod[c][1] == CONTEXT]
-    if d1 and sec < DAY_S:
-        ctx_bars = max(REGISTRY[prod[c][0]].lookback for c in d1)
-        t = max(t, spec.ctx_lookback_days * DAY_S, ctx_bars * DAY_S * 7 / 5)
+    t = 0.0
+    for c in cols:
+        if prod[c][1] == CONTEXT:
+            if sec < DAY_S:
+                t = max(t, column_lookback(c[len(CONTEXT) + 1:], "1d") * DAY_S * 7 / 5)
+        else:
+            t = max(t, column_lookback(c, tf) * sec * wk)
     return pd.Timedelta(seconds=round(t))
 
 
@@ -751,6 +752,31 @@ def booked(ledger: Path, read_id: str, frozen_spec_hash: str) -> dict[str, Any]:
     return hit[-1]
 
 
+def _consumptions(ledger: Path, read_id: str) -> list[dict[str, Any]]:
+    p = Path(ledger)
+    rows = [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+    return [r for r in rows if r.get("type") == "consumption" and r.get("id") == read_id]
+
+
+def consume(ledger: Path, read_id: str, *, columns: Sequence[str], label_spec_hash: str,
+            keys: Mapping[str, str]) -> dict[str, Any]:
+    """Quant C-4: every `load_labels` under a booked read appends a consumption row (id, columns, label spec hash,
+    keys, ts). The first consumption fixes the columns, the spec hash and the keys; a later load under the same id
+    with any of them different raises."""
+    row = {"type": "consumption", "id": read_id, "columns": list(columns), "label_spec_hash": label_spec_hash,
+           "keys": dict(sorted(keys.items()))}
+    prior = _consumptions(ledger, read_id)
+    if prior:
+        first = prior[0]
+        for f in ("columns", "label_spec_hash", "keys"):
+            if first.get(f) != row[f]:
+                raise PermissionError(f"read {read_id!r} was first consumed with other {f}: a booked read is fixed by "
+                                      "its first load (quant C-4)")
+    with open(ledger, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({**row, "ts": pd.Timestamp.now(tz="UTC").isoformat()}) + "\n")
+    return row
+
+
 def _touches(lo: np.ndarray, hi: np.ndarray, spans: Iterable[tuple[pd.Timestamp, pd.Timestamp]]) -> np.ndarray:
     hit = np.zeros(len(lo), bool)
     for a, b in spans:
@@ -788,9 +814,12 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
                                   "a booked read id, its ledger and the frozen spec hash are required (quant C-1)")
         book = booked(ledger, booked_read, frozen_spec_hash)
     stems = _stems(cache, spec, instrument, tf, years, phases, keys)
+    key_map = {f"{y}:{p}": k for (y, p), k in keys.items()}
     if not readable(tiers):
         raise SealedStore(f"dl-v1 {instrument} {tf}: tiers sha256 {tiers.sha256[:12]} is not recorded in ADR 0085 A4 "
                           "(card ruling 5): label values are sealed; counts read `skeleton`")
+    if book is not None and booked_read is not None and ledger is not None:
+        consume(ledger, booked_read, columns=columns, label_spec_hash=spec_hash(spec), keys=key_map)
     frames = []
     for st in stems:
         sk = pd.read_parquet(f"{st}.skeleton.parquet")
@@ -805,7 +834,7 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     lab = attach_tiers(lab, tiers, columns=columns, proxy_source=proxy_source, spec=spec)
     meta: dict[str, Any] = {"spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
                             "tiers_sha256": tiers.sha256, "r11_id": tiers.r11_id, "tier_proxy": proxy_source,
-                            "columns": list(columns), "keys": dict((f"{y}:{p}", k) for (y, p), k in keys.items()),
+                            "columns": list(columns), "keys": key_map,
                             "booked_read": booked_read if book is not None else None, "rows_read": len(lab),
                             "purpose": purpose, "window": [str(lo), str(hi)]}
     d, e = _ns(lab["decision_utc"]), _ns(lab["horizon_end_utc"])
@@ -829,7 +858,7 @@ def load_labels(cache: Path, *, instrument: str, tf: str, years: Iterable[int], 
     return out, meta
 
 
-__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "column_producers", "input_lookback", "judged_spans",
+__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "column_producers", "input_lookback", "judged_spans",
            "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
            "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",

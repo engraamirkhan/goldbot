@@ -2,6 +2,10 @@
 judged phase refusal, decision-time cost(x), uniqueness on an overlap fixture, C6 purge."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -90,8 +94,8 @@ def test_no_look_ahead(mins: pd.DataFrame) -> None:
     m3 = mins.copy()
     later = m3["ts_utc"] >= r["decision_utc"].iloc[0]
     m3.loc[later, ["bid_high", "ask_high"]] += 50
-    c = D.label_rows(D.Minutes(m3), r, tf)
-    assert np.allclose(c["base_dist"], a["base_dist"])
+    lab3 = D.label_rows(D.Minutes(m3), r, tf)
+    assert np.allclose(lab3["base_dist"], a["base_dist"])
 
 
 def test_revision_moves_label_availability(mins: pd.DataFrame) -> None:
@@ -170,7 +174,7 @@ def test_holdout_refused() -> None:
 CORE6 = D.COLUMN_SETS["core-6"]
 
 
-def _tiers(tmp_path, inst: str, months: list[str], tier: str = "A") -> F.Tiers:
+def _tiers(tmp_path: Path, inst: str, months: list[str], tier: str = "A") -> F.Tiers:
     p = tmp_path / "tiers.csv"
     pd.DataFrame({"key": inst, "month": months, "tier": tier, "r11_id": "r11-test"}).to_csv(p, index=False)
     return F.Tiers.from_csv(p)
@@ -180,7 +184,7 @@ def _parts(m: pd.DataFrame, tag: str = "a") -> dict[str, str]:
     return {"fs_key": f"fs-{tag}", "minutes_sha256": f"sha-{tag}", "minutes_to_utc": str(m["ts_utc"].max())}
 
 
-def _store(tmp_path, m: pd.DataFrame, tf: str, phase: int, source: str, year: int = 2015,
+def _store(tmp_path: Path, m: pd.DataFrame, tf: str, phase: int, source: str, year: int = 2015,
            tag: str = "a") -> tuple[pd.DataFrame, str]:
     rows = _rows(m, tf, phase, source=source).assign(instrument="EURUSD" if source != "dukascopy" else "XAUUSD")
     lab = D.label_rows(D.Minutes(m), rows, tf)
@@ -190,27 +194,33 @@ def _store(tmp_path, m: pd.DataFrame, tf: str, phase: int, source: str, year: in
     return lab, key
 
 
-def test_judge_refuses_phase_and_sealed_store(tmp_path, mins: pd.DataFrame, monkeypatch) -> None:
+def test_judge_refuses_phase_and_sealed_store(tmp_path: Path, mins: pd.DataFrame,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
     m = mins.assign(source="histdata:EURUSD")
     _, k0 = _store(tmp_path, m, "15m", 0, "histdata:EURUSD")
     _, k5 = _store(tmp_path, m, "15m", 5, "histdata:EURUSD")
     tiers = _tiers(tmp_path, "EURUSD", ["2015-02", "2015-03"])
     win = (pd.Timestamp("2015-01-01", tz="UTC"), pd.Timestamp("2016-01-01", tz="UTC"))
-    kw = {"instrument": "EURUSD", "tf": "15m", "years": [2015], "window": win, "columns": CORE6,
-          "keys": {(2015, 0): k0, (2015, 5): k5}}
+    keys = {(2015, 0): k0, (2015, 5): k5}
+
+    def load(tiers_: F.Tiers | None, purpose: str, phases: tuple[int, ...] = (0,),
+             columns: tuple[str, ...] | None = CORE6) -> tuple[pd.DataFrame, dict[str, Any]]:
+        return D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[2015], tiers=tiers_, columns=columns,
+                             keys=keys, window=win, purpose=purpose, phases=phases)
+
     with pytest.raises(D.SealedStore):                   # card ruling 5: no recorded tiers sha, no label read
-        D.load_labels(tmp_path, tiers=tiers, purpose="judge", **kw)
+        load(tiers, "judge")
     monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
     with pytest.raises(ValueError, match="phase 0"):
-        D.load_labels(tmp_path, tiers=tiers, purpose="judge", phases=(0, 5), **kw)
+        load(tiers, "judge", phases=(0, 5))
     with pytest.raises(ValueError, match="tiers"):
-        D.load_labels(tmp_path, tiers=None, purpose="judge", **kw)
+        load(None, "judge")
     with pytest.raises(ValueError, match="columns"):     # quant C-3: the served column set is required
-        D.load_labels(tmp_path, tiers=tiers, purpose="train", **{**kw, "columns": None})
-    lab, meta = D.load_labels(tmp_path, tiers=tiers, purpose="judge", **kw)
+        load(tiers, "train", columns=None)
+    lab, meta = load(tiers, "judge")
     assert len(lab) and (lab["phase"] == 0).all() and lab["usable"].all()
     assert set(D.LABEL_VALUES) <= set(lab.columns) and meta["columns"] == list(CORE6)
-    tr, _ = D.load_labels(tmp_path, tiers=tiers, purpose="train", phases=(0, 5), **kw)
+    tr, _ = load(tiers, "train", phases=(0, 5))
     assert set(tr["phase"]) == {0, 5}
     # gold rows under tiers that grade another source: ungraded, never usable (quant C3)
     _, kg = _store(tmp_path, mins, "15m", 0, "dukascopy")
@@ -219,7 +229,7 @@ def test_judge_refuses_phase_and_sealed_store(tmp_path, mins: pd.DataFrame, monk
     assert gold.empty
 
 
-def test_label_values_live_apart_from_the_skeleton(tmp_path, mins: pd.DataFrame) -> None:
+def test_label_values_live_apart_from_the_skeleton(tmp_path: Path, mins: pd.DataFrame) -> None:
     """Code review LOW-2: the skeleton file holds no label value; the values file is a separate file."""
     _, key = _store(tmp_path, mins, "15m", 0, "dukascopy")
     d = tmp_path / D.SPEC.spec_id / "XAUUSD" / "15m" / "p0" / "2015"
@@ -231,7 +241,7 @@ def test_label_values_live_apart_from_the_skeleton(tmp_path, mins: pd.DataFrame)
     assert len(s2) == len(sk) and not set(D.LABEL_VALUES) & set(s2.columns)
 
 
-def test_reads_only_the_partition_of_the_data_key(tmp_path, mins: pd.DataFrame, monkeypatch) -> None:
+def test_reads_only_the_partition_of_the_data_key(tmp_path: Path, mins: pd.DataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
     """Quant C-2 / code review LOW-4: a revised-minutes rebuild (new key) is never shadowed by the stale file, and
     two candidates with no key to choose by raise."""
     m = mins.assign(source="histdata:EURUSD")
@@ -253,35 +263,46 @@ def test_reads_only_the_partition_of_the_data_key(tmp_path, mins: pd.DataFrame, 
                       columns=CORE6, keys={(2015, 0): "0" * 64})
 
 
-def test_confirm_and_test_old_need_a_booked_read(tmp_path, monkeypatch) -> None:
+def test_confirm_and_test_old_need_a_booked_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Quant C-1: an unsealed store refuses a 2018 read without a booked id and reads 2015; a booked id under the
-    frozen spec hash opens it and goes into the manifest; learn reads end at the learn end."""
+    frozen spec hash opens it and goes into the manifest; learn reads end at the learn end. Quant C-4: the first
+    consumption under an id fixes its columns, spec hash and keys."""
     m15 = _minutes("2015-03-02", 6 * 1440).assign(source="histdata:EURUSD")
     m18 = _minutes("2018-03-05", 6 * 1440).assign(source="histdata:EURUSD")
     _, k15 = _store(tmp_path, m15, "15m", 0, "histdata:EURUSD", year=2015)
     _, k18 = _store(tmp_path, m18, "15m", 0, "histdata:EURUSD", year=2018)
-    months = ["2015-02", "2015-03", "2018-02", "2018-03"]
+    months = [str(p) for p in pd.period_range("2014-01", "2015-03", freq="M")] + \
+        [str(p) for p in pd.period_range("2017-01", "2018-03", freq="M")]
     tiers = _tiers(tmp_path, "EURUSD", months)
     monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({tiers.sha256}))
-    base = {"instrument": "EURUSD", "tf": "15m", "tiers": tiers, "columns": CORE6}
     learn = (pd.Timestamp("2010-01-01", tz="UTC"), pd.Timestamp("2018-01-01", tz="UTC"))
-    lab, meta = D.load_labels(tmp_path, years=[2015], keys={(2015, 0): k15}, window=learn, **base)
-    assert len(lab) and meta["booked_read"] is None
     confirm = (pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2025-10-01", tz="UTC"))
-    with pytest.raises(PermissionError, match="booked"):
-        D.load_labels(tmp_path, years=[2018], keys={(2018, 0): k18}, window=confirm, **base)
     ledger = tmp_path / "window_reads.jsonl"
+
+    def load(year: int, key: str, window: tuple[pd.Timestamp, pd.Timestamp], *, read: str | None = None,
+             frozen: str | None = None, columns: tuple[str, ...] = CORE6) -> tuple[pd.DataFrame, dict[str, Any]]:
+        return D.load_labels(tmp_path, instrument="EURUSD", tf="15m", years=[year], tiers=tiers, columns=columns,
+                             keys={(year, 0): key}, window=window, booked_read=read,
+                             ledger=ledger if read else None, frozen_spec_hash=frozen)
+
+    lab, meta = load(2015, k15, learn)
+    assert len(lab) and meta["booked_read"] is None
+    with pytest.raises(PermissionError, match="booked"):
+        load(2018, k18, confirm)
     ledger.write_text('{"family": "sr_v3", "window": "confirm", "status": "started", "key": "read-1", '
                       '"ref": {"spec_hash": "frozen-1"}}\n')
     with pytest.raises(PermissionError, match="spec hash"):
-        D.load_labels(tmp_path, years=[2018], keys={(2018, 0): k18}, window=confirm, booked_read="read-1",
-                      ledger=ledger, frozen_spec_hash="other", **base)
-    got, meta = D.load_labels(tmp_path, years=[2018], keys={(2018, 0): k18}, window=confirm, booked_read="read-1",
-                              ledger=ledger, frozen_spec_hash="frozen-1", **base)
+        load(2018, k18, confirm, read="read-1", frozen="other")
+    got, meta = load(2018, k18, confirm, read="read-1", frozen="frozen-1")
     assert len(got) and meta["booked_read"] == "read-1"
+    rows = [json.loads(x) for x in ledger.read_text().splitlines()]
+    cons = [r for r in rows if r.get("type") == "consumption"]
+    assert len(cons) == 1 and cons[0]["columns"] == list(CORE6) and cons[0]["keys"] == {"2018:0": k18}
+    load(2018, k18, confirm, read="read-1", frozen="frozen-1")          # the same consumption again: allowed
+    with pytest.raises(PermissionError, match="first consumed"):        # C-4: P30 after core-6 under one id
+        load(2018, k18, confirm, read="read-1", frozen="frozen-1", columns=D.COLUMN_SETS["P30"])
     # a learn read whose window ends past the learn end still drops every row reaching confirm
-    lab2, meta2 = D.load_labels(tmp_path, years=[2015], keys={(2015, 0): k15},
-                                window=(learn[0], pd.Timestamp("2017-12-31", tz="UTC")), **base)
+    lab2, _ = load(2015, k15, (learn[0], pd.Timestamp("2017-12-31", tz="UTC")))
     assert (lab2["horizon_end_utc"] <= D.learn_end("EURUSD")).all()
     assert D.judged_spans("US500")[0][0] == pd.Timestamp("2022-01-01", tz="UTC")
 
@@ -297,7 +318,7 @@ def test_recorded_tiers_are_in_adr_0085_a4() -> None:
         assert sha in recorded, f"{sha} is not on a recording line of ADR 0085 A4"
 
 
-def test_tier_rules(tmp_path, mins: pd.DataFrame) -> None:
+def test_tier_rules(tmp_path: Path, mins: pd.DataFrame) -> None:
     m = mins.assign(source="histdata:EURUSD")
     rows = _rows(m, "15m", source="histdata:EURUSD").assign(instrument="EURUSD")
     lab = D.label_rows(D.Minutes(m), rows, "15m")
@@ -318,19 +339,21 @@ def test_tier_rules(tmp_path, mins: pd.DataFrame) -> None:
 
 
 def test_column_sets_and_input_lookback() -> None:
-    """ADR 0104 4: the lookback is the max registry lookback of the producing features, x 7/5 below 1w, with the d1
-    context included when a d1_ column is asked for on an intraday tf."""
-    from goldbot.features.registry import FEATURES as REG
+    """ADR 0104 4 (quant ruling 2026-11-26): the lookback is the max of each column's declared lookback, x 7/5 below
+    1w; a d1_ column reads its base column's 1d lookback in daily bars x 7/5 on a tf with the d1 context."""
+    from goldbot.features.registry import column_lookback
     assert len(D.COLUMN_SETS["core-6"]) == 6 and len(D.COLUMN_SETS["core-12"]) == 12
     assert len(D.COLUMN_SETS["P30"]) == 30 and "side" in D.COLUMN_SETS["P30"]
+    assert "d1_slope_ema20" in D.COLUMN_SETS["P30"]                       # never dropped by hand
     prod = D.column_producers()
     assert all(c in prod for cs in D.COLUMN_SETS.values() for c in cs if c != "side")
-    bars = max(REG[prod[c][0]].lookback for c in CORE6 if c != "side")
+    bars = max(column_lookback(c, "15m") for c in CORE6 if c != "side")
     assert D.input_lookback("15m", CORE6) == pd.Timedelta(seconds=round(bars * 900 * 7 / 5))
-    assert D.input_lookback("1w", CORE6) == pd.Timedelta(weeks=bars)
-    with_d1 = D.input_lookback("15m", [*CORE6, "d1_slope_ema20"])
-    assert with_d1 >= pd.Timedelta(days=REG[prod["d1_slope_ema20"][0]].lookback * 7 / 5)
+    assert D.input_lookback("1w", CORE6) == pd.Timedelta(weeks=max(column_lookback(c, "1w") for c in CORE6[1:]))
+    assert D.input_lookback("15m", ["d1_slope_ema20"]) == pd.Timedelta(
+        seconds=round(column_lookback("slope_ema20", "1d") * 86400 * 7 / 5))
     assert D.input_lookback("1d", ["d1_slope_ema20"]) == pd.Timedelta(0)    # 1d frames carry no d1 context
+    assert D.input_lookback("15m", ["min_since_london_open"]) == pd.Timedelta(seconds=round(900 * 7 / 5))
     with pytest.raises(ValueError):
         D.input_lookback("15m", ["not_a_column"])
 
@@ -342,9 +365,10 @@ def test_revised_minute_floor_and_late_bar(mins: pd.DataFrame) -> None:
     m["available_utc"] = m["visible_at"]
     j = 2000
     m.loc[j, ["bid_high", "ask_high"]] += 40.0                      # a huge range, revised a day later
-    m.loc[j, "available_utc"] = m.loc[j, "visible_at"] + pd.Timedelta(days=1)
+    m.loc[j, "available_utc"] = pd.DatetimeIndex(m["visible_at"])[j] + pd.Timedelta(days=1)
     mm = D.Minutes(m)
-    dec = np.array([pd.Timestamp(m.loc[j + 30, "visible_at"]).value])
+    vis = pd.DatetimeIndex(m["visible_at"])
+    dec = np.array([vis[j + 30].value])
     # expected: the median 1m mid TR over the 1,440 minutes up to the decision, minute j left out (not yet visible)
     mi = j + 30
     win = [i for i in range(mi - 1439, mi + 1) if i != j]
@@ -354,7 +378,7 @@ def test_revised_minute_floor_and_late_bar(mins: pd.DataFrame) -> None:
     assert np.allclose(mm.floor_at(dec), 1.5 * np.nanmedian(tr))
     assert not np.allclose(mm.floor_at(dec), mm.tr_floor[mi])      # the rolling value would have read minute j
     bars = D.decision_bars(mm, "15m")
-    late_close = pd.Timestamp(m.loc[j, "ts_utc"]).floor("15min") + pd.Timedelta(minutes=15)
+    late_close = pd.DatetimeIndex(m["ts_utc"])[j].floor("15min") + pd.Timedelta(minutes=15)
     assert late_close.value not in set(bars["close_ns"])
     assert (np.diff(bars["close_ns"].to_numpy()) > 0).all()
 
