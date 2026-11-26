@@ -1472,18 +1472,16 @@ def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------------------------- feed reconcile (D12)
 def broker_m1_copy(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Daily (ADR 0105 (ii)): the reference account's broker M1 from the store into raw/broker_m1/ (previous and
-    current month, sha256 per file, gap log; goldbot/data/broker_capture.py). Reads the store only: no broker call, no
-    order path. A missed due session day fails the job as well as `learning:broker_m1_capture`."""
+    """Daily (ADR 0105 (ii)): the reference account's broker M1 from the store into raw/broker_m1/: the current month,
+    the previous month until it freezes, and every closed month missing or incomplete (sha256 per file, gap log per
+    month; goldbot/data/broker_capture.py). Reads the store only: no broker call, no order path. A missed session day
+    is reported in the result and judged by `learning:broker_m1_capture`; the job fails only when the copy fails."""
     from goldbot.data import broker_capture as BC
-    bars = BC.read_capture(ctx.store, BC.REFERENCE_ACCOUNT,
-                           start=max(BC.CAPTURE_FROM, (BC._utc(slot).tz_localize(None).to_period("M") - 1)
-                                     .to_timestamp().tz_localize("UTC")))
-    out = BC.copy_months(bars, slot, raw_dir=BC.RAW_DIR)
-    status, reason = BC.judge(bars, slot, raw_dir=BC.RAW_DIR)
-    out["capture"] = reason
-    if status == "fail" and BC.due_day(slot) is not None and "capture missed" in reason:
-        raise RuntimeError(f"broker_m1_copy: {reason}")
+    months = BC.months_to_copy(slot, raw_dir=BC.RAW_DIR)
+    start = max(BC.CAPTURE_FROM, pd.Period(months[0], freq="M").to_timestamp().tz_localize("UTC"))
+    bars = BC.read_capture(ctx.store, BC.REFERENCE_ACCOUNT, start=start)
+    out = BC.copy_months(bars, slot, months=months, raw_dir=BC.RAW_DIR)
+    out["capture"] = BC.judge_capture(bars, slot)[1]
     return out
 
 
