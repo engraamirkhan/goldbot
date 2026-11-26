@@ -311,14 +311,23 @@ and demo promotion only. The phase gate, live unlock, real-money confirmation an
 > and per-instrument sign orientations, is ≤ 0.2 in that bucket (D-12 method, learn 2010-17, graded A/A-cons rows);
 > existing members (FX10, XAG) stay under R13 pricing, not D-13."
 
-**(c) The validator.** As ruled on #466 (relayed, not verbatim):
-- `research.power_first.rho_day_measurement: str | None`.
+**(c) The validator.** As ruled on #466 (relayed, not verbatim), with the code review of #466 applied:
+- Settings: `research.power_first.rho_day_measurement: str | None`, and
+  `research.power_first.rho_day_measurement_sha256: str | None` (the file's sha256, pinned next to the setting).
 - `rho_day_le_60m < 0.25` is refused unless all of these hold:
-  - the named file exists, with schema `rho_day_measurement/v2` or later;
-  - its `script.sha256` equals the sha256 of the committed script;
-  - its `window` is learn and ends no later than 2018-01-01;
+  - the named file exists and its sha256 equals the pinned `rho_day_measurement_sha256`;
+  - its schema is `rho_day_measurement/v2` or later;
+  - its `window` is learn, from 2010-01-01 or later and ending no later than 2018-01-01;
   - its `candidates` list at least 2 replayed families that are neither sr-v3 nor H-102;
-  - the value is at least the file's binding for every class.
+  - its `cells_file` exists with its recorded sha256;
+  - its `rho_day_le_60m` carries every class (gold, metals, fx10, pooled, gold+fx10), each finite, each equal to
+    max(0.05, the largest ≤ 60 min within-day upper 95 % bound) recomputed from the cells file;
+  - the value is at least every class's binding.
+- Settings load never hashes a live script. Instead, a CI test asserts that the committed `measure_rho.py` has the
+  sha256 recorded in the committed (and in any pinned) measurement JSON. An edit of the script therefore fails CI,
+  never a running service's settings load.
+- **Changing `scripts/research/measure_rho.py` means re-running it (new JSON, cells file and pin), or setting
+  `rho_day_le_60m` back to 0.25 (both measurement fields null) in the same PR.**
 - rho_day above 60 min keeps its 0.25 floor.
 - The shipped setting stays 0.25 (`config.check_rho_measurement`; tests `test_d12_*` in
   tests/research/test_power_first.py).

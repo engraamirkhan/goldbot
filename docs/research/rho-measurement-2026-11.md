@@ -232,14 +232,21 @@ its own mean, which is the unit intercept plus the instrument level.
     FX10 vs-gold set.
   - Runs 3 and 4 were identical.
 - Run 5 (families added) was killed by the session interruption.
-- **Run 6 (2026-11-26) is the committed output.** It ran on main 553d1d70 merged into the branch.
-  - Grid values are unchanged from run 4 to the table's precision.
-  - The recorded script sha256 equals the committed script.
+- Run 6 (2026-11-26) added the families, on main 553d1d70 merged into the branch. Grid values were unchanged from
+  run 4 to the table's precision.
+- **Run 7 (2026-11-26) is the committed output.** It is the same code with only the `--raw` default changed to
+  `ROOT / "raw"` (code review of #466). Its results are identical to run 6 (maximum difference 0), and the recorded
+  script sha256 equals the committed script.
 - 4 workers in every run. Every run read learn 2010-17 only, so K stays 0.
 
 ## 6. What is wired, and what is open
-- **Validator (ruling (c)).** `research.power_first.rho_day_measurement` is in place
-  (`config.check_rho_measurement`; tests `test_d12_*`). The setting stays 0.25 and the field null.
+- **Validator (ruling (c), code review of #466).** `research.power_first.rho_day_measurement` and the pinned
+  `rho_day_measurement_sha256` are in place (`config.check_rho_measurement`; tests `test_d12_*`).
+  - At load, the validator checks the pinned file sha, the cells-file sha, the window (2010-01-01..2018-01-01), the
+    two families, and that every class is finite and present.
+  - It also checks that each <= 60 min binding equals the value recomputed from the cells.
+  - It never hashes the live script. A CI test ties the committed script to the JSON's `script.sha256`.
+  - The setting stays 0.25 and both fields stay null.
 - **Open for the quant.**
   1. Should the families' rho_u,day bound be the pooled-families estimate rather than the max of sparse single
      families? Section 2: 0.022 against 0.148 for gold at <= 60 min.

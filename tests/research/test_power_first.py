@@ -290,10 +290,10 @@ def test_a_label_must_end_after_it_starts():
 
 # ------------------------------------------------------------------- rho_day per horizon (quant Q1, 2026-11-25)
 def test_q1_rho_day_for_horizons_up_to_60_minutes_may_go_down_to_0_05_longer_keep_the_0_25_floor(tmp_path):
-    ok = rho_file(tmp_path)
-    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05,
-                                              "rho_day_measurement": str(ok)}).rho_day_le_60m == 0.05
-    for bad in ({"rho_day_le_60m": 0.04, "rho_day_measurement": str(ok)}, {"rho_day": 0.2}):
+    ok, sha = rho_file(tmp_path)
+    assert _settings(0.05, str(ok), sha).rho_day_le_60m == 0.05
+    for bad in ({"rho_day_le_60m": 0.04, "rho_day_measurement": str(ok), "rho_day_measurement_sha256": sha},
+                {"rho_day": 0.2}):
         with pytest.raises(ValidationError):
             PowerFirstSettings.model_validate(bad)
     assert PF.rho_day_le_60m == PF.rho_day == 0.25          # shipped: the prior until the Q1 measurement lands
@@ -425,71 +425,146 @@ def test_a_registry_merge_keeps_a_not_started_row_without_a_trial_number(tmp_pat
 
 # ------------------------------------------------------------- D-12 measurement file (quant ruling (c) on #466)
 MEASURE_SCRIPT = "scripts/research/measure_rho.py"
+MEASURE_JSON = "docs/research/rho-measurement-2026-11.json"
+CLASSES = ("gold", "metals", "fx10", "pooled", "gold+fx10")
 
 
-def rho_file(tmp_path, **over):
-    """A valid D-12 measurement file (two replayed non-sr-v3/H-102 families, learn window, the committed script's
-    sha256, binding 0.05), with `over` replacing top-level keys."""
+def _sha(path) -> str:
     import hashlib
-    import json
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    from goldbot.config import ROOT
+
+def rho_file(tmp_path, hi95=None, **over):
+    """A valid D-12 measurement file and its cells file (two replayed non-sr-v3/H-102 families, learn window, every
+    class bound 0.05 recomputable from the cells), with `over` replacing top-level keys. Returns (path, sha256)."""
+    import gzip
+    import json
+    hi95 = hi95 or dict.fromkeys(CLASSES, 0.01)
+    rows = ["kind,class,band,outcome,within_day.hi95"]
+    rows += [f"out,{c},le60m,long_net,{v}" for c, v in hi95.items()]
+    rows += ["out,gold,1h-4h,long_net,0.9", "out,gold,le60m,both_gross,0.9", "feat,gold,,,0.9"]   # never binding
+    cells = tmp_path / "cells.csv.gz"
+    cells.write_bytes(gzip.compress(("\n".join(rows) + "\n").encode(), mtime=0))
     d = {"schema": "rho_day_measurement/v2",
          "window": {"name": "learn", "from": "2010-01-01 00:00:00+00:00", "to_exclusive": "2018-01-01 00:00:00+00:00"},
-         "script": {"path": MEASURE_SCRIPT, "sha256": hashlib.sha256((ROOT / MEASURE_SCRIPT).read_bytes()).hexdigest()},
+         "script": {"path": MEASURE_SCRIPT, "sha256": "not checked at load"},
          "candidates": [{"kind": "control", "name": "control_grid"},
                         {"kind": "family", "name": "box_break_close", "arms": ["MB15", "W2"]},
                         {"kind": "family", "name": "sweep_absorb", "arms": ["MSA15"]}],
-         "rho_day_le_60m": {"gold": 0.05, "fx10": 0.05}} | over
+         "cells_file": {"path": str(cells), "sha256": _sha(cells)},
+         "rho_day_le_60m": {c: max(0.05, v) for c, v in hi95.items()}} | over
     f = tmp_path / "rho.json"
     f.write_text(json.dumps(d))
-    return f
+    return f, _sha(f)
 
 
-def _refused(value, path, match):
+def _settings(value, path, sha):
+    return PowerFirstSettings.model_validate({"rho_day_le_60m": value, "rho_day_measurement": path,
+                                              "rho_day_measurement_sha256": sha})
+
+
+def _refused(value, path, sha, match):
     with pytest.raises(ValidationError, match=match):
-        PowerFirstSettings.model_validate({"rho_day_le_60m": value, "rho_day_measurement": path})
+        _settings(value, path, sha)
 
 
-def test_d12_a_valid_measurement_file_admits_rho_day_le_60m_at_0_05(tmp_path):
-    pf = PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05, "rho_day_measurement": str(rho_file(tmp_path))})
+def test_d12_a_valid_pinned_measurement_admits_rho_day_le_60m_at_0_05(tmp_path):
+    f, sha = rho_file(tmp_path)
+    pf = _settings(0.05, str(f), sha)
     assert pf.rho_day_for(60 / 1440) == 0.05 and pf.rho_day_for(61 / 1440) == 0.25    # > 60 min keeps 0.25
 
 
 def test_d12_refused_without_a_file_or_with_a_missing_one(tmp_path):
     with pytest.raises(ValidationError, match="needs rho_day_measurement"):
         PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05})
-    _refused(0.05, str(tmp_path / "nope.json"), "does not exist")
+    _refused(0.05, str(tmp_path / "nope.json"), "0" * 64, "does not exist")
 
 
-def test_d12_refused_when_the_script_sha_is_not_the_committed_scripts(tmp_path):
-    _refused(0.05, str(rho_file(tmp_path, script={"path": MEASURE_SCRIPT, "sha256": "0" * 64})), "sha256")
+def test_d12_refused_unless_the_file_matches_its_pinned_sha(tmp_path):
+    f, sha = rho_file(tmp_path)
+    _refused(0.05, str(f), None, "rho_day_measurement_sha256")
+    _refused(0.05, str(f), "0" * 64, "rho_day_measurement_sha256")
 
 
 def test_d12_refused_for_a_control_grid_only_file_or_one_with_judged_families(tmp_path):
     grid = [{"kind": "control", "name": "control_grid"}]
-    _refused(0.05, str(rho_file(tmp_path, candidates=grid)), ">= 2 replayed families")
+    _refused(0.05, *map(str, rho_file(tmp_path, candidates=grid)), ">= 2 replayed families")
     judged = grid + [{"kind": "family", "name": "box_break_close", "arms": ["MB1H"]},      # an H-102 arm
                      {"kind": "family", "name": "sr-v3", "arms": []},
                      {"kind": "family", "name": "sweep_absorb", "arms": ["MSA15"]}]
-    _refused(0.05, str(rho_file(tmp_path, candidates=judged)), ">= 2 replayed families")
+    _refused(0.05, *map(str, rho_file(tmp_path, candidates=judged)), ">= 2 replayed families")
 
 
 def test_d12_refused_below_the_files_binding_for_any_class(tmp_path):
-    f = rho_file(tmp_path, rho_day_le_60m={"gold": 0.05, "fx10": 0.08})
-    _refused(0.05, str(f), "below the measured binding")
-    assert PowerFirstSettings.model_validate({"rho_day_le_60m": 0.08, "rho_day_measurement": str(f)})
+    f, sha = rho_file(tmp_path, hi95=dict.fromkeys(CLASSES, 0.01) | {"fx10": 0.08})
+    _refused(0.05, str(f), sha, "below the measured binding")
+    assert _settings(0.08, str(f), sha).rho_day_le_60m == 0.08
 
 
-def test_d12_refused_for_an_old_schema_or_a_window_past_learn(tmp_path):
-    _refused(0.05, str(rho_file(tmp_path, schema="rho_day_measurement/v1")), "v2 or later")
-    late = {"name": "learn", "to_exclusive": "2018-02-01 00:00:00+00:00"}
-    _refused(0.05, str(rho_file(tmp_path, window=late)), "learn ending")
-    _refused(0.05, str(rho_file(tmp_path, window={"name": "confirm", "to_exclusive": "2018-01-01"})), "learn ending")
+@pytest.mark.parametrize("bad", [float("nan"), None, "x"])
+def test_d12_refused_for_a_null_or_non_finite_class_binding(tmp_path, bad):
+    """Code review of #466 (MEDIUM): {"gold": NaN, ...} or {"gold": null, ...} must not admit 0.05."""
+    import json
+    f, _ = rho_file(tmp_path)
+    d = json.loads(f.read_text())
+    d["rho_day_le_60m"]["gold"] = bad
+    f.write_text(json.dumps(d))            # json writes NaN as the token NaN, which json.loads reads back
+    _refused(0.05, str(f), _sha(f), "missing or not finite")
+
+
+def test_d12_refused_when_a_class_is_missing(tmp_path):
+    f, sha = rho_file(tmp_path, rho_day_le_60m={"gold": 0.05, "fx10": 0.05})
+    _refused(0.05, str(f), sha, "missing or not finite")
+
+
+def test_d12_refused_when_a_binding_does_not_match_its_cells(tmp_path):
+    f, sha = rho_file(tmp_path, rho_day_le_60m=dict.fromkeys(CLASSES, 0.05) | {"fx10": 0.06})   # hand-edited
+    _refused(0.06, str(f), sha, "differ from the cells file")
+
+
+def test_d12_refused_when_the_cells_file_differs_from_its_sha(tmp_path):
+    f, _ = rho_file(tmp_path)
+    (tmp_path / "cells.csv.gz").write_bytes(b"changed")
+    _refused(0.05, str(f), _sha(f), "cells file")
+
+
+def test_d12_refused_for_an_old_schema_or_a_window_outside_learn(tmp_path):
+    _refused(0.05, *map(str, rho_file(tmp_path, schema="rho_day_measurement/v1")), "v2 or later")
+    learn = {"name": "learn", "from": "2010-01-01 00:00:00+00:00", "to_exclusive": "2018-01-01 00:00:00+00:00"}
+    for w in (learn | {"to_exclusive": "2018-02-01 00:00:00+00:00"}, learn | {"from": "2006-02-01 00:00:00+00:00"},
+              learn | {"name": "confirm"}):
+        _refused(0.05, *map(str, rho_file(tmp_path, window=w)), "learn within")
+
+
+def test_d12_the_committed_measurement_matches_the_committed_script_and_its_cells():
+    """CI tie (code review of #466): the committed JSON records the sha256 of the committed measure_rho.py, so an edit
+    of the script fails CI here (re-run it, or set rho_day_le_60m back to 0.25 in the same PR), never a service's
+    settings load. The JSON is also accepted by the validator at its own binding when pinned by its own sha."""
+    import json
+
+    from goldbot.config import ROOT
+    f = ROOT / MEASURE_JSON
+    d = json.loads(f.read_text())
+    assert d["script"]["path"] == MEASURE_SCRIPT
+    assert d["script"]["sha256"] == _sha(ROOT / MEASURE_SCRIPT), "measure_rho.py changed: re-run it (ADR 0085 D-12)"
+    top = max(d["rho_day_le_60m"].values())
+    assert _settings(top, MEASURE_JSON, _sha(f)).rho_day_le_60m == top
+
+
+def test_d12_a_pinned_setting_names_a_json_from_the_committed_script():
+    """When the shipped settings pin a measurement, its recorded script sha is the committed script's."""
+    import json
+
+    from goldbot.config import ROOT
+    if PF.rho_day_measurement is None:
+        assert PF.rho_day_le_60m == 0.25
+        return
+    d = json.loads((ROOT / PF.rho_day_measurement).read_text())
+    assert d["script"]["sha256"] == _sha(ROOT / d["script"]["path"])
 
 
 def test_d12_the_shipped_setting_stays_the_prior():
-    assert PF.rho_day_le_60m == 0.25 and PF.rho_day_measurement is None
+    assert PF.rho_day_le_60m == 0.25 and PF.rho_day_measurement is None and PF.rho_day_measurement_sha256 is None
 
 
 def test_d12_excluded_arms_cover_the_sr_v3_prenamed_arms():

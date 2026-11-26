@@ -112,9 +112,9 @@
  },
  "script": {
   "path": "scripts/research/measure_rho.py",
-  "sha256": "4acb97d2d11704eafc760ddc13cec99fcdc5a43a054c11387292f21b32ad0caa",
-  "git_blob": "f289de5bee70509205ae3018be5db6d6eb879dd8",
-  "base_commit": "960f0bc7745a4fe3e93145c147b419fe0374606a"
+  "sha256": "91adec307b8ede9b43580a381756da45d7e2dc8784d0815f42b2af862e6a4203",
+  "git_blob": "b1ba851ff8eb12c4a07cadb4a03efbd5088e62f4",
+  "base_commit": "235290ae429ef92b9d4b37d759facab5b0894af8"
  },
  "data": {
   "tiers_file": {

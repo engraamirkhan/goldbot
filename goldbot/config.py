@@ -663,15 +663,58 @@ RHO_EXCLUDED_ARMS = frozenset({"RBR15", "Z3D", "Z1P", "Z9D", "Z10D", "S1A", "S1B
                                "F1A30", "G1A", "PDC1", "MB1H", "ML2H", "MP2H", "DON4", "PDC4", "KSQ4", "BXF4H"})
 
 
-def check_rho_measurement(path: str | None, value: float) -> None:
-    """ValueError unless `path` names a D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25, quant
-    ruling (c) on #466): the file exists; schema rho_day_measurement/v2 or later; its `script.sha256` is the sha256 of
-    that script as committed in this repo; its window is learn and ends no later than 2018-01-01; its `candidates`
-    name at least two replayed families that are neither sr-v3 nor H-102; and `value` is at least the file's
-    rho_day_le_60m binding for every class."""
+RHO_LEARN_START = "2010-01-01"
+RHO_CLASSES = ("gold", "metals", "fx10", "pooled", "gold+fx10")
+RHO_FLOOR_LE_60M = 0.05
+
+
+def _sha256(path: Path) -> str:
     import hashlib
-    import json
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _ts_date(raw: object, what: str) -> date:
     from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        raise ValueError(f"rho_day_measurement window has no readable {what}") from None
+
+
+def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
+    """Per class, max(RHO_FLOOR_LE_60M, the largest within-day upper 95 % bound over the <= 60 min outcome cells): the
+    binding recomputed from the cells file (every source and variant, both_gross excluded)."""
+    import csv
+    import gzip
+    import math
+    best: dict[str, float] = {}
+    with gzip.open(cells, "rt", newline="") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("kind") == "feat" or r.get("band") != "le60m" or r.get("outcome") == "both_gross":
+                continue
+            try:
+                hi = float(r.get("within_day.hi95") or "nan")
+            except ValueError:
+                continue
+            if math.isfinite(hi):
+                c = str(r.get("class"))
+                best[c] = max(best.get(c, -math.inf), hi)
+    return {c: max(RHO_FLOOR_LE_60M, v) for c, v in best.items()}
+
+
+def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | None) -> None:
+    """ValueError unless `path` names the pinned D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25,
+    quant ruling (c) and the code review of #466). Checked at settings load, without hashing any live script (a CI
+    test ties the pinned JSON's `script.sha256` to the committed script):
+    - the file exists and its sha256 equals `pinned_sha256` (research.power_first.rho_day_measurement_sha256);
+    - schema rho_day_measurement/v2 or later;
+    - window learn, from >= 2010-01-01 and to_exclusive <= 2018-01-01;
+    - `candidates` name at least two replayed families that are neither sr-v3 nor H-102;
+    - `cells_file` exists with its recorded sha256;
+    - `rho_day_le_60m` has every class of RHO_CLASSES, each finite, each equal to the bound recomputed from the cells;
+    - `value` is at least every class's binding."""
+    import json
+    import math
 
     if not path:
         raise ValueError(f"rho_day_le_60m {value} < {RHO_DAY_PRIOR} needs rho_day_measurement naming the committed "
@@ -679,6 +722,9 @@ def check_rho_measurement(path: str | None, value: float) -> None:
     f = Path(path) if Path(path).is_absolute() else ROOT / path
     if not f.is_file():
         raise ValueError(f"rho_day_measurement {path!r} does not exist")
+    if not pinned_sha256 or _sha256(f) != pinned_sha256:
+        raise ValueError(f"rho_day_measurement {path!r} does not match rho_day_measurement_sha256 (pin the file's "
+                         "sha256 next to the setting)")
     d = json.loads(f.read_text())
     schema = str(d.get("schema", ""))
     try:
@@ -687,19 +733,10 @@ def check_rho_measurement(path: str | None, value: float) -> None:
         version = 0
     if version < 2:
         raise ValueError(f"rho_day_measurement schema {schema!r}: rho_day_measurement/v2 or later is required")
-    script = d.get("script") or {}
-    sp = ROOT / str(script.get("path", ""))
-    if not script.get("path") or not sp.is_file():
-        raise ValueError(f"rho_day_measurement script {script.get('path')!r} is not in the repo")
-    if hashlib.sha256(sp.read_bytes()).hexdigest() != script.get("sha256"):
-        raise ValueError(f"rho_day_measurement script sha256 differs from the committed {script.get('path')}")
     w = d.get("window") or {}
-    try:
-        end = datetime.fromisoformat(str(w.get("to_exclusive")).replace("Z", "+00:00")).date()
-    except ValueError:
-        raise ValueError("rho_day_measurement window has no readable to_exclusive") from None
-    if w.get("name") != "learn" or end > date.fromisoformat(RHO_LEARN_END):
-        raise ValueError(f"rho_day_measurement window must be learn ending <= {RHO_LEARN_END}, got {w}")
+    start, end = _ts_date(w.get("from"), "from"), _ts_date(w.get("to_exclusive"), "to_exclusive")
+    if w.get("name") != "learn" or start < date.fromisoformat(RHO_LEARN_START) or end > date.fromisoformat(RHO_LEARN_END):
+        raise ValueError(f"rho_day_measurement window must be learn within {RHO_LEARN_START}..{RHO_LEARN_END}, got {w}")
     fams = [c for c in d.get("candidates") or [] if isinstance(c, dict) and c.get("kind") == "family"
             and str(c.get("name")) not in RHO_EXCLUDED_FAMILIES
             and not (set(map(str, c.get("arms") or [])) & RHO_EXCLUDED_ARMS)]
@@ -707,11 +744,27 @@ def check_rho_measurement(path: str | None, value: float) -> None:
         raise ValueError("rho_day_measurement needs >= 2 replayed families that are neither sr-v3 nor H-102 "
                          f"(found {len(fams)}); a control-grid-only file does not qualify")
     bound = d.get("rho_day_le_60m") or {}
-    vals = [float(v) for v in bound.values() if v is not None]
-    if not vals:
-        raise ValueError("rho_day_measurement carries no rho_day_le_60m binding")
-    if value < max(vals) - 1e-12:
-        raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals)} ({path})")
+    vals: dict[str, float] = {}
+    for c in RHO_CLASSES:
+        v = bound.get(c)
+        try:
+            x = float(v) if v is not None else math.nan
+        except (TypeError, ValueError):
+            x = math.nan
+        if not math.isfinite(x):
+            raise ValueError(f"rho_day_measurement binding for class {c!r} is missing or not finite ({v!r})")
+        vals[c] = x
+    cf = d.get("cells_file") or {}
+    cells = ROOT / str(cf.get("path", ""))
+    if not cf.get("path") or not cells.is_file() or _sha256(cells) != cf.get("sha256"):
+        raise ValueError(f"rho_day_measurement cells file {cf.get('path')!r} is missing or differs from its sha256")
+    recomputed = _cells_le_60m_bound(cells)
+    off = {c: (vals[c], recomputed.get(c)) for c in RHO_CLASSES
+           if recomputed.get(c) is None or abs(vals[c] - float(recomputed[c])) > 1e-4}
+    if off:
+        raise ValueError(f"rho_day_measurement bindings differ from the cells file (file, recomputed): {off}")
+    if value < max(vals.values()) - 1e-12:
+        raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals.values())} ({path})")
 
 
 class PowerFirstSettings(_Section):
@@ -740,6 +793,8 @@ class PowerFirstSettings(_Section):
     # ADR 0085 Q1 / D-12 ruling (c): rho_day_le_60m below 0.25 stands only on a committed measurement file
     # (`check_rho_measurement`): repo-relative path, e.g. docs/research/rho-measurement-2026-11.json
     rho_day_measurement: str | None = None
+    # the sha256 of that file, pinned here: the file cannot change under the setting (code review of #466)
+    rho_day_measurement_sha256: str | None = None
     rho_instrument: float = Field(0.5, ge=0.5, le=1)
     rho_instrument_metals: float = Field(0.7, ge=0.7, le=1)
     sims: int = Field(20_000, ge=2_000)                        # joint-power Monte Carlo draws
@@ -756,7 +811,7 @@ class PowerFirstSettings(_Section):
     @model_validator(mode="after")
     def _rho_day_le_60m_needs_its_measurement(self) -> PowerFirstSettings:
         if self.rho_day_le_60m < RHO_DAY_PRIOR:
-            check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m)
+            check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256)
         return self
 
     def rho_day_for(self, hold_days: float) -> float:

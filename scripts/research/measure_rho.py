@@ -469,7 +469,7 @@ def git_blob(path: Path) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--raw", type=Path, default=Path("/Users/aamirkhan/myproject/goldbot/raw"))
+    ap.add_argument("--raw", type=Path, default=ROOT / "raw")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--out", type=Path, default=ROOT / "docs" / "research")
