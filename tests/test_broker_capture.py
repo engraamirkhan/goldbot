@@ -119,3 +119,28 @@ def test_writes_are_atomic(tmp_path: Path) -> None:
     BC.copy_months(_month("2026-11"), pd.Timestamp("2026-11-20", tz="UTC"), months=["2026-11"], raw_dir=tmp_path)
     assert not [p for p in (tmp_path / "icm-demo").iterdir() if p.name.endswith(".part")]
     assert os.path.exists(tmp_path / "icm-demo" / "SHA256SUMS")
+
+
+def test_a_day7_backfill_is_in_the_frozen_day8_copy_and_a_day6_grade_is_refused(tmp_path: Path,
+                                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant ruling on the freeze window: freeze at day 8 = feed_reconcile's 7-day back-fill window + 1."""
+    from goldbot.ops import jobs
+    assert BC.FREEZE_DAYS == 8
+    monkeypatch.setattr(BC, "RAW_DIR", tmp_path)
+    october = _month("2026-10", 60)
+    hole = october.iloc[30]["ts_utc"]
+    without = october[october["ts_utc"] != hole]
+    day5 = pd.Timestamp("2026-11-05 23:55", tz="UTC")
+    jobs.broker_m1_copy(type("Ctx", (), {"store": _Store(without)})(), day5)
+    sha5 = BC.read_sums(tmp_path / "icm-demo")["icm-demo_m1_2026-10.parquet"]
+    with pytest.raises(BC.GradeRefused, match="not frozen"):
+        BC.frozen_copy_for_grade("2026-10", pd.Timestamp("2026-11-06 12:00", tz="UTC"), raw_dir=tmp_path)
+    day7 = pd.Timestamp("2026-11-07 23:55", tz="UTC")       # feed_reconcile back-filled the hole by now
+    assert "2026-10" in BC.months_to_copy(day7, raw_dir=tmp_path)
+    jobs.broker_m1_copy(type("Ctx", (), {"store": _Store(october)})(), day7)
+    day8 = pd.Timestamp("2026-11-08 23:55", tz="UTC")
+    assert "2026-10" not in BC.months_to_copy(day8, raw_dir=tmp_path)       # frozen: the day-8 run leaves it
+    jobs.broker_m1_copy(type("Ctx", (), {"store": _Store(october)})(), day8)
+    path, sha8 = BC.frozen_copy_for_grade("2026-10", day8, raw_dir=tmp_path)
+    assert hole in set(pd.to_datetime(pd.read_parquet(path)["ts_utc"], utc=True)) and sha8 != sha5
+    assert not (tmp_path / "icm-demo" / "rewrites.jsonl").exists()        # rewritten before the freeze: no entry
