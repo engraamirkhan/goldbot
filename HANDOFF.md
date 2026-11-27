@@ -5,6 +5,10 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-27 run manifest hardening (security follow-up to #494): a manifest's `builder` must be
+  `goldbot.<module>:<function>` or `tests.rebuild_builders:<function>`; anything else (`os:system`, `json:loads`)
+  fails validation and `build` refuses it before any import. `ModelEntry.manifest_id` must be 64 lowercase hex.
+  `rebuild` refuses a `data_files` key that resolves outside the data root (`../x`) before hashing or fitting.
 - 2026-11-27 health `self_retrain` reasons lead with "next slot <slot> UTC" (computed from scheduler.self_retrain).
   - The late-start WARN fires only while the newest run is under a day old: the 11-24 run (slot 11-22,
     `run_if_never_run`) no longer reads "40.9 h late" every day, which the 4 h cycle took for "self_retrain stopped".
