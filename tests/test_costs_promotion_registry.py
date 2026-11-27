@@ -3,9 +3,10 @@ import pandas as pd
 import pytest
 
 from goldbot.execution.costs import CostTable, build_cost_table, slippage_table, spread_table
+from goldbot.research.as_if_sizing import AsIfReport
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.model_registry import ModelRegistry
-from goldbot.research.promotion import PerfStats, evaluate_promotion
+from goldbot.research.promotion import PairedRead, PerfStats, evaluate_promotion
 
 
 def _ticks() -> pd.DataFrame:
@@ -69,27 +70,42 @@ def _shadow(**kw) -> PerfStats:
     return PerfStats(**{**base, **kw})
 
 
+# ADR 0106: a paired read past the live model (60 days, final) and a clean as-if real-money read, so each test below
+# exercises the gate it names (tests/test_promotion_adr0106.py covers those two)
+PAIRED = PairedRead(procedure="proc", status="look", n_days=60, window_start=pd.Timestamp("2026-03-02").date(),
+                    window_end=pd.Timestamp("2026-05-22").date(), capped=False, live_present=True, mean_diff=0.002,
+                    lower_bound=0.0005, alpha_look=0.03502, mean_episode_days=1.0, mean_block=5.0, resamples=10_000,
+                    challenger_shas=["c0ffee1"])
+AS_IF = AsIfReport(equity_start=1250.0, equity_end=1300.0, n_trades=60, n_sized=60, n_sized_days=60, below_min_lot=0,
+                   excluded={}, breaches=[], worst_day_loss=0.01, max_drawdown=0.03, worst_trade_loss=0.01,
+                   overshoots=0, daily={}, trades=[])
+
+
+def promote(shadow: PerfStats, champion: PerfStats | None):
+    return evaluate_promotion(BT, shadow, champion, paired=PAIRED, as_if=AS_IF)
+
+
 def test_good_shadow_record_is_promoted():
-    d = evaluate_promotion(BT, _shadow(), champion=BT)
+    d = promote(_shadow(), BT)
     assert d.ready and d.promote and d.failed == []
 
 
 @pytest.mark.parametrize("kw,gate", [
     (dict(weeks=3.0), "shadow_length"), (dict(n_clusters=39), "shadow_length"),
-    (dict(sharpe_ann=0.79), "sharpe_floor"),
+    (dict(sharpe_ann=0.99), "sharpe_floor"),                 # ADR 0106: above 1.0 (was 0.8)
     (dict(sharpe_ann=0.85), "sharpe_vs_backtest"),           # 0.55 below a 1.4 backtest
     (dict(hit_rate=0.30), "hit_rate"),                       # 2+ binomial SE below 0.45 at n=60
     (dict(max_dd=0.16), "drawdown"),                         # cap is 1.5 x 0.10
     (dict(trades_per_week=6.0), "turnover"),                 # 50% above the champion
 ])
 def test_each_gate_blocks_promotion(kw, gate):
-    d = evaluate_promotion(BT, _shadow(**kw), champion=BT)
+    d = promote(_shadow(**kw), BT)
     assert not d.promote and gate in d.failed
     assert d.ready == (gate != "shadow_length")
 
 
 def test_turnover_gate_is_skipped_without_a_champion():
-    d = evaluate_promotion(BT, _shadow(trades_per_week=20.0), champion=None)
+    d = promote(_shadow(trades_per_week=20.0), None)
     assert d.promote and "turnover" not in [c.name for c in d.checks]
 
 

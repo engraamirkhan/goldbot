@@ -97,11 +97,17 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
                      max_dd=bt.max_dd * 0.5, trades_per_week=bt.trades_per_week, weeks=6.0, n_clusters=60)
     (tmp_path / f"shadow_{version}.json").write_text(good.model_dump_json())
     third = saturday_retrain(ctx, sat + pd.Timedelta(weeks=6))[founder]
-    assert third["challengers"][0] == {"version": version, "action": "promoted"}
+    # ADR 0106 decisions 2 and 6: a record that passes the shadow gates is not promoted until the job supplies the
+    # paired read against the live model and the as-if real-money read; until then the challenger waits (fail closed,
+    # never retired for evidence it has not been given)
+    assert third["challengers"][0]["action"] == "waiting"
+    assert ctx.models.get(version).status == "challenger"
+    ctx.models.promote(version, now=sat + pd.Timedelta(weeks=6), note="test: promoted by hand")
     assert ModelRegistry(tmp_path / "models").champion_models()[founder].feature_names
     # the founder exists in the population and the dashboard's league table was written
     assert founder in ctx.population.members and (tmp_path / "agents.json").exists()
-    assert "challenger" in third["retrain"]                 # a fresh challenger starts its own shadow period
+    fourth = saturday_retrain(ctx, sat + pd.Timedelta(weeks=7))[founder]
+    assert "challenger" in fourth["retrain"]                # a fresh challenger starts its own shadow period
 
 
 @pytest.fixture(scope="module")
