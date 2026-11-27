@@ -63,8 +63,9 @@ HTF = "4h"
 # The guard instant of card rev 7 (quant L2 on #484): the committer time of the merge commit that lands X6 on main, set
 # by a one-line follow-up commit immediately after merge (ISO 8601 UTC). None = not yet merged: the legitimacy test then
 # fails closed on EVERY sr-v3 row, whatever its date. sr-v3 rows dated at or after the merge time are the normal Stage 0
-# onward and never void the amendment.
-X6_MERGED_UTC: str | None = None
+# onward and never void the amendment. Set 2026-11-27 to the later of the X6 merge (937e3a14, 2026-11-26T11:30:52Z)
+# and the card rev 8 merge (#501, 4289ad30, 2026-11-27T07:11:53Z), as the rev 8 closing text requires.
+X6_MERGED_UTC: str | None = "2026-11-27T07:11:53+00:00"
 
 CANDLE_COLUMNS = ("x6_body_frac", "x6_clv", "x6_io_bar")
 STRUCTURE_COLUMNS = ("x6_ms_state", "x6_ms_bos")
