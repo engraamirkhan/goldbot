@@ -906,8 +906,8 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     report["oof_scores_sha256"] = scores_sha(oof)
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
-    report["train_end"] = str(col.train_end)
-    report["label_end_max"] = str(col.label_end_max)
+    report["train_end"] = col.train_end.isoformat() if col.train_end is not None else None
+    report["label_end_max"] = col.label_end_max.isoformat() if col.label_end_max is not None else None
     return UnitResult(report=report, artifacts=arts, oof=oof if read else sealed_scores(oof))
 
 
@@ -1167,9 +1167,11 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
     status = {k: res.report.get(k) for k in ("mode", "gate_eligible", "gate_block", "cost_version",
                                               "oof_scores_sha256")}
     shas = {f: RM.file_sha256(Path(data_root) / f) for f in data_files}
-    learn_end = WN.SPANS[WN.Window.LEARN][1]
-    end = pd.Timestamp(res.report.get("train_end") or learn_end)
-    label_end = pd.Timestamp(res.report.get("label_end_max") or learn_end)
+    if not res.report.get("train_end") or not res.report.get("label_end_max"):
+        # quant H5 on #488: never record the learn end in place of the real ones (a reloaded Collected lost them)
+        raise ValueError(f"unit {plan.unit}: train_end / label_end_max unknown; refusing to record a manifest")
+    end = pd.Timestamp(res.report["train_end"])
+    label_end = pd.Timestamp(res.report["label_end_max"])
     folds = [f"oof:{y}" for y in plan.oof_years] + [f"v0:{V.LEARN_YEARS[0]}-{V.LEARN_YEARS[-1]}"]
     out: dict[str, Any] = {}
     for name in res.artifacts:
@@ -1206,6 +1208,7 @@ class StoreData:
     features: Path
     tiers_path: Path
     weights: Path | None = None
+    rho: Path | None = None                              # the D-12 rho file Stage 0 read (in the data version, H5)
     # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
     # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
     ledger: Path = field(default_factory=lambda: default_ledger())
@@ -1229,9 +1232,12 @@ class StoreData:
                              "code; prune the stale one so the read is unambiguous")
         return str(cands[0]["key"]), str(cands[0]["fs_key"])
 
+    def _weights_path(self, instrument: str, tf: str) -> Path:
+        return Path(self.weights or Path(self.labels) / "_weights") / instrument / f"{tf}.parquet"
+
     def _weights(self, instrument: str, tf: str) -> pd.DataFrame:
         from goldbot.research import dense_labels as D
-        p = Path(self.weights or Path(self.labels) / "_weights") / instrument / f"{tf}.parquet"
+        p = self._weights_path(instrument, tf)
         self.used.setdefault("weights", {})[f"{instrument}:{tf}"] = V.file_sha256(p)
         return D._typed(pd.read_parquet(p))[["phase", "decision_utc", "u_tf", "w"]]
 
@@ -1329,11 +1335,15 @@ class StoreData:
         return W2_COST_VERSION
 
     def version(self, members: Sequence[str], tfs: Sequence[str], phases: Sequence[int]) -> str:
-        """The data identity a rebuild needs: label spec and code hashes, tiers sha, every partition key used."""
+        """The data identity a rebuild needs: label spec and code hashes, tiers sha, every partition key used, and (quant
+        H5 on #488) the uniqueness-weights file sha per member x tf and the rho file sha."""
         from goldbot.research import dense_labels as D
         keys = {f"{i}:{t}:{y}:{p}": self.keys(i, t, y, p) for i in members for t in tfs for y in V.LEARN_YEARS
                 for p in phases}
-        blob = {"spec": D.spec_hash(), "code": D.code_hash(), "tiers": V.file_sha256(self.tiers_path), "keys": keys}
+        wp = {f"{i}:{t}": self._weights_path(i, t) for i in members for t in tfs}
+        weights = {k: V.file_sha256(p) if p.exists() else None for k, p in sorted(wp.items())}
+        blob = {"spec": D.spec_hash(), "code": D.code_hash(), "tiers": V.file_sha256(self.tiers_path), "keys": keys,
+                "weights": weights, "rho": V.file_sha256(self.rho) if self.rho else None}
         return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
 
     def manifest(self) -> dict[str, Any]:

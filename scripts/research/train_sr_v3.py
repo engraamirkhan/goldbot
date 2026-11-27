@@ -58,7 +58,7 @@ def refuse_before_x6() -> None:
 
 def _store(a: argparse.Namespace) -> T.StoreData:
     return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
-                       ledger=Path(a.ledger))
+                       ledger=Path(a.ledger), rho=Path(a.rho))
 
 
 def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
@@ -92,7 +92,10 @@ def save_collected(col: T.Collected, out: Path) -> None:
     blob = {"impute": col.impute.tolist(), "impute_lcw": col.impute_lcw.tolist(), "pi": col.pi, "n_rows": col.n_rows,
             "lcw": {str(y): {k: m.model_dump() for k, m in d.items()} for y, d in col.lcw.items()},
             "hb": {str(y): {f"{k[0]}|{k[1]}": m.model_dump() for k, m in d.items()} for y, d in col.hb.items()},
-            "priors": {str(y): p.__dict__ for y, p in col.priors.items()}}
+            "priors": {str(y): p.__dict__ for y, p in col.priors.items()},
+            # quant H5 on #488: phase 3 records these in every manifest (it recorded the learn end without them)
+            "train_end": col.train_end.isoformat() if col.train_end is not None else None,
+            "label_end_max": col.label_end_max.isoformat() if col.label_end_max is not None else None}
     (out / "collected.json").write_text(json.dumps(blob))
 
 
@@ -110,8 +113,9 @@ def load_collected(out: Path) -> T.Collected:
                        lcw={int(y): {k: L.Moments(**m) for k, m in d.items()} for y, d in b["lcw"].items()},
                        hb={int(y): {(k.split("|")[0], k.split("|")[1]): L.Moments(**m) for k, m in d.items()}
                            for y, d in b["hb"].items()},
-                       priors=pri, sample=sample, pi=float(b["pi"]),
-                       n_rows=int(b["n_rows"]))
+                       priors=pri, sample=sample, pi=float(b["pi"]), n_rows=int(b["n_rows"]),
+                       train_end=pd.Timestamp(b["train_end"]) if b.get("train_end") else None,
+                       label_end_max=pd.Timestamp(b["label_end_max"]) if b.get("label_end_max") else None)
 
 
 def _plan(out: Path) -> T.UnitPlan:
@@ -153,7 +157,6 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
     store, plan = _store(a), _plan(out)
     res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read)   # type: ignore[arg-type]
-    T.write_unit(res, Path(a.out))
     hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
     tiers = Path(a.tiers)
     mans = T.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
@@ -161,7 +164,10 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
                                  "tiers_file": tiers.name},
                          data_root=tiers.parent, data_files=[tiers.name], hb_plans=hb_plans,
                          root=Path(a.out) / "manifests")
+    # quant H5 on #488: the manifests are recorded BEFORE the unit's outputs are written, and the report names them,
+    # so no artifact on disk lacks its run record
     res.report["manifests"] = {k: m.manifest_id for k, m in mans.items()}
+    T.write_unit(res, Path(a.out))
     return {"unit": unit, "status": "fit", "mode": res.report["mode"], "gate_eligible": res.report["gate_eligible"],
             "artifacts": res.report.get("artifacts")}           # never a read statistic on stdout (quant H3)
 

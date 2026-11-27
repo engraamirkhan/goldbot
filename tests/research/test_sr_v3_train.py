@@ -453,3 +453,69 @@ def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypa
     assert Path(_cli().parser().parse_args([]).ledger) == want   # type: ignore[attr-defined]
     monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
     assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
+
+
+# ---------------------------------------------------------------------------------------------- H5: one run record
+class _FixtureStore(T.FrameData):
+    """A store stand-in for the CLI phases: FrameData's rows, no Stage 0 events (Stage 0 is stubbed)."""
+    used: dict[str, object] = {}
+
+    def events(self, instrument: str, tf: str, years: object) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
+def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_end(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant H5 on #488: phase 1 persists train_end and label_end_max (phase 3 recorded the learn end instead), and
+    each artifact's manifest is recorded before the unit's outputs are written (report.json names them)."""
+    import argparse
+    import json
+    from types import SimpleNamespace
+
+    from goldbot.research import run_manifest as RM
+    cli = _cli()
+    data, plan = _data(readable=False), _plan()
+    store = _FixtureStore(data.frames)
+    s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
+    monkeypatch.setattr(cli, "_store", lambda a: store)                                   # type: ignore[attr-defined]
+    monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
+    monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
+                           tiers=str(tiers), rho=str(RHO_FILE), ledger=str(tmp_path / "l.jsonl"), out=str(tmp_path / "o"),
+                           stage0_only=False, read=False, cost_manifest=None)
+    cli.phase1("4h", a)                                                                   # type: ignore[attr-defined]
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    saved = json.loads((tmp_path / "o" / "4h" / "collected.json").read_text())
+    assert pd.Timestamp(saved["train_end"]) == col.train_end
+    assert pd.Timestamp(saved["label_end_max"]) == col.label_end_max
+    cli.phase2(["4h"], a)                                                                 # type: ignore[attr-defined]
+    out = cli.phase3("4h", a)                                                             # type: ignore[attr-defined]
+    root = tmp_path / "o" / "manifests"
+    files = sorted(root.glob("*.json"))
+    report = json.loads((tmp_path / "o" / "4h" / "report.json").read_text())
+    assert len(files) == len(out["artifacts"]) == len(report["manifests"])
+    assert {f.stem for f in files} == set(report["manifests"].values())
+    for mid in report["manifests"].values():
+        m = RM.load(mid, root)
+        assert m.train_end == col.train_end and m.label_end_max == col.label_end_max
+
+
+def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant H5 on #488: the data version a manifest records names every input a rebuild reads: the uniqueness
+    weights and the rho (D-12) file as well as the label keys and tiers."""
+    w = tmp_path / "_weights" / "XAUUSD"
+    w.mkdir(parents=True)
+    (w / "4h.parquet").write_bytes(b"one")
+    rho, tiers = tmp_path / "rho.json", tmp_path / "tiers.csv"
+    rho.write_text("{}")
+    tiers.write_text("key,month,tier\n")
+    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
+    v0 = store.version(["XAUUSD"], ["4h"], (0,))
+    (w / "4h.parquet").write_bytes(b"two")
+    v1 = store.version(["XAUUSD"], ["4h"], (0,))
+    rho.write_text('{"x": 1}')
+    v2 = store.version(["XAUUSD"], ["4h"], (0,))
+    assert len({v0, v1, v2}) == 3, "a changed weights file or rho file changes the data version"
