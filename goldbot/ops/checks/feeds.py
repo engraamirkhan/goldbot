@@ -259,7 +259,8 @@ def check_drift(ctx: HealthContext) -> Check:
 @register_check("global", block=BLOCK_TAIL, pos=30)
 def check_model_watch(ctx: HealthContext) -> Check:
     """state/model_watch.json (daily model_watch): a new champion whose watch has too few trades for any CUSUM alarm
-    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch."""
+    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch; an alarm whose
+    previous model would not serve (`restore_refused`) fails."""
     f = ctx.state_dir / "model_watch.json"          # goldbot.ops.jobs.MODEL_WATCH_FILE
     if not f.exists():
         return Check(name="model_watch", status="ok", reason="no champion watch report yet")
@@ -267,12 +268,47 @@ def check_model_watch(ctx: HealthContext) -> Check:
         agents = (_read_json(f) or {}).get("agents") or {}
     except (ValueError, OSError, AttributeError) as exc:
         return Check(name="model_watch", status="warn", reason=f"model_watch.json unreadable: {exc}"[:300])
+    refused = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "restore_refused")
+    if refused:      # #494 L1: an alarmed champion was retired and its previous model would not serve
+        return Check(name="model_watch", status="fail",
+                     reason=f"CUSUM alarm with no servable previous model for {', '.join(refused)}: the champion was "
+                            "retired and the agent trades no model until a servable one is promoted")
     blind = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "cannot_alarm")
     if blind:
         return Check(name="model_watch", status="warn",
                      reason=f"champion watch cannot alarm (too few trades) for {', '.join(blind)}: relies on "
                             "drift_watch and the drawdown halt")
     return Check(name="model_watch", status="ok", reason=f"{len(agents)} champion(s) watched")
+
+
+@register_check("global", block=BLOCK_TAIL, pos=35)
+def check_model_serving(ctx: HealthContext) -> Check:
+    """Champions and challengers the serving rule refuses (ADR 0109; PR #494 safety LOW-4: a refusal was only
+    logged). The registry is read with the engine's own rule (`ModelRegistry.serving_refusal`), so there is no second
+    copy of the state to go stale. A refused champion fails: the engine leaves it out at its next model reload and the
+    agent trades no model (its open trades keep their broker stops and exit policy). A refused challenger warns: it
+    never shadow-trades. Nothing is created: no registry, nothing to check."""
+    if ctx.settings is None:
+        return _skipped("model_serving", "settings unreadable")
+    root = Path(ctx.settings.research.models_dir)
+    if not (root / "registry.json").exists():
+        return Check(name="model_serving", status="ok", reason="no model registry yet")
+    from goldbot.research.model_registry import ModelRegistry
+    try:
+        reg = ModelRegistry(root)
+    except (ValueError, OSError) as exc:
+        return Check(name="model_serving", status="fail", reason=f"model registry unreadable: {exc}"[:300])
+    live = [e for e in reg.entries if e.status in ("champion", "challenger")]
+    refused = {e.version: (e, why) for e in live if (why := reg.serving_refusal(e)) is not None}
+    champs = [f"{e.agent_id} ({why})" for e, why in refused.values() if e.status == "champion"]
+    if champs:
+        return Check(name="model_serving", status="fail",
+                     reason=(f"champion refused for serving, agent trades no model: {'; '.join(champs)}")[:600])
+    if refused:
+        return Check(name="model_serving", status="warn",
+                     reason=(f"challenger(s) refused for serving (no shadow trading): {', '.join(sorted(refused))}")
+                     [:600])
+    return Check(name="model_serving", status="ok", reason=f"{len(live)} champion(s)/challenger(s) servable")
 
 
 @register_check("global", block=BLOCK_TAIL, pos=40)

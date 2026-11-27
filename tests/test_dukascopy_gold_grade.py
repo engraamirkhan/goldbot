@@ -9,6 +9,7 @@ from types import ModuleType
 
 import numpy as np
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -268,3 +269,22 @@ def test_d13_drops_holdout_days_only() -> None:
     from goldbot.data import holdout_guard
     assert list(~holdout_guard.in_holdout(days)) == [True, False, False, True]
     assert R.holdout_guard is holdout_guard
+
+
+def test_d13_cap_and_closes_drop_holdout_days_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both D-13 paths (the on-disk cap and the daily closes) drop the sealed days 2025-10-01..2026-09-30 and keep the
+    days on either side of it: a forward day (2026-10-01 on) is not sealed and is never cut (quant F-1 on #469)."""
+    import lzma
+    R = _load_research("d13_independent_rank")
+    days = ("2025-09-30", "2025-10-01", "2026-09-30", "2026-10-01")
+    rec = np.zeros(len(days), dtype=R.REC)
+    rec["sec"] = [int((pd.Timestamp(d) - pd.Timestamp("2025-01-01")).total_seconds()) for d in days]
+    rec["close"], rec["volume"] = [100, 101, 102, 103], 1.0
+    body = R.cap(lzma.compress(rec.tobytes(), format=lzma.FORMAT_ALONE), 2025)
+    kept = np.frombuffer(lzma.decompress(body), dtype=R.REC)
+    assert list(kept["close"]) == [100, 103]
+    (tmp_path / "XYZ").mkdir()
+    (tmp_path / "XYZ" / "2025.bi5").write_bytes(lzma.compress(rec.tobytes(), format=lzma.FORMAT_ALONE))
+    monkeypatch.setattr(R, "YEARS", [2025])
+    closes, missing = R.daily_closes("XYZ", tmp_path, 0.0)
+    assert missing == [] and [str(d.date()) for d in closes.index] == ["2025-09-30", "2026-10-01"]

@@ -166,6 +166,7 @@ from goldbot.ops.checks.feeds import (
     check_exploration_learning,
     check_feature_versions,
     check_growth_test,
+    check_model_serving,
     check_model_watch,
     check_news,
     check_news_blackout_cap,
@@ -393,6 +394,7 @@ __all__ = [
     "check_demo_floor",
     "check_exit_latency",
     "check_loss_caps",
+    "check_model_serving",
     "check_model_watch",
     "check_monthly_review",
     "check_news",
@@ -480,6 +482,9 @@ class HealthContext(Record):
     # when this host's settings last changed (settings.local.yaml's mtime, else settings.yaml's): the latest moment a
     # flag such as research.discovery.enabled can have been turned on (check_discovery_last_run); None: unknown
     settings_changed: UtcTimestamp | None = None
+    # the learning hosts (enabled accounts with exploration on, account -> broker), as daily_review reads them: the
+    # fill gate of learning:cost_cells counts their fills (goldbot/ops/checks/learning.py); empty: wall clock only
+    learning_hosts: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -488,6 +493,7 @@ class HealthContext(Record):
         accounts (live ones only after the phase gate) and the keyring."""
         from goldbot.ops import accounts
         settings, s_err, accs, a_err, pilots, lanes, observed = None, None, [], None, [], [], []
+        learn: dict[str, str] = {}
         try:
             settings = Settings.model_validate(settings_dict(settings_path))
         except Exception as exc:
@@ -497,6 +503,7 @@ class HealthContext(Record):
             accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol,
                                adaptive=settings is not None and adaptive_enabled(settings, a), live=a.mode != "demo")
                     for a in accounts.enabled_accounts()]
+            learn = {a.account_id: a.broker for a in accounts.enabled_accounts(logins=False) if a.exploration.enabled}
             on = {a.account_id for a in accs}
             listed = accounts.load_accounts(logins=False).values()
             pilots = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)
@@ -520,7 +527,7 @@ class HealthContext(Record):
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit(), bridge_diff=partial(differs_outside_bridge, ROOT),
-                   qualification=_qualification_view, weekend_lanes=lanes,
+                   qualification=_qualification_view, weekend_lanes=lanes, learning_hosts=learn,
                    observe_lanes=observed, etc_dir=Path("/etc") if sys.platform.startswith("linux") else None,
                    entry_supply=partial(_entry_supply_view, settings) if settings is not None else None,
                    settings_changed=_settings_changed(Path(settings_path)))

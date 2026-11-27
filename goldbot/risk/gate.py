@@ -2,6 +2,8 @@
 
 Per-account limits (daily 2% / weekly 5% of own equity; staged drawdown 8% size-down, 12% stop), plus
 the supervisor applies tighter limits on combined equity (1.5% / 4%) and writes a HALT flag.
+On real money the owner's limits of ADR 0106 (goldbot/risk/real_money.py: 1% a trade with its round trip, a 2% day
+latched to the risk-day roll, a 15% drawdown halt, 1% of the daily volume) apply after every other limit.
 All state is explicit and serialisable so the engine can reconcile after a restart.
 """
 from __future__ import annotations
@@ -29,6 +31,7 @@ from goldbot.config import (
 )
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.instruments import LEVERAGE_BY_CLASS, CorrelationGroup, InstrumentSpec, LeverageClass
+from goldbot.risk import real_money as rm
 from goldbot.risk import sizing
 from goldbot.risk.pilot import PilotRules, PilotState
 from goldbot.risk.throttle import AgentThrottle
@@ -149,6 +152,15 @@ class RiskLimits(Record):
     demo_unlimited: bool = False
     # ...and the one guard such an account keeps (settings.yaml `risk.demo_floor`): a wiped demo stops all learning
     demo_floor: DemoFloor = Field(default_factory=DemoFloor)
+    # ADR 0106 decision 2 ("enforced in the RiskGate as plain code the models cannot override"): the owner's real-money
+    # limits (goldbot/risk/real_money.py) apply to this account after every other limit. Set only by
+    # ops.services.engine.engine_limits for a live account against its real terminal (never on paper or demo); an
+    # intent that says it is not demo (`RiskGate.real_money`) applies them too. False: every decision as before
+    real_money: bool = False
+    # ...and the reference daily volumes the order-size rule reads, by instrument (config/data/adv_reference.yaml,
+    # `real_money.load_adv_reference`); set by engine_limits on real money only. A symbol not here refuses
+    # `rm_volume_unknown` on real money and is never read on demo
+    adv_reference: dict[str, rm.AdvReference] = Field(default_factory=dict)
 
     @property
     def dynamic(self) -> bool:
@@ -265,6 +277,16 @@ class AccountState(Record):
     group_notional: dict[str, float] | None = None
     other_group_notional: dict[str, float] | None = None
     exposure_unknown: bool = False
+    # ADR 0106 (real_money.RM_DAILY_STOP): the day's loss reached 2% of the day-start equity at some read on real money;
+    # every entry is refused `rm_daily_stop` until `new_day` clears it at the risk-day roll, whatever the equity does
+    # meanwhile. Set by `RiskGate.stage_step`, persisted in the engine's risk file (a restart keeps it)
+    rm_daily_stop: bool = False
+    # ...and how many account reads in a row have been at 2% or more (review M1: two agreeing reads latch, one never
+    # does); in memory only, `RiskGate.rm_read`
+    rm_day_reads: int = 0
+    # review H1: what the terminal itself reports (MT5 account_info().trade_mode: demo | real | contest), set by the
+    # engine's account refresh; None = the paper broker or not read. Anything but demo puts the real-money limits on
+    terminal_trade_mode: str | None = None
 
 
 class Intent(Record):
@@ -593,7 +615,9 @@ PER_TRADE_REFUSALS = frozenset({"fx_conversion_unavailable", "min_lot_exceeds_ri
                                 "combined_exposure_cap", "group_exposure_cap", "daily_loss_limit_abs",
                                 "daily_limit_projected", "heat_cap",
                                 "pilot_stop_above_cap", "pilot_trade_risk_above_cap", "pilot_stop_projected",
-                                "demo_margin_floor"})                # ADR 0097: sized, like margin_level_floor
+                                "demo_margin_floor",                 # ADR 0097: sized, like margin_level_floor
+                                "rm_risk_per_trade", "rm_daily_projected", "rm_volume",
+                                "rm_volume_unknown"})   # ADR 0106, on the sized order
 
 
 def _bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
@@ -710,6 +734,50 @@ class RiskGate:
             st.stage = Stage.NORMAL
         return st.stage
 
+    def halt_at(self, st: AccountState | None = None) -> float:
+        """The drawdown from the high-water mark that halts the account: `dd_stage2`, and on real money (`real_money`,
+        with the account state's terminal) never above ADR 0106's 15% (`real_money.RM_DD_HALT`), whatever a profile
+        or the pilot block set it to. It is the smaller of the two: the 12% default still fires first. The engine's
+        12% confirmation of an equity read uses the same figure."""
+        d2 = self.limits.dd_stage2
+        return min(d2, rm.RM_DD_HALT) if self.real_money(st=st) else d2
+
+    def real_money(self, intent: Intent | None = None, st: AccountState | None = None) -> bool:
+        """ADR 0106: whether the owner's real-money limits apply. The account's fact (`RiskLimits.real_money`, set by
+        engine_limits for a live account's real terminal); the terminal's own report on the account refresh
+        (`AccountState.terminal_trade_mode` not demo: review H1, a real login under a demo id); and an intent's own
+        facts when it carries them (registry mode `live`, a terminal not demo). Any one puts them on; nothing lifts
+        them. The paper broker reports no terminal (None): not real money."""
+        if self.limits.real_money:
+            return True
+        if st is not None and st.terminal_trade_mode not in (None, "demo"):
+            return True
+        return intent is not None and (intent.account_mode == "live"
+                                       or intent.terminal_trade_mode not in (None, "demo"))
+
+    def rm_step(self, st: AccountState) -> None:
+        """ADR 0106 on real money, run with the stage machine on a comparable state (`stage_step`): halt at
+        `halt_at()` (15% at most, whatever `dd_stage2` says) on a confirmed read, as `update_stage` halts at 12%: one
+        unconfirmed read moves nothing (ADR 0016). `update_stage` itself stays byte-identical (the re-arm path)."""
+        if self.real_money(st=st) and not st.equity_unconfirmed and st.balance_closed_hwm > 0 \
+                and 1 - st.equity / st.balance_closed_hwm >= self.halt_at(st):
+            st.stage = Stage.HALTED
+
+    def rm_read(self, st: AccountState) -> None:
+        """ADR 0106 "2 % then stop for the day", latched on account reads only (the engine's refresh, never an entry
+        check): review M1 and ADR 0016 ("one disagreeing read never trips"). A comparable read (equity a finite number
+        > 0, every state number comparable, not an unconfirmed 12% read) at 2% or more of the day start counts; the
+        second such read in a row latches `rm_daily_stop` (only `new_day` clears it); any other read resets the count.
+        Entries are refused on the first read anyway (`account_reasons`)."""
+        ok = self.real_money(st=st) and not st.equity_unconfirmed and not invalid_state_fields(st) \
+            and math.isfinite(st.equity) and st.equity > 0
+        if not (ok and rm.daily_stop_reached(st.equity, st.day_start_equity)):
+            st.rm_day_reads = 0
+            return
+        st.rm_day_reads += 1
+        if st.rm_day_reads >= 2:
+            st.rm_daily_stop = True
+
     def rearm(self, st: AccountState, confirmation: str) -> bool:
         if confirmation != REARM_PHRASE:  # the owner's TOTP-verified re-arm (control.json rearm_seq) precedes this
             return False
@@ -727,18 +795,19 @@ class RiskGate:
         unreadable one must not move the stage, or a 15 % demo drawdown would read HALTED and the kill switch would
         flatten the whole account. A stage already HALTED stays HALTED: only the owner's /rearm clears it, flag or not
         (trading-safety L1)."""
+        self.rm_step(st)
         gates = phase_gates(phase_file) if phase_file is not None else None
         live = gates is not None and bool(LIVE_GATES & set(gates))
-        return st.stage if self.unlimited() and not live and st.stage != Stage.HALTED else self.update_stage(st)
+        return st.stage if self.unlimited(st=st) and not live and st.stage != Stage.HALTED else self.update_stage(st)
 
     # ---------------------------------------------------------------- entry check + sizing
-    def unlimited(self, intent: Intent | None = None) -> bool:
+    def unlimited(self, intent: Intent | None = None, st: AccountState | None = None) -> bool:
         """ADR 0097 (owner 2026-11-25, "there are no limits anymore for demo accounts"): whether this account's caps are
         lifted. The account's facts (`RiskLimits.demo_unlimited` on a probe_only account); with an intent, also the
         one demo predicate on its own facts (`is_demo`: the registry, the phase file, the terminal), so any non-demo
-        fact puts every cap back (fail closed)."""
+        fact puts every cap back (fail closed). ADR 0106: never on real money (`real_money`, the terminal included)."""
         L = self.limits
-        if not (L.demo_unlimited and L.probe_only):
+        if not (L.demo_unlimited and L.probe_only) or self.real_money(intent, st):
             return False
         if intent is None:
             return True
@@ -871,7 +940,8 @@ class RiskGate:
         return cap, f"{tag} {cap:.2f} >= broker {broker:.2f}"
 
     def account_reasons(self, st: AccountState, now_utc: pd.Timestamp | None = None,
-                        throttle: AgentThrottle | None = None, *, unlimited: bool | None = None) -> list[str]:
+                        throttle: AgentThrottle | None = None, *, unlimited: bool | None = None,
+                        real_money: bool | None = None) -> list[str]:
         """BACKLOG 43 (ADR 0011: the engine publishes "the gate's account-level reasons at each refresh, including
         rollover and the weekend cut"): every reason `check()` refuses an entry for that does not depend on the intent,
         in the order `check()` gives them. `check()` starts from this list, so the two cannot drift; the engine
@@ -885,10 +955,13 @@ class RiskGate:
         ADR 0097: `unlimited` (default: the account's facts, `unlimited()`) leaves every cap out (the drawdown halt, the
         news and entry windows, the spread cap, max positions, the throttle, the daily and weekly caps and what the
         projections need) and adds the demo floor's `demo_equity_floor` instead; halts, rollover, the weekend and data
-        and terminal integrity still refuse."""
+        and terminal integrity still refuse.
+
+        ADR 0106: on real money (`real_money`, default: the account's fact, `real_money()`) the owner's limits follow
+        every other reason: `rm_daily_stop` (latched or reached now), `rm_day_start_unknown`, `rm_drawdown_halt`."""
         L = self.limits
         # trading-safety L1: a HALTED stage (from before the flag) keeps every cap, so `drawdown_halt` says why
-        free = (self.unlimited() if unlimited is None else unlimited) and st.stage != Stage.HALTED
+        free = (self.unlimited(st=st) if unlimited is None else unlimited) and st.stage != Stage.HALTED
         reasons: list[str] = []
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
@@ -951,6 +1024,15 @@ class RiskGate:
                 reasons.append("daily_cap")
             if week_loss >= L.weekly_cap:
                 reasons.append("weekly_cap")
+        if self.real_money(st=st) if real_money is None else real_money:
+            # ADR 0106 decision 2, after every other limit and whatever they say: the latched 2% day, a day start the
+            # 2% cannot be judged against, and a read at 15% below the mark (refused before the stage machine runs)
+            if st.rm_daily_stop or (not bad and rm.daily_stop_reached(st.equity, st.day_start_equity)):
+                reasons.append("rm_daily_stop")
+            if not bad and not st.day_start_equity > 0:
+                reasons.append("rm_day_start_unknown")
+            if not bad and rm.drawdown_halt_reached(st.equity, st.balance_closed_hwm):
+                reasons.append("rm_drawdown_halt")
         if st.account_class == "unknown":
             reasons.append("account_class_unknown")
         # review M1: a multi-symbol account projects against the daily limit, which needs the day's start equity
@@ -958,7 +1040,8 @@ class RiskGate:
             reasons.append("day_start_unknown")
         # BACKLOG 19/35: the heat cap, or the projection with an absolute daily limit, needs the open risk; unknown, or not
         # a finite amount >= 0, refuses (fail closed). Nothing while both are off, so the fact is never read then
-        needs = L.pilot is not None or (not free and (L.heat.enabled or L.multi_symbol
+        money = self.real_money(st=st) if real_money is None else real_money
+        needs = L.pilot is not None or money or (not free and (L.heat.enabled or L.multi_symbol
                                                       or (L.project_open_risk and L.daily_loss_limit_abs is not None)))
         if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
             reasons.append("open_risk_unknown")
@@ -968,14 +1051,14 @@ class RiskGate:
         return reasons
 
     def _account_gate(self, st: AccountState, bad: list[str], now_utc: pd.Timestamp | None,
-                      throttle: AgentThrottle | None, *, unlimited: bool = False, phase_file: Path | None = None
-                      ) -> tuple[list[str], GateDecision | None]:
+                      throttle: AgentThrottle | None, *, unlimited: bool = False, phase_file: Path | None = None,
+                      real_money: bool | None = None) -> tuple[list[str], GateDecision | None]:
         """The start both entry checks share (ADR 0021: one code path for every account check): the stage machine on a
         comparable state, then `account_reasons`. A number outside its domain (`bad`) ends it with the refusal
         (`invalid_state`, then `invalid:<field>`); the stage machine does not run on it."""
         if not bad:
             self.stage_step(st, phase_file)
-        reasons = self.account_reasons(st, now_utc, throttle, unlimited=unlimited)
+        reasons = self.account_reasons(st, now_utc, throttle, unlimited=unlimited, real_money=real_money)
         if not bad:
             return reasons, None
         log.warning("entry refused: invalid state %s", bad)
@@ -1086,9 +1169,10 @@ class RiskGate:
         (`_sized_limits`) are shared with `check_operational`; the model checks are this method's alone.
         tests/test_risk_gate_split.py pins the decisions on a state grid captured before the split (F5)."""
         L = self.limits
-        free = self.unlimited(intent)        # ADR 0097: an unlimited demo account, by the one demo predicate
+        free = self.unlimited(intent, st)    # ADR 0097: an unlimited demo account, by the one demo predicate
+        money = self.real_money(intent, st)  # ADR 0106: the owner's real-money limits, after every other one
         reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle, unlimited=free,
-                                              phase_file=intent.phase_file)
+                                              phase_file=intent.phase_file, real_money=money)
         free = free and st.stage != Stage.HALTED      # trading-safety L1: a halt from before the flag keeps every cap
         if refused is not None:
             return refused
@@ -1142,6 +1226,7 @@ class RiskGate:
         size_down = st.stage == Stage.SIZE_DOWN or st.combined_size_down
         risk_frac = L.risk_for(intent.model_version)     # dynamic limits: the strategy's risk per trade (base: fixed)
         eff = sizing.effective_risk(L, size_down, intent.multiplier, risk_frac=risk_frac)
+        per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
         stop_distance = sizing.stop_distance(intent.stop_atr, intent.atr_usd, stops_level_points=intent.stops_level_points,
                                              spread_points=st.spread_points,
                                              point=L.point if intent.point is None else intent.point)
@@ -1149,6 +1234,17 @@ class RiskGate:
                               volume_min=intent.volume_min, volume_step=intent.volume_step,
                               volume_max=intent.volume_max, acct_per_usd=fx,
                               commission_per_oz=intent.commission_usd_per_oz)
+        if money and eff.target > 0:
+            # review L2: on real money the sizing target leaves room for the expected round trip, so the 1 % check
+            # below (loss at the stop plus the round trip) binds as a ceiling, not as a refusal of every full-size entry
+            per_lot = stop_distance + max(0.0, intent.commission_usd_per_oz)
+            rm_target = rm.RM_MAX_RISK_PER_TRADE * per_lot / (per_lot + per_oz)
+            if eff.target > rm_target:
+                eff = eff.model_copy(update={"mult": rm_target / eff.risk_frac, "target": rm_target})
+                sz = sizing.size_lots(equity=st.equity, risk=eff, stop_distance=stop_distance,
+                                      contract_oz=intent.contract_oz, volume_min=intent.volume_min,
+                                      volume_step=intent.volume_step, volume_max=intent.volume_max, acct_per_usd=fx,
+                                      commission_per_oz=intent.commission_usd_per_oz)
         lots, realised_risk = sz.lots, sz.realised_risk
         notes: list[str] = []
         if L.pilot is not None:
@@ -1179,7 +1275,6 @@ class RiskGate:
             if cap is None or lots > intent.volume_max or realised_risk > cap:
                 return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
             notes = ["min_lot_exception"]
-        per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
         d = self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
                                stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
                                margin_required=margin_required, unlimited=free)
@@ -1197,6 +1292,43 @@ class RiskGate:
             return GateDecision(allowed=False, reasons=["pilot_stop_projected"], stop_distance=d.stop_distance,
                                 margin_needed=d.margin_needed, margin_note=d.margin_note, risk_amount=d.risk_amount,
                                 cost_amount=d.cost_amount)
+        if d.allowed and money:
+            # ADR 0106 decision 2 ("plain code the models cannot override"), after every profile, override, dynamic
+            # term, minimum-lot exception and pilot rule above: the loss at the stop plus the round trip within 1% of
+            # equity, never shrunk; the order within 1% of the instrument's reference daily volume, unknown refused
+            if not rm.trade_risk_exceeded(d.risk_amount, d.cost_amount, st.equity):
+                # "2 % then stop": the loss at the stop plus the round trip within what is left of the day's 2 % after
+                # the loss so far and the open positions' risk to their stops; sized down in whole steps (the pilot's
+                # lot is fixed), refused below the minimum lot
+                left = rm.daily_headroom(st.equity, st.day_start_equity, st.open_risk or 0.0)
+                per_lot = (d.risk_amount + max(0.0, d.cost_amount)) / d.lots if d.lots > 0 else math.inf
+                if d.lots * per_lot > left * (1 + 1e-9):
+                    steps = math.floor(max(0.0, left) / per_lot / intent.volume_step + 1e-9)
+                    cut = on_step(steps * intent.volume_step, intent.volume_step)
+                    if L.pilot is not None or cut < intent.volume_min - 1e-9:
+                        return GateDecision(allowed=False, reasons=["rm_daily_projected"],
+                                            stop_distance=d.stop_distance, margin_needed=d.margin_needed,
+                                            margin_note=d.margin_note, risk_amount=d.risk_amount,
+                                            cost_amount=d.cost_amount)
+                    d = self._sized_limits(intent, st, lots=cut, risk_per_lot=sz.risk_per_lot, fx=fx,
+                                           cost_per_oz=per_oz, stop_distance=stop_distance,
+                                           realised_risk=cut * sz.risk_per_lot / st.equity,
+                                           notes=[*notes, "rm_daily_sized_down"], margin_required=margin_required)
+            ref = L.adv_reference.get(intent.symbol)
+            code = None
+            if not d.allowed:
+                return d
+            if rm.trade_risk_exceeded(d.risk_amount, d.cost_amount, st.equity):
+                code = "rm_risk_per_trade"
+            elif ref is None or not rm.volume_known(ref, intent.currency_profit,
+                                                    (now_utc if now_utc is not None else pd.Timestamp.now("UTC")).date()):
+                code = "rm_volume_unknown"
+            elif rm.volume_exceeded(d.lots * intent.contract_oz * intent.price, ref):
+                code = "rm_volume"
+            if code is not None:
+                return GateDecision(allowed=False, reasons=[code], stop_distance=d.stop_distance,
+                                    margin_needed=d.margin_needed, margin_note=d.margin_note,
+                                    risk_amount=d.risk_amount, cost_amount=d.cost_amount)
         if d.allowed and L.dynamic:          # the entry audit's why: the rate sized at and its source
             d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
                                      "risk_source": L.risk_source(intent.model_version)})
@@ -1259,7 +1391,7 @@ class RiskGate:
         gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" else None
         head = [] if gates is not None and not LIVE_GATES & set(gates) else ["operational_not_demo"]
         # ADR 0097 (trading-safety M2): unlimited too on a demo account by the registry and the phase file (F1)
-        free = not head and self.unlimited()
+        free = not head and self.unlimited(st=st)
         bad = invalid_state_fields(st) + [f for f in _OPERATIONAL_NUMBERS if _bad(intent, f, _POSITIVE_OPERATIONAL)]
         reasons, refused = self._account_gate(st, bad, now_utc, None, unlimited=free, phase_file=intent.phase_file)
         free = free and st.stage != Stage.HALTED
@@ -1293,9 +1425,11 @@ def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:
 
 def new_day(st: AccountState, now_utc: pd.Timestamp, last_reset: pd.Timestamp | None) -> bool:
     """Reset the day-start equity at the risk-day boundary (00:00 UTC), and the week-start equity when the reset
-    also crosses into a new risk week. Returns True when a reset happened (the caller persists `now_utc`)."""
+    also crosses into a new risk week; the real-money daily stop (`AccountState.rm_daily_stop`) ends here. Returns
+    True when a reset happened (the caller persists `now_utc`)."""
     if last_reset is None or risk_day(pd.DatetimeIndex([now_utc]))[0] != risk_day(pd.DatetimeIndex([last_reset]))[0]:
         st.day_start_equity = st.equity
+        st.rm_daily_stop, st.rm_day_reads = False, 0    # ADR 0106: the 2% stop lasts "for the rest of the day"
         if last_reset is None or _risk_week(now_utc) != _risk_week(last_reset):
             st.week_start_equity = st.equity
         return True

@@ -156,6 +156,9 @@ class RiskSnapshot(FrozenRecord):
     # every other account's file is unchanged. Absent (an older file, or never rolled) = epoch 0
     epoch: int = 0
     epoch_utc: pd.Timestamp | None = None
+    # ADR 0106: the real-money daily stop is latched until the risk-day roll (`AccountState.rm_daily_stop`); written
+    # only while latched, so every other file is unchanged. Absent (an older file, or not latched) = not latched
+    rm_daily_stop: bool = False
 
 
 @runtime_checkable
@@ -240,6 +243,8 @@ class JsonEngineStore:
                    "flows_through": s.flows_through.isoformat() if s.flows_through is not None else None}
         if s.epoch:
             payload |= {"epoch": s.epoch, "epoch_utc": s.epoch_utc.isoformat() if s.epoch_utc is not None else None}
+        if s.rm_daily_stop:
+            payload |= {"rm_daily_stop": True}
         # durable: halts and stages survive a power cut
         write_atomic(risk_file(self.state_dir, self.account_id), json.dumps(payload))
 
@@ -276,7 +281,8 @@ class JsonEngineStore:
                             week_reset=pd.Timestamp(d["week_reset"]) if d.get("week_reset") else None,
                             flows_through=pd.Timestamp(d["flows_through"]) if d.get("flows_through") else None,
                             epoch=int(d.get("epoch") or 0),
-                            epoch_utc=pd.Timestamp(d["epoch_utc"]) if d.get("epoch_utc") else None)
+                            epoch_utc=pd.Timestamp(d["epoch_utc"]) if d.get("epoch_utc") else None,
+                            rm_daily_stop=d.get("rm_daily_stop") is True)
 
     def write_engine_state(self, payload: dict[str, Any], durable: bool = False) -> None:
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync

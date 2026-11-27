@@ -58,11 +58,82 @@ def render(cfg: dict[str, Any], certs: list[D.Certificate]) -> str:
               "| Item | Gap | Plan | Owner | Due | Status | Risk |", "|---|---|---|---|---|---|---|"]
     for k, d in {**cfg["items"], **cfg["other_items"]}.items():
         lines.append(f"| {k} | {d['gap']} | {d['plan']} | {d['owner']} | {d['due']} | {d['status']} | {d['risk']} |")
+    lines += consumer_sections(cfg)
     lines += ["", "## Units", ""]
     for unit, u in cfg["units"].items():
         lines.append(f"- `{unit}` ({D.unit_method(unit, u)}): {u['label']}; learn {u['windows']['learn']}, judge "
                      f"{u['windows']['judge']}.")
     return "\n".join(lines) + "\n"
+
+
+def consumer_sections(cfg: dict[str, Any]) -> list[str]:
+    """The consumer x cell matrix and the ranked routes (owner directive 2026-11-26)."""
+    if not cfg.get("consumers"):
+        return []
+    cons = D.consumers(cfg)
+    sup = D.supply(cfg)
+    rts = D.rank_routes(D.routes(cfg))
+    cells = D.consumer_cells(cons, sup, rts, D.inherit(cfg))
+    by = {(c.consumer, c.cell): c for c in cells}
+
+    def n(x: int | None) -> str:
+        return "-" if x is None else f"{x:,}"
+
+    def k(x: int) -> str:
+        return f"{x / 1000:.1f}k" if x >= 1000 else str(x)
+    out = ["", f"## Consumers (plan dated {cfg['plan_dated']}, owner data-engineer)", "",
+           "| Consumer | Learn need | Judge need | Timeframes | Source |", "|---|---|---|---|---|"]
+    for c in cons:
+        learn = "forward only" if c.forward_only else f"{c.n_train():,} ({c.inputs} inputs)"
+        judge = f"forward n_eff {c.forward_n_eff:,} per cell" if c.forward_only else f"{c.n_judge():,} (keep {c.keep_share})"
+        out.append(f"| {c.id} | {learn} | {judge} | {', '.join(c.tfs)} | {c.label}; {c.source} |")
+    out += ["", "## Consumer x cell", "",
+            "Supply: learn = dl-v1 measured T2 core-6 n_eff where the unit has it, else the card count; judge = the "
+            "card count. Each consumer column: `ok` when both needs are met, else the learn / judge shortfall "
+            "(`L` / `J`), then the ranked route whose cumulative counted gain closes it (at full delivery) and its date, or "
+            "`open` with the residual after every route and the Riley input cap the data then carries (the consumer "
+            "serves at most that many inputs there, or abstains, until a new route is added). Gold cells take the "
+            "pooled body's gains once A2 pools them. `fwd` = judged on forward rows only. Blank = not used.", "",
+            "| Cell | Learn | Judge | " + " | ".join(c.id for c in cons) + " |",
+            "|---|---|---|" + "---|" * len(cons)]
+    for unit, row in sup.items():
+        for tf, (lv, jv) in row.items():
+            cell = f"{unit}/{tf}"
+            cols = []
+            for c in cons:
+                cc = by.get((c.id, cell))
+                if cc is None:
+                    cols.append("")
+                elif cc.status == "FORWARD":
+                    cols.append("fwd")
+                elif cc.status == "MEETS":
+                    cols.append("ok")
+                else:
+                    gap = " ".join(x for x in (f"L-{k(cc.short_learn)}" if cc.short_learn else "",
+                                               f"J-{k(cc.short_judge)}" if cc.short_judge else "") if x)
+                    if cc.closed_by:
+                        cols.append(f"{gap}: {cc.closed_by} {cc.closed_due}")
+                    else:
+                        res = " ".join(x for x in (f"L-{k(cc.residual_learn)}" if cc.residual_learn else "",
+                                                   f"J-{k(cc.residual_judge)}" if cc.residual_judge else "") if x)
+                        cols.append(f"{gap}: open {res}, cap {cc.max_inputs_after}")
+            out.append(f"| {cell} | {n(lv)} | {n(jv)} | " + " | ".join(cols) + " |")
+    out += ["", "## Routes, ranked by expected counted n_eff per day of work", "",
+            "Counted = the card 2.2 n_eff the route adds summed over cells (learn and `:judge`); expected per day = "
+            "counted x p_deliver / effort days. Synthetic rows count 0 toward n_eff, power and every gate, never enter "
+            "OOS folds or the meta layer, weigh at most the real rows per fold, and the quant signs each synthetic "
+            "route before use (aug-v1, SYNTH-ml R10). GAN/diffusion only after A3 passes.", "",
+            "| Rank | Route | Kind | Basis | Counted n_eff | p | Effort (d) | Per day | Sign-off | Owner | Due | Status | "
+            "Training-only gain |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for i, r in enumerate(rts, 1):
+        out.append(f"| {i} | {r.id}: {r.title} | {r.kind} | {r.basis} | {r.counted():,} | {r.p_deliver} | "
+                   f"{r.effort_days:g} | {r.per_day():,.0f} | {r.signoff or '-'} | {r.owner} | {r.due} | {r.status} | "
+                   f"{r.training_gain or '-'} |")
+    out += ["", "### Route gains per cell", "", "| Route | Cell | Counted n_eff |", "|---|---|---|"]
+    for r in rts:
+        for cell, g in sorted(r.gain.items()):
+            out.append(f"| {r.id} | {cell} | {g:,} |")
+    return out
 
 
 def main() -> int:
@@ -72,8 +143,15 @@ def main() -> int:
     cfg = yaml.safe_load(SRC.read_text())
     certs = certificates(cfg)
     md = render(cfg, certs)
-    js = json.dumps({"card_dated": cfg["card_dated"], "counted_by": cfg["counted_by"],
-                     "cells": [c.model_dump(mode="json") for c in certs]}, indent=1) + "\n"
+    body: dict[str, Any] = {"card_dated": cfg["card_dated"], "counted_by": cfg["counted_by"],
+                            "cells": [c.model_dump(mode="json") for c in certs]}
+    if cfg.get("consumers"):
+        rts = D.rank_routes(D.routes(cfg))
+        body["consumer_cells"] = [c.model_dump(mode="json") for c in
+                                  D.consumer_cells(D.consumers(cfg), D.supply(cfg), rts, D.inherit(cfg))]
+        body["routes"] = [{**r.model_dump(mode="json"), "counted": r.counted(), "per_day": round(r.per_day(), 1)}
+                          for r in rts]
+    js = json.dumps(body, indent=1) + "\n"
     if a.check:
         stale = [p for p, body in ((MD, md), (JS, js)) if not p.exists() or p.read_text() != body]
         if stale:

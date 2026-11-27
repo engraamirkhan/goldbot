@@ -43,6 +43,7 @@ from goldbot.data.timeutil import feature_day, floor_tf, server_wall
 from goldbot.engine import (
     auto_entry,
     below_floor,
+    blackout,
     books,
     broker_bars,
     capital_flows,
@@ -59,6 +60,7 @@ from goldbot.engine import (
     key_zones,
     order_send,
     pilot,
+    risk_state,
     shadow_replay,
     shadow_scoring,
     state_heartbeat,
@@ -400,6 +402,7 @@ class Engine:
         self._flow_balance: float | None = None
         self._epoch = 0                                 # ADR 0049 D3: the demo roll's epoch and when it began
         self._epoch_utc: pd.Timestamp | None = None
+        self._rm_daily_stop_saved = False                # ADR 0106: whether the risk file holds the latch as it is
         self._rearm_seen: str | None = None
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
@@ -1718,35 +1721,13 @@ class Engine:
             return
         for pid, tr in list(self.open.items()):
             try:
-                self._blackout_rescore(pid, tr, complete, close_ts, frames, ev)
+                blackout.rescore(self, pid, tr, complete, close_ts, frames, ev)
             except Exception as e:                        # one position never stops the loop
                 # the trade keeps its server stop and target and is re-scored again at the next base bar close
                 log.exception("blackout re-score failed for position %s; the position is kept", pid)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "blackout_rescore_failed",
                                        "position": pid, "error": repr(e)})
         self._save_orders()
-
-    def _blackout_rescore(self, pid: int, tr: OpenTrade, complete: pd.DataFrame, close_ts: pd.Timestamp,
-                          frames: dict[str, _Frame], ev: dict) -> None:
-        agent = self.agents.get(tr.agent_id)
-        model = None if agent is None else (self.models.get(agent.agent_id) or self.models.get(agent.family))
-        if agent is None or model is None:
-            return
-        fr = frames.get(agent.timeframe)
-        if fr is None:
-            fr = self._frame(complete, agent.timeframe, close_ts)
-            if fr is None:
-                return
-            frames[agent.timeframe] = fr
-        Xm = self._scoring_frame(fr, model)
-        if Xm is None:
-            return                                        # a model only scores the frame version it was trained on
-        feats = Xm.drop(columns=["ts_utc"]).iloc[[len(Xm) - 1]].replace([np.inf, -np.inf], np.nan)
-        feats["side"] = tr.side
-        cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-        p = float(model.predict(feats[cols])[0])
-        if p < 0.5:
-            self._policy_close(pid, tr, "blackout_close", p=round(p, 4), event=ev.get("title"))
 
     def _own(self, magic: int) -> bool:
         return self.cfg.magic_base <= magic < self.cfg.magic_base + 100
@@ -1980,6 +1961,7 @@ class Engine:
         books.after_refresh(self, tick, now)    # more than one book: its terms and rules, the account's exposure
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         self.cfg.approval_mode = auto_entry.lock(self, owner_mode or self._account_approval, acc)   # ADR 0036 lock
+        st.terminal_trade_mode = getattr(acc, "trade_mode", None)    # ADR 0106 review H1: real money by the terminal
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         pilot.refresh(self, acc, now)        # ADR 0055: the live pilot's record and stop from the deals (engine/pilot.py)
         stage = st.stage
@@ -1989,6 +1971,11 @@ class Engine:
                 self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
             # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
             self._save_risk_state_now("the stage change")
+        self.gate.rm_read(st)               # ADR 0106: two agreeing account reads at 2 % latch the day (review M1)
+        if st.rm_daily_stop != self._rm_daily_stop_saved:
+            # ADR 0106: the 2% stop survives a restart at once, whichever check latched it (a failed save retries here)
+            if self._save_risk_state_now("the real-money daily stop"):
+                self._rm_daily_stop_saved = st.rm_daily_stop
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
         self._limits.after_stage(self, now)
@@ -2027,7 +2014,8 @@ class Engine:
         if st.stage == Stage.HALTED or hwm <= 0:
             return False
         dd = 1 - acc.equity / hwm
-        if dd >= L.dd_stage2:
+        halt = self.gate.halt_at(st)        # dd_stage2; on real money never above ADR 0106's 15%
+        if dd >= halt:
             self._reread_account = False
             if self._stage2_pending_since is not None or self._equity_corroborated(acc, hwm):
                 self._set_stage2_pending(None)
@@ -2042,7 +2030,7 @@ class Engine:
         self._reread_account = False
         if self._stage2_pending_since is None:
             return False
-        if not dd < L.dd_stage2 - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
+        if not dd < halt - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
             self._stage2_clean_since = None
             return True
         self._stage2_clean_since = self._stage2_clean_since or now
@@ -2498,51 +2486,13 @@ class Engine:
         return risk_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _save_risk_state(self) -> None:
-        st = self.state
-        self.state_store.save_risk(RiskSnapshot(
-            last_reset=self._last_reset, day_start_equity=st.day_start_equity, week_start_equity=st.week_start_equity,
-            balance_closed_hwm=st.balance_closed_hwm, stage=Stage(st.stage), rearm_seen=self._rearm_seen,
-            weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
-            rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
-            stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
-            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc))
+        risk_state.save(self)
 
     def _save_risk_state_now(self, what: str) -> bool:
-        """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
-        in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
-        disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
-        logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
-        (`_write_state`) saves the risk state again. True when saved."""
-        try:
-            self._save_risk_state()
-        except Exception as exc:
-            log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
-                      "state write", what, type(exc).__name__)
-            self.note_tick_error(exc)
-            return False
-        return True
+        return risk_state.save_now(self, what)
 
     def _load_risk_state(self) -> None:
-        self._kill_everything = False
-        snap = self.state_store.load_risk()       # unreadable -> raises: fail loudly rather than forget a drawdown halt
-        if snap is None:
-            # first start: an earlier re-arm on the bus is not a re-arm of this engine
-            self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
-            return
-        st = self.state
-        self._last_reset = snap.last_reset
-        st.day_start_equity = snap.day_start_equity
-        st.week_start_equity = snap.week_start_equity
-        st.balance_closed_hwm = snap.balance_closed_hwm
-        st.stage = snap.stage
-        self._rearm_seen, self._weekend_done = snap.rearm_seen, snap.weekend_done
-        self._halted_at = snap.halted_at
-        self._propose_only_until = snap.propose_only_until
-        self._rearm_refused = snap.rearm_refused
-        self._stage2_pending_since = snap.stage2_pending_since
-        self._kill_everything = snap.kill_everything
-        self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
-        self._epoch, self._epoch_utc = snap.epoch, snap.epoch_utc
+        risk_state.load(self)
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
@@ -3014,6 +2964,7 @@ class Engine:
                                 | ({"contract_unknown"} if self._contract is None and self._contract_tried else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
+            "open_without_model": blackout.open_without_model(self),     # PR #494 MEDIUM-3: health warns
             "terminal_account_changed": self.terminal.mismatch,     # R1: why not on this account (health FAILs)
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],

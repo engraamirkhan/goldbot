@@ -114,8 +114,10 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
     "min_since_newyork_open": 1,     # session
     "session_id": 1,                 # session
     # session_zones
-    "sess_high_dist_atr": {"1m": 491, "5m": 100, "15m": 97, "30m": 89, "1h": 90, "4h": 91, "1d": 90, "1w": 90},
-    "sess_low_dist_atr": {"1m": 467, "5m": 99, "15m": 96, "30m": 98, "1h": 97, "4h": 91, "1d": 91, "1w": 91},
+    "sess_high_dist_atr": {"1m": 491, "5m": 100, "15m": 97, "30m": 89, "1h": 90, "2h": 92, "4h": 91, "1d": 90,
+                           "1w": 90},
+    "sess_low_dist_atr": {"1m": 467, "5m": 99, "15m": 96, "30m": 98, "1h": 97, "2h": 91, "4h": 91, "1d": 91,
+                          "1w": 91},
     "adx14": 125,                    # trend_strength
     "donchian_pos_20": 20,           # trend_strength
     "tsmom_score": 481,              # tsmom
@@ -131,10 +133,24 @@ COLUMN_LOOKBACKS: dict[str, int | dict[str, int]] = {
     "x6_io_bar": 2,                  # x6_candles
     "x6_ms_state": 60,               # x6_structure
     "x6_ms_bos": 84,                 # x6_structure
-    "x6_lv_dist_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "4h": 30, "1d": 30, "1w": 30},
-    "x6_lv_room_net_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "4h": 30, "1d": 30, "1w": 30},
-    "x6_lv_brk_state": {"1m": 8880, "5m": 1776, "15m": 592, "30m": 296, "1h": 148, "4h": 35, "1d": 35, "1w": 35},
+    "x6_lv_dist_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "2h": 62, "4h": 30, "1d": 30,
+                       "1w": 30},
+    "x6_lv_room_net_atr": {"1m": 7440, "5m": 1488, "15m": 496, "30m": 248, "1h": 124, "2h": 62, "4h": 30, "1d": 30,
+                           "1w": 30},
+    "x6_lv_brk_state": {"1m": 8880, "5m": 1776, "15m": 592, "30m": 296, "1h": 148, "2h": 74, "4h": 35, "1d": 35,
+                        "1w": 35},
 }
+
+
+# ADR 0104 4 rule R-a (quant ruling on PR #486, 2026-11-26): a column that reads only the CLOSE of its lookback bars
+# (and the clock) accepts lookback months graded B; every other column needs A / A-consistent over its lookback.
+# Proved by tests/test_close_only_columns.py: perturbing open, high, low, spread and tick count of every bar with the
+# closes unchanged leaves the column identical; a column that fails cannot be declared here.
+CLOSE_ONLY_COLUMNS: frozenset[str] = frozenset({
+    "bars_since_jump", "bb_z_20", "dow", "er_30", "hour_utc", "jump_z", "min_since_london_open",
+    "min_since_newyork_open", "ret_16", "ret_4", "ret_96", "rsi14", "rv_ratio", "session_id", "tsmom_score",
+    "vol_tercile",
+})
 
 
 # Columns whose declared lookback may go below the signed floor (tests/fixtures/column_lookbacks_floor.json; ADR 0104 4:
