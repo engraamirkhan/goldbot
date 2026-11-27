@@ -13,6 +13,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - A hole wholly older than the fill floor that no pull covered, with <= `history_stale_gap_max_min` (240) open
     minutes, is a closure for the refusal, logged once; off when either setting is 0. Holes in the fill window and
     longer old holes still refuse. Needs trading-safety + quant review.
+- 2026-11-27 session split reporting: the engine log and the `entry_silence:<account>` health reason show replay-only
+  control candidates beside the edge ones ("session split from 0 edge of 0; 62 replay-only control"), so an account
+  with no edge candidate no longer reads as dead. `exploration_budget.SplitCounts` / `split_counts`; the split itself
+  is unchanged (edge candidates only).
 - 2026-11-27 health `self_retrain` reasons lead with "next slot <slot> UTC" (computed from scheduler.self_retrain).
   - The late-start WARN fires only while the newest run is under a day old: the 11-24 run (slot 11-22,
     `run_if_never_run`) no longer reads "40.9 h late" every day, which the 4 h cycle took for "self_retrain stopped".

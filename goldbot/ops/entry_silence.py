@@ -102,6 +102,7 @@ class Silence(FrozenRecord):
     run_min: int = 0                     # the longest London/NY silent run today, market minutes
     run_from: UtcTimestamp | None = None
     run_to: UtcTimestamp | None = None
+    split: budget.SplitCounts | None = None   # what the session split was read from (reporting: edge vs control)
 
     @property
     def no_supply(self) -> bool:
@@ -227,17 +228,19 @@ def _read(aux: Path, account_id: str, broker: str, day: pd.Timestamp, now: pd.Ti
 
 
 def _budgets(s: AccountSupply, aux: Path, account_id: str, day: pd.Timestamp, active: set[str],
-             has_obs: bool) -> dict[str, int]:
+             has_obs: bool) -> tuple[dict[str, int], budget.SplitCounts | None]:
     """Each segment's fills a day, by the engine's own `session_budgets` over the active arms' admissible candidates
-    (the static entry refusals read only the engine's broker and weekend window: a weekend lane is never judged here)."""
+    (the static entry refusals read only the engine's broker and weekend window: a weekend lane is never judged here),
+    and the counts it was read from (`split_counts`; None without a ledger)."""
     assert s.daily is not None
     if not has_obs:
-        return budget.apportion(s.daily.max_per_day, {})
+        return budget.apportion(s.daily.max_per_day, {}), None
     eng = SimpleNamespace(cfg=SimpleNamespace(account_id=account_id, broker_name=s.broker, weekend_window=None),
                           exploration=None)
     ex = SimpleNamespace(db=_ReadOnlyLedger(aux))
     arms = {a: s.engine_arms[a] for a in sorted(active) if a in s.engine_arms}
-    return budget.session_budgets(eng, ex, s.daily, day, arms)  # type: ignore[arg-type]
+    out = budget.session_budgets(eng, ex, s.daily, day, arms)  # type: ignore[arg-type]
+    return out, budget.split_counts(eng, ex, day, arms)  # type: ignore[arg-type]
 
 
 # ------------------------------------------------------------------------------------------------ the verdict
@@ -306,7 +309,8 @@ def evaluate(s: AccountSupply, aux: Path, account_id: str, now: pd.Timestamp, se
     raw, blocked, engine_active = _enterable(s, led, thin_today)
     combos = {(s.arms[a].kind, s.arms[a].fast, s.arms[a].instrument if s.arms[a].kind == "thin" else "") for a in raw}
     cap = s.daily.max_per_day if s.daily is not None else None
-    budgets = _budgets(s, aux, account_id, day, engine_active, "exploration_obs" in tables) if s.daily else {}
+    budgets, split = (_budgets(s, aux, account_id, day, engine_active, "exploration_obs" in tables) if s.daily
+                      else ({}, None))
     grid = pd.date_range(day, now, freq="1min", inclusive="left")
     open_ = sessions.is_open(grid) if len(grid) else sessions.is_open(pd.DatetimeIndex([now]))
     segs = budget._segments([int(m.value) for m in grid])                  # the engine's day_segment, all at once
@@ -344,7 +348,7 @@ def evaluate(s: AccountSupply, aux: Path, account_id: str, now: pd.Timestamp, se
                    fills_today=len(today), max_per_day=cap,
                    day_spent=fast_spent or (cap is not None and len(today) >= cap), fast_spent=fast_spent,
                    spent_now=spent_now, budgets=budgets, last_fill=last, run_min=best[0], run_from=best[1],
-                   run_to=best[2])
+                   run_to=best[2], split=split)
 
 
 def _hm(ts: pd.Timestamp | None) -> str:
@@ -356,6 +360,8 @@ def describe(v: Silence) -> str:
     why = ", ".join(f"{n} {r}" for r, n in sorted(v.blocked.items(), key=lambda x: (-x[1], x[0])))
     fills = f"{v.fills_today} of {v.max_per_day}" if v.max_per_day is not None else f"{v.fills_today}"
     tail = f"; fills today {fills}, last fill {_hm(v.last_fill)}"
+    if v.split is not None:                  # '0 edge of 0' beside the replayed controls: not a dead account
+        tail += f"; session split from {v.split.line()}"
     if v.no_supply:
         return (f"no exploration arm may enter while the market is open: {v.configured} configured ({why or 'none'})"
                 f"{tail}. Volume returns only with new enterable arms ({RUNBOOK})")[:600]
