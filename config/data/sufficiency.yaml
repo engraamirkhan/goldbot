@@ -21,38 +21,45 @@ units:
     # day count, which would mix methods in one cell (was [527, 392, 292, 193, 149, 74, 30, 15, 7]).
     learn: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
     judge: null
-    items: [D-1, D-2, D-3, D-4, D-5gold]
+    items: [D-1, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
     # phase 0, `tfs` order (2h: no bar rule), judged head T2 after tier survival under the D-1 served tiers (sha256
     # ff653ea7) with each column set's input lookback (per-column registry lookbacks, two perturbations, 32 seeds; d1 in daily bars).
     # Outcome-blind skeleton counts; ADR 0085 A4 recorded the sha on 2026-11-26 (learn-window reads only). learn above
     # is now this measured core-12 row. test_old labels: sealed, counts only.
+    # measured.*[5] (2h) below were counted with the TF-2h bar rule and its measured lookbacks (PR #485); `learn`
+    # keeps 2h null (quant A2) until that rule is on main and the quant signs the promotion.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_T2_core6: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
-      learn_T2_core12: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
-      learn_T2_P30: [2151, 1617, 1222, 831, 660, null, 123, 0, 0]
-      learn_untiered: [7338, 5523, 4179, 2851, 2271, null, 604, 298, 208]
-      test_old_T2_core6: [157, 104, 56, 13, 0, null, 0, 0, 0]
+      learn_T2_core6: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
+      # R-a re-count 2026-11-26 (PR #492, same r5 events and weights, outcome-blind): +0 at every tf and column set;
+      # 2h is the TF-2h count (pre-R-a code), unchanged by R-a for the same binding column
+      learn_T2_core6_Ra: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
+      learn_T2_core12: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
+      learn_T2_P30: [2151, 1617, 1222, 831, 660, 357, 123, 0, 0]
+      learn_untiered: [7338, 5523, 4179, 2851, 2271, 1239, 604, 298, 208]
+      test_old_T2_core6: [157, 104, 56, 13, 0, 0, 0, 0, 0]
       test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
   fx10:
     method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "FX10 pooled (HistData, A/A-cons)"
+    # the card counts below are pooled at rho_inst 0.5; supply re-divides them at the D-12 binding fx10 rho (S-1)
+    card_pooled: {k: 10, rho_inst: 0.5, rho_inst_from: {file: docs/research/rho-measurement-2026-11.json, key: fx10, stat: max}}
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
     judge: [10948, 8133, 6056, 4009, 3094, 1547, 619, 309, 155]
-    items: [D-2, D-3, D-4, D-5fx]
+    items: [D-3, D-4, D-5fx]
     # D-5 measured (dl-v1, ADR 0104 4): EURUSD alone, same method, tiers and column sets as gold. Bid-only: barrier
     # labels need N7 before a judged read.
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_T2_core6: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
-      EURUSD_learn_T2_core12: [6996, 5238, 3907, 2607, 1968, null, 422, 35, 0]
-      EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, null, 422, 35, 0]
+      EURUSD_learn_T2_core6: [6996, 5238, 3907, 2607, 1968, 992, 422, 35, 0]
+      EURUSD_learn_T2_core12: [6996, 5238, 3907, 2607, 1968, 992, 422, 35, 0]
+      EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, 949, 422, 35, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:
     method: card-2.2                # until the dense factory runs this unit (quant A3)
@@ -62,7 +69,7 @@ units:
     # COUNT-mc (k 5): learn 465 A/A-cons + 6,872 A/A-cons/B days, judge 62 + 3,416 (intraday cells load nothing: B)
     learn: [548, 407, 303, 201, 155, 78, 31, 229, 115]
     judge: [73, 54, 40, 27, 21, 10, 4, 114, 57]
-    items: [D-2, D-3, D-4, D-5fx]
+    items: [D-3, D-4, D-5fx]
   index_energy_b:
     method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows)"
@@ -72,19 +79,18 @@ units:
     # was the card's 2018-25 count, 8,241 days, which overlaps this unit's learn window)
     learn: [81, 60, 45, 30, 23, 11, 5, 117, 58]
     judge: [0, 0, 0, 0, 0, 0, 0, 121, 60]
-    items: [D-2, D-3, D-4, D-5ie]
+    items: [D-3, D-4, D-5ie]
   independent_new:
     method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days"
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: null
     judge: null
-    items: [D-13, D-14, D-2, D-5ie]
+    items: [D-13, D-14, D-5ie]
 items:
   D-13: {gap: "too few independent instruments x days: the binding constraint, not rows", plan: "pre-screen (scripts/research/d13_independent_rank.py): order candidates by info_learn = projected A/B learn days x (1 - Dimson rho^2), rho over lags -1/0/+1 of daily returns vs gold on learn 2010-17 only; judge columns reported, never used to sort or filter. Admission: scripts/research/measure_rho.py on learn, day-mean rho_u,inst vs gold, upper 95 % bound, max over PC1 and per-instrument sign, <= 0.2 in every hold bucket. Admitted instruments: pull Dukascopy 1m (bid+ask) back to 2003 where listed and grade under r11-v2.1; instruments with no independent reference in config/history_sources.yaml can reach C only (crypto, agri, rates): add a reference era or a quant ruling first", owner: "data-engineer; quant (references)", due: "2026-12-11", status: not started, risk: AT RISK}
   D-14: {gap: "HistData months graded C have no second source", plan: "pull Dukascopy for the same instrument-months and grade it (one source per instrument-minute, A16 precedence manifest picks the graded one)", owner: data-engineer, due: "2026-12-09", status: not started, risk: AT RISK}
   D-1: {gap: "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)", plan: "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm", owner: "data-engineer (monthly grade, broker M1 capture) + quant-reviewer", due: "2026-12-02 (plan); read date set by graded n_eff", status: "fallback (i) closed 2026-11-26 (none admitted); (ii) active. Broker MT5 M1 from 2026-10-01 is captured daily by the brain's `feed_reconcile` (copy_rates_range, read-only bridge) into `bars_1m_broker`. That table has no retention pruning and is in the backup set (D-11/N13). A missed trading day raises the learning-liveness alert the same day. `scripts/broker_m1_capture.py` copies each closed month into raw/broker_m1/ with a sha256 per file and a gap log within 5 days of month-end, and before any grade. A month without a complete capture grades C. MT5 bars are Bid-built (MT5 Help, 'Charts', cited). The broker reference must pass (a)-(c) per month before it grades. Reference for (ii): icm-demo (the traded ICM feed). Fixed 2026-11-26, before any grade. Vantage and icm-probe are not graded against Dukascopy for D-1. If icm-demo fails (a)-(c) in a month, that month grades C. There is no switch to another account. Same-day alert and month copy: ops PR #471 (checks learning:broker_m1_capture and learning:broker_m1_copy, job broker_m1_copy); live after its deploy. Acceptance: the (ii) grading PR calls frozen_copy_for_grade and writes the returned sha into its tiers rows. Gate: no fallback-(ii) grade runs until learning:broker_m1_capture has passed once on the brain after deploy. Freeze: A closed month's copy must exist within 5 days of month-end (`learning:broker_m1_copy` FAILs otherwise). It stays rewritable until the broker back-fill window closes and freezes at day 8, after the last daily copy. No fallback-(ii) grade reads a month before it freezes; the grade records the frozen copy's sha256 in its tiers rows. A rewrite after the freeze gets a new sha256 and an entry in the gap log and `rewrites.jsonl`, and is graded only under the sha recorded in its tiers rows. If the feed_reconcile back-fill window changes, the freeze moves to (window + 1) days, in the same PR. Deadline: if #471 is not live by 2026-12-05, October and November are copied from the Mac by then and their sha256 recorded here. Owner data-engineer + SRE", risk: AT RISK}
-  D-2: {gap: "fs-v1 feature store not merged", plan: "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)", owner: data-engineer, due: "2026-12-04", status: PR open, risk: on track}
   D-3: {gap: "no side-aware r3 labels, synthetic ask, ub95 cost per class", plan: "W2-2 / A9 implementation", owner: implementer + microstructure-researcher, due: "2026-12-04", status: not started (not data-owned), risk: AT RISK}
   D-4: {gap: "exit templates T0-T7 not frozen", plan: "freeze W3-1 / RL-1 templates", owner: exits-researcher, due: "2026-12-02", status: unknown, risk: watch}
   D-5gold: {gap: "no dense labels: gold n_eff is projected, not measured", plan: "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.", owner: data-engineer + implementer, due: "2026-12-11", status: "factory built (dl-v1, ADR 0104); gold 2010-17 labelled + 2003-09 sealed, n_eff measured 2026-11-26; store sealed until A4 records the tiers sha", risk: watch}
@@ -96,6 +102,10 @@ tf_items:
   2h: [TF-2h]
 # items that hold no training cell but are owned here (listed in the table, not in a cell's certificate)
 other_items:
+  ADV-REF: {gap: "ADR 0106 real-money rule 'order <= about 1 % of daily volume' has no market-volume reference (broker tick volume is not market volume)", plan: "config/data/adv_reference.yaml values (schema from ADR 0106 lane 1): per instrument the exchange or survey reference, in USD notional per day, conservative leg only: gold = COMEX GC all-month daily volume x 100 oz x price (CME daily bulletin; LBMA OTC not counted), silver SI, WTI CL, indices their benchmark future (ES, NQ, FDAX, Z), FX = BIS Triennial 2025 spot turnover per pair (data.bis.org, reachable 2026-11-26); 20-day median where daily data exist; each value with source URL, as_of and review_by = as_of + 92 days; a stale value refuses real money like an unknown one. Values are counts, not market data: no price series is committed", owner: "data-engineer (values), implementer lane 1 (loader, fail-closed placeholder)", due: "2026-12-03", status: "method set 2026-11-26; CME pages refuse scripted reads (HTTP 403), bulletin PDF route being checked; values land after lane 1's schema", risk: watch}
+  LANE5-QC: {gap: "no dataset-version record; trainers do not refuse a version that failed QC (ADR 0106 gap map lane 5: OD2, OD6, GD1, GD2, GD4, A6, A7)", plan: "dataset_versions record (sha of minutes, tiers, label spec, feature spec) with a QC row per version: missing-bar share <= 0.1 % against the exchange calendar per (instrument, month), zero duplicate (instrument, ts_utc), two-source cross-check status (r11 tier / D-1 / D-14), regime coverage per asset and tf (rising / falling / sideways by trailing 20-bar return and ADX, defined before any read; >= N days each), leak traps L1-L14 run per version; trainers and dl-v1 loaders raise on a version whose QC row is not PASS", owner: data-engineer, due: "2026-12-11", status: "starts after the sufficiency PRs (2026-11-27); sufficiency files of PR #482 untouched", risk: watch}
+  D-12: {gap: "pooled n_eff divisor rho_u,inst unmeasured", plan: "scripts/research/measure_rho.py on learn", owner: "data-engineer + quant", due: "2026-12-09", status: "done (PR #466): binding day-mean rho_u,inst in docs/research/rho-measurement-2026-11.json; remaining: D-12a rho_x per column, label-blind", risk: done}
+  D-2: {gap: "fs-v1 feature store not merged", plan: "PR feat/feature-store-v1: vectorised PIT store, parity oracle >= 2,000 decisions per (instrument, tf)", owner: data-engineer, due: "2026-12-04", status: "done: merged in PR #462 (553d1d70); dl-v1 builds on it", risk: done}
   COUNT-mc: {gap: "metals/crosses n_eff not counted", plan: "outcome-blind n_eff count by the card 2.2 method from the r11 tiers", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26 (scripts/research/sufficiency_counts.py)", risk: done}
   COUNT-ie: {gap: "index/energy learn 2018-2021 (R-L) n_eff not counted", plan: "outcome-blind count with the unit's R-L windows", owner: data-engineer, due: "2026-11-28", status: "done 2026-11-26; judge row corrected to 2022-01..2025-09", risk: done}
   D-6: {gap: "X1 macro series lack actual release times", plan: "point-in-time X1 with release times (D9)", owner: macro-researcher + data-engineer, due: "2026-12-05", status: not started, risk: watch}
@@ -104,3 +114,46 @@ other_items:
   D-9: {gap: "no source-parity battery for served columns", plan: "A8: KS, rank corr, mean shift history vs ICM vs Vantage per column; serve only rank corr >= 0.9", owner: data-engineer, due: "2026-12-02", status: not started, risk: AT RISK}
   D-10: {gap: "no N4 provenance tags", plan: "tag inputs designed after a 2018-25 read", owner: evaluator + ml-researcher-staff, due: "2026-12-09", status: unknown, risk: watch}
   D-11: {gap: "label and feature caches have no backup", plan: "N13 backup to ops VM", owner: sre, due: "2026-12-11", status: unknown, risk: watch}
+# ---------------------------------------------------------------------------------------------------------------------
+# Consumers, pooled bodies and routes (owner directive 2026-11-26: the data team provides the data every model needs,
+# organic, pooled, synthetic or other; never "not enough data"). Owner: data-engineer. Plan dated 2026-11-26.
+# Each consumer's requirement is the one its card or plan states (SYNTH-ml 2026-11-25 items 10-17, card #460 rev 5);
+# where a plan states none, the Riley 430/input rule is applied to its input count and says so in `source`.
+plan_dated: "2026-11-26"
+consumers:
+  zoo-v2: {label: "history trainer zoo-v2 (L-cw, G-cw GBT-slow, HB, AVG; D-40 prior as 2 columns)", inputs: 10, keep_share: 0.33, tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w], source: "SYNTH-ml item 10; card #460 2.3 Riley on a 10-input block; 1m/5m are range/abstain filters only (R11)"}
+  sr-v3: {label: "sr-v3 served body at ladder level L3 (core-6)", inputs: 6, keep_share: 0.33, tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w], source: "card #460 rev 4 Q1: L3 = a 6-column core prefix that meets Riley; the 10-input row is zoo-v2's"}
+  x6: {label: "price-action block X6 served after core-6 (6 columns assumed until its card states p)", inputs: 12, keep_share: 0.33, tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w], source: "card #460 rev 4 served order: a block enters whole, so the need is 430 x (6 + p); p = 6 assumed"}
+  seq-1: {label: "SEQ-1 8-dim embedding as a block in zoo-v2, after core-6 (R-c)", inputs: 14, keep_share: 0.33, tfs: [1h, 2h, 4h, 1d], source: "quant R-c on #486: zoo-v2 may take SEQ-1's 8-dim embedding as a block only if SEQ-1's pretraining is outcome-free and the embedding is refit per outer fold on that fold's purged training rows (feature_store.purge, embargo >= TCN window + H), learn 2010-17 only; Riley charges 8 inputs; one block decision, K 1; A8 parity battery on the 8 dimensions. A label-trained embedding needs nested cross-fitting and its own card"}
+  rl-x1: {label: "RL-X1 offline fitted-Q exit policy (<= 25 state columns), one pooled policy with a tf stratum", inputs: 25, keep_share: 1.0, tfs: [1m, 5m, 15m, 30m, 1h, 2h, 4h], source: "SYNTH-ml item 12 / ml-5 P2: 1d/1w descriptive; every entry is judged (keep 1.0); Riley on the 25-column Q regression is this plan's reading, ml-researcher to confirm. Quant R-d: fits on learn 2010-01..2017-12, A/A-consistent rows only; learn_old 2003-05 only for A/A-consistent instrument-months (gold has none); test_old never fit, tuned or used for early stopping, read once under a booked id; holdout never read"}
+  agg-v1: {label: "agg-v1 AdaHedge over frozen models (forward only)", inputs: 0, keep_share: 0.33, tfs: [15m, 1h, 4h], forward_only: true, forward_n_eff: 200, source: "SYNTH-ml item 15 / ml-7: no fusion weight before forward n_eff >= 200 per cell; first judged read about 54 trading days at gold's 3.7 n_eff/day"}
+# Pooled bodies (card #460 Q2: one body per tf with instrument levels; aug-v1 A2 real cross-asset rows). Supply =
+# sum of the members' measured dl-v1 T2 core-6 learn n_eff / (1 + (k - 1) rho_inst), rho_inst = the D-12 binding
+# day-mean rho_u,inst of the body's membership at the tf's hold bucket (quant S-1 on #486; 0.2 is the D-13 admission
+# bound, never a divisor). R-e: this single divisor is reporting only; a pooled read's Stage 0 Riley gate uses card
+# 2.3's per-column charges with D-12 rho_u and D-12a rho_x frozen by hash. The judge row pools gold's D-1 count with
+# the FX10 card count split equally per pair (projected).
+pooled:
+  gold_fx:
+    label: "gold + graded FX pairs, one body per tf (A2 real rows)"
+    rho_inst_from: {file: docs/research/rho-measurement-2026-11.json, key: "gold+fx10", stat: max}   # D-12 binding
+    serves: [gold]          # once A2 pools gold into this body, the body's route gains reach gold's cells
+    learn_members:
+      XAUUSD: gold.learn_T2_core6
+      EURUSD: fx10.EURUSD_learn_T2_core6
+    judge_members:
+      XAUUSD: [527, 392, 292, 193, 149, 74, 30, 15, 7]
+      FX10_card_split: [6021, 4473, 3330, 2204, 1701, 850, 340, 169, 85]
+routes:
+  - {id: TF-2h, p_deliver: 1.0, basis: measured, kind: organic, title: "2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe)", gain_from: {measured_2h: true}, gain: {}, effort_days: 0.5, owner: data-engineer, due: "2026-11-26", status: "code done; PR open", pr: "data/tf-2h-bar-rule"}
+  - {id: A2-pool, p_deliver: 0.9, basis: measured, kind: pooled, title: "aug-v1 A2: pooled gold + FX body per tf (real rows, instrument levels, Q2 tie rule picks the body label-blind)", gain_from: {pooled: gold_fx, base: gold}, gain: {}, effort_days: 2, signoff: "quant (H-103 A2 card)", owner: "data-engineer + ml-researcher", due: "2026-12-04", status: "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)"}
+  - {id: D-12a, p_deliver: 1.0, kind: other, title: "D-12a: rho_x per column, label-blind (2010-11 fold, upper 95 % CI; the list includes rv_ratio at every tf, card 3.1 rev 8), frozen by hash for the Stage 0 per-column Riley charges (card 2.3 rev 4 Q1; R-e)", gain: {}, training_gain: "no cell-divisor gain: per-column charges set each pooled body's served prefix at Stage 0", effort_days: 2, signoff: quant, owner: data-engineer, due: "2026-12-02", status: "delegated 2026-11-26"}
+  - {id: GOLD-TIER, p_deliver: 1.0, basis: measured, kind: organic, title: "rule R-a (ADR 0104 4, quant ruling on #486): lookback months may be B for close-only columns (registry CLOSE_ONLY_COLUMNS); label window stays A / A-consistent; C, F, P never. Re-counted on the r5 gold events, not projected. HistData source switch refused (R-b)", gain_from: {measured: gold, to: learn_T2_core6_Ra, from: learn_T2_core6}, gain: {}, effort_days: 1, signoff: "quant (R-a signed)", owner: data-engineer, due: "2026-11-26", status: "re-counted 2026-11-26 (PR #492): +0 at every tf and column set; the binding column is atr_ratio_14_100 (810 bars, reads ranges, not close-only). Next lever is the quant's: a shorter slow-leg column (new spec id) or its place in the core order"}
+  - {id: DEEP-DAILY, p_deliver: 0.6, kind: organic, title: "deep daily history in a pre-learn window no read has touched: gold 1978-2002 (raw/daily/xauusd_daily_1978_present), XAG, index and energy daily from 1990 (free: FRED, Yahoo, Stooq) graded against a second daily source; T0 close-to-close labels at 1d/1w (projected by card 2.2, hold 10 / 20 days)", gain: {gold/1d: 630, gold/1w: 315, index_energy_b/1d: 1200, index_energy_b/1w: 600, metals_crosses_b/1d: 450, metals_crosses_b/1w: 225}, effort_days: 5, signoff: "quant + evaluator (new window)", owner: data-engineer, due: "2026-12-09", status: "not started; delegated 2026-11-26"}
+  - {id: BROKER-M1, p_deliver: 0.7, kind: organic, title: "broker MT5 M1 forward capture (D-1 fallback ii): gold judge rows from 2026-10-01 at card 2.2 per-day rates, about 65 trading days to 2026-12-31 if the months grade", gain: {"gold/1m:judge": 230, "gold/5m:judge": 171, "gold/15m:judge": 127, "gold/30m:judge": 84, "gold/1h:judge": 65}, effort_days: 0.5, signoff: quant, owner: "data-engineer + sre", due: "2026-12-31", status: "capture running (PR #471/#477); first grade after the November freeze"}
+  - {id: D-14, p_deliver: 0.4, kind: organic, title: "second source (Dukascopy 1m bid+ask) for HistData C/F/P months: index, energy, XAG, crosses intraday rows (B units load none today)", gain_from: {project: {index_energy_b: [4, 1000, 950], metals_crosses_b: [4, 2000, 1950]}}, gain: {}, effort_days: 5, owner: data-engineer, due: "2026-12-09", status: "not started; delegated 2026-11-26 (projected by card 2.2: 4 instruments per unit graded A where Dukascopy lists them, 2h/4h follow once graded)"}
+  - {id: D-13, p_deliver: 0.4, kind: organic, title: "admit independent instruments (index, energy, rates, crypto, agri, least-gold-correlated FX): pre-screen by Dimson ρ on learn; admission by measure_rho.py day-mean ρ_u,inst vs gold, upper 95 %, max over PC1 and per-instrument sign, ≤ 0.2 per hold bucket (ruling b); graded A on Dukascopy 1m bid+ask, pooled into the gold+FX body and the FX unit (projected by card 2.2 at rho 0.5: 6 instruments, 2,000 learn / 1,950 judge days)", gain_from: {project: {pooled_gold_fx: [6, 2000, 1950, all], fx10: [6, 2000, 1950, all]}}, gain: {}, effort_days: 6, signoff: "quant (references)", owner: "data-engineer; quant (references)", due: "2026-12-11", status: "pre-screen script exists (d13_independent_rank.py); pulls delegated 2026-11-26"}
+  - {id: A1-offsets, kind: synthetic, title: "aug-v1 A1 dense offset (phase) rows: training rows only, weight 1/P, purged with their real span", gain: {}, training_gain: "x1.5 magnitude, x1.86-2.13 sign information (ml-8 measured); counted 0 by card 2.2 until power accounting (SYNTH-ml item 2) is signed", effort_days: 0.5, signoff: quant, owner: "data-engineer + ml-researcher", due: "2026-12-04", status: "factory supports --phases; awaiting quant sign"}
+  - {id: A3-bagging, kind: synthetic, title: "aug-v1 A3 stationary-bootstrap bagging (training only)", gain: {}, training_gain: "variance reduction only; 0 n_eff", effort_days: 1, signoff: quant, owner: ml-researcher, due: "2027-01-15", status: "after the H-103 A1/A2 read"}
+  - {id: A4-generative, kind: synthetic, title: "GAN/diffusion rows", gain: {}, training_gain: "none counted; only if A3 passes", effort_days: 5, signoff: quant, owner: ml-researcher, due: "after the A3 verdict", status: "not scheduled"}
+  - {id: HEADS, kind: other, title: "multi-horizon heads (dl-v1 16 heads per bar) and 1d/1w labels decided on the 4h grid", gain: {}, training_gain: "more targets per event; n_eff counted once per event (uniqueness)", effort_days: 0.5, owner: data-engineer, due: "2026-11-26", status: "built (dl-v1)"}
