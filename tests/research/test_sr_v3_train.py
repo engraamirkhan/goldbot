@@ -724,3 +724,42 @@ def test_the_shuffle_check_passes_per_instrument_tf_session_cell(fitted: tuple) 
         assert {c.split("|")[1] for c in cells} <= {"asia", "london", "newyork"}
         want = all(c["false_keep_share"] <= G.MAX_FALSE_KEEP or c["kept"] < V.MIN_KEPT for c in cells.values())
         assert v["passed"] is want, name
+
+
+# ---------------------------------------------------------------------------------------------- M5: truncation
+def test_year_y_oof_scores_and_fold_priors_ignore_every_label_at_or_after_the_cut() -> None:
+    """Quant M5 on #488, end to end: perturb the labels of every row decided at or after year Y's start, or whose
+    horizon ends at or after Y's start minus the gap; year Y's OOF scores of L-cw, B8, HB, G-cw (every seed) and AVG
+    and fold Y's CostPriors are unchanged."""
+    Y = 2015
+    data, plan = _data(readable=False), _plan()
+    cut_dec = T.year_start(Y)
+    cut_hor = cut_dec - T.gap("4h")
+    bumped = {}
+    for k, f in data.frames.items():
+        hit = ((pd.to_datetime(f["decision_utc"], utc=True) >= cut_dec)
+               | (pd.to_datetime(f["horizon_end_utc"], utc=True) >= cut_hor)).to_numpy()
+        g = f.copy()
+        rng = np.random.default_rng(len(bumped))
+        g.loc[hit, "gross"] = rng.normal(3.0, 2.0, int(hit.sum()))
+        g.loc[hit, "t0_gross"] = rng.normal(-3.0, 2.0, int(hit.sum()))
+        g.loc[hit, "stop"] = ~g.loc[hit, "stop"].astype(bool)
+        g.loc[hit, "nights_held"] = g.loc[hit, "nights_full"]
+        bumped[k] = g
+    other = T.FrameData(bumped)
+
+    def run(d: T.FrameData) -> tuple[pd.DataFrame, T.DC.CostPriors]:
+        col = T.collect(d, plan, seed=T.SEEDS[0])
+        hb = T.hb_from_plans(d, [plan], seed=T.SEEDS[0])
+        res = T.fit_unit(d, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:2])
+        return res.oof[res.oof["year"] == Y].reset_index(drop=True), col.priors[Y].priors(cut_dec)
+    a, pa = run(data)
+    b, pb = run(other)
+    cols = [c for c in a.columns if c.startswith("v_")]
+    assert {"v_L-cw", "v_B8", "v_HB", "v_G-cw", "v_AVG"} <= set(cols) and any("@" in c for c in cols)
+    assert a["v_AVG"].notna().all()
+    for c in cols:
+        assert np.allclose(a[c].to_numpy(float), b[c].to_numpy(float), equal_nan=True), c
+    assert pa == pb
+    assert not np.allclose(T.FrameData(bumped).frame("XAUUSD", "4h", Y)["gross"],
+                           data.frame("XAUUSD", "4h", Y)["gross"]), "the perturbation reached year Y's labels"
