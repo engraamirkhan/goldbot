@@ -332,6 +332,22 @@ class PriorAcc:
                              n_rows=int(n), labelled_before=before.isoformat())
 
 
+def realised_cost(f: pd.DataFrame) -> np.ndarray:
+    """The realised cost leg of a read, in R (quant M2 on #488; card 3.4 "Realised net R in every read charges swap
+    per rollover actually held"): k·(RT_ub95 + OV·1[stop]) + nights held × the per-night swap. An outcome: reads
+    only, never a keep decision (cost(x), `cost_of`, keeps)."""
+    full = f["nights_full"].to_numpy(float)
+    per_night = np.divide(f["cost_c"].to_numpy(float), full, out=np.zeros(len(f)), where=full > 0)
+    return (f["cost_a"].to_numpy(float) + f["cost_b"].to_numpy(float) * f["stop"].to_numpy(float)
+            + per_night * f["nights_held"].to_numpy(float))
+
+
+def net_read(f: pd.DataFrame, *, gross: np.ndarray | None = None, mult: float = 1.0) -> np.ndarray:
+    """net_read = clip(gross − mult·realised cost): the net R every read statistic uses (M2)."""
+    g = f["gross"].to_numpy(float) if gross is None else gross
+    return np.asarray(O.clip_r(g - mult * realised_cost(f)))
+
+
 def cost_of(f: pd.DataFrame, pri: DC.CostPriors) -> np.ndarray:
     arm = arm_of(f)
     p = np.array([pri.p_stop.get(a, pri.p_stop_pooled) for a in arm])
@@ -608,8 +624,9 @@ def score_frame(f: pd.DataFrame, fm: FoldModels, seeds: Sequence[int]) -> pd.Dat
                         "decision_utc": f["decision_utc"].to_numpy(), "side": f["side"].to_numpy(int),
                         "horizon_end_utc": f["horizon_end_utc"].to_numpy(),
                         "day": np.asarray(session_date(f["decision_utc"]).astype(str)), "w": f["w"].to_numpy(float),
-                        "gross": O.clip_r(g), "cost": cost, "net": O.clip_r(g - cost),
-                        "net2": O.clip_r(g - 2 * cost), "entry": f["entry"].to_numpy(float),
+                        # net: cost(x)-net, the AVG calibrator's fit target; net_read / net2: the realised read (M2)
+                        "gross": O.clip_r(g), "cost": cost, "net": O.clip_r(g - cost), "net_read": net_read(f),
+                        "net2": net_read(f, mult=2.0), "entry": f["entry"].to_numpy(float),
                         "base_dist": f["base_dist"].to_numpy(float), "cost_rt_bp": f["cost_rt_bp"].to_numpy(float),
                         "hour": pd.DatetimeIndex(pd.to_datetime(f["decision_utc"], utc=True)).hour.to_numpy()})
     inst = out["instrument"].to_numpy()
@@ -664,11 +681,11 @@ def learner_read(o: pd.DataFrame, name: str) -> dict[str, Any]:
     k = o[f"k_{name}"].to_numpy(bool)
     if not len(o):
         return {"n": 0}
-    rd = O.read(o["net"].to_numpy(float), o["gross"].to_numpy(float), k, o["day"].to_numpy(),
+    rd = O.read(o["net_read"].to_numpy(float), o["gross"].to_numpy(float), k, o["day"].to_numpy(),
                 cost_x=o["cost"].to_numpy(float), boot=0, stress_keep=k)
     net2 = o["net2"].to_numpy(float)
     kf = np.zeros(len(k)) if rd.abstain else k.astype(float)
-    per_day = pd.Series(o["net"].to_numpy(float) * kf).groupby(o["day"].to_numpy()).sum()
+    per_day = pd.Series(o["net_read"].to_numpy(float) * kf).groupby(o["day"].to_numpy()).sum()
     return {"n": rd.n, "days": rd.n_days, "kept": rd.n_kept, "kept_days": rd.n_kept_days, "abstain": rd.abstain,
             "keep_share": rd.keep_share, "kept_mean_net": rd.kept_mean, "mean_net": rd.mean_net, "s": rd.s,
             "s_2x_cost": float((net2 * kf).mean() - max(0.0, float(net2.mean()))),
@@ -683,7 +700,7 @@ def paired_d(o: pd.DataFrame, a: str, b: str) -> dict[str, float]:
     x = o[ok]
     if not len(x):
         return {"n": 0}
-    d = x["net"].to_numpy(float) * (x[f"k_{a}"].to_numpy(float) - x[f"k_{b}"].to_numpy(float))
+    d = x["net_read"].to_numpy(float) * (x[f"k_{a}"].to_numpy(float) - x[f"k_{b}"].to_numpy(float))
     by_day = pd.Series(d).groupby(x["day"].to_numpy()).sum().sort_index().to_numpy()
     m, lo, hi = _day_boot(by_day)
     return {"n": int(len(x)), "days": int(len(by_day)), "d_per_day": m, "lo90": lo, "hi90": hi}
@@ -693,9 +710,9 @@ def twin_expectation(o: pd.DataFrame, name: str) -> float:
     """B7, the side- and hour-matched random twin at the learner's keep share per (side, hour) cell, in expectation
     (no draw): Σ_cells share · mean net · n / N − max(0, mean net)."""
     k = o[f"k_{name}"].to_numpy(float)
-    g = pd.DataFrame({"c": o["side"].astype(str) + "|" + o["hour"].astype(str), "k": k, "net": o["net"]})
+    g = pd.DataFrame({"c": o["side"].astype(str) + "|" + o["hour"].astype(str), "k": k, "net": o["net_read"]})
     agg = g.groupby("c").agg(share=("k", "mean"), mu=("net", "mean"), n=("net", "size"))
-    mean = float(o["net"].mean())
+    mean = float(o["net_read"].mean())
     return float((agg["share"] * agg["mu"] * agg["n"]).sum() / len(o) - max(0.0, mean))
 
 
@@ -725,8 +742,8 @@ def calibration(o: pd.DataFrame, name: str, kind: str) -> dict[str, Any]:
         cal = G.weighted_calibration(v[ok], o["gross"].to_numpy(float)[ok], w)
         return {"slope": cal.slope, "intercept": cal.intercept,
                 "r2_oos": G.mse_skill(v[ok], o["gross"].to_numpy(float)[ok], w)}
-    y = (o["net"].to_numpy(float)[ok] > 0).astype(float)
-    cw = O.net_logit_weights(o["net"].to_numpy(float)[ok], w)
+    y = (o["net_read"].to_numpy(float)[ok] > 0).astype(float)
+    cw = O.net_logit_weights(o["net_read"].to_numpy(float)[ok], w)
     cal = G.weighted_calibration(v[ok], y, cw)
     pl = L.fit_platt(v[ok], y, cw)
     return {"slope": cal.slope, "intercept": cal.intercept, "brier_skill_w": G.brier_skill(v[ok], y, cw),
@@ -739,7 +756,7 @@ def rank_diagnostics(o: pd.DataFrame, name: str, kind: str) -> dict[str, Any]:
     if ok.sum() < 50:
         return {}
     s = v[ok] - o["cost"].to_numpy(float)[ok] if kind == "gross" else v[ok]
-    net = o["net"].to_numpy(float)[ok]
+    net = o["net_read"].to_numpy(float)[ok]
     inst = o["instrument"].to_numpy()[ok]
     ic = {str(i): float(pd.Series(s[inst == i]).corr(pd.Series(net[inst == i]), method="spearman"))
           for i in np.unique(inst) if (inst == i).sum() > 10}
@@ -769,10 +786,8 @@ def _fit_score(name: str, tr: pd.DataFrame, te: pd.DataFrame, plan: UnitPlan, pr
     return L.keep("p", g.value(ted[list(cols)].to_numpy(float)), cost_te)
 
 
-def _s(te: pd.DataFrame, k: np.ndarray, pri: DC.CostPriors, gross: np.ndarray | None = None) -> float:
-    g = te["gross"].to_numpy(float) if gross is None else gross
-    net = O.clip_r(g - cost_of(te, pri))
-    return O.s_statistic(net, k.astype(float))
+def _s(te: pd.DataFrame, k: np.ndarray, gross: np.ndarray | None = None) -> float:
+    return O.s_statistic(net_read(te, gross=gross), k.astype(float))
 
 
 def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: Sequence[str] = ("L-cw", "HB", "G-cw"),
@@ -807,7 +822,7 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                             cost_of(te, pri))
             null = L.keep("gross", np.full(len(te), float(np.average(O.clip_r(g_tr), weights=tr["w"]))),
                           cost_of(te, pri))
-            sm, so, sn = (_s(te, kk, pri, g_te) for kk in (k, oracle, null))
+            sm, so, sn = (_s(te, kk, g_te) for kk in (k, oracle, null))
             rows.append({"delta": delta, "s_model": sm, "s_oracle": so, "s_null": sn,
                          "recovered": bool(so > sn and (sm - sn) >= 0.5 * (so - sn))})
         can[name] = rows
@@ -819,7 +834,7 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                        seed=seeds[0])
         k0 = L.keep("gross", np.full(len(te), float(np.average(O.clip_r(tr["gross"]), weights=tr["w"]))),
                     cost_of(te, pri))
-        y = te["gross"].to_numpy(float) - cost_of(te, pri) > 0
+        y = net_read(te) > 0
         npos, nneg = int(y.sum()), int((~y).sum())
         auc = G.within_arm_auc(k.astype(float), y, te["instrument"].astype(str).to_numpy())
         se = float(np.sqrt((npos + nneg + 1) / (12.0 * max(1, npos) * max(1, nneg))))
@@ -829,7 +844,7 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
     out["shuffle"] = sh
 
     def net_mean(k: np.ndarray) -> float:
-        return float((O.clip_r(te["gross"].to_numpy(float) - cost_of(te, pri)) * k).mean())
+        return float((net_read(te) * k).mean())
     lin = {"lambda": V.LAMBDA_ROWS, "lambda_a": plan.lam_a}
 
     def ev_lin(name: str) -> Any:
@@ -850,14 +865,13 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
     out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw"), rows=rk).model_dump(mode="json"),
                               "HB": MQ.param_shift(lin, ev_lin("HB"), rows=rk).model_dump(mode="json"),
                               "G-cw": MQ.param_shift(gb, ev_g, rows=rk).model_dump(mode="json")}
-    out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < SEED_SUBSAMPLE].reset_index(drop=True), te, plan,
-                                                pri, col.impute, seed=sd), pri) for sd in seeds]}
+    out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < SEED_SUBSAMPLE].reset_index(drop=True),
+                                                te, plan, pri, col.impute, seed=sd)) for sd in seeds]}
     curve = []
     order = np.argsort(_ns(tr["decision_utc"]), kind="stable")
     for n in (*[c for c in CURVE_SIZES if c < len(tr)], len(tr)):
         sub = tr.iloc[order[-n:]].reset_index(drop=True)     # the most recent n rows
-        curve.append({"n": int(n), "s": _s(te, _fit_score("L-cw", sub, te, plan, pri, col.impute, seed=seeds[0]),
-                                           pri)})
+        curve.append({"n": int(n), "s": _s(te, _fit_score("L-cw", sub, te, plan, pri, col.impute, seed=seeds[0]))})
     out["learning_curve_lcw"] = curve
     if plan.lcw_columns:
         yrs = pd.DatetimeIndex(pd.to_datetime(tr["decision_utc"], utc=True)).year.to_numpy()
@@ -1037,7 +1051,7 @@ def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModel
     rep["candidates"] = {"oof_rows": int(len(oof)), "per_year": {int(k): int(v) for k, v in gate10.items()},
                          "min_learn_1500": bool(col.n_rows >= V.MIN_LEARN_CANDIDATES),
                          "min_per_fold_60": bool(min(gate10.values()) >= V.MIN_PER_FOLD)}
-    mean_net = float(oof["net"].mean())
+    mean_net = float(oof["net_read"].mean())
     rep["baselines"] = {"B0_abstain": -max(0.0, mean_net), "B1_take_all": mean_net - max(0.0, mean_net),
                         "B8_intercept_only": learner_read(oof, "B8"), "buy_and_hold": buy_and_hold(oof)}
     for name in BUILT:
@@ -1139,7 +1153,7 @@ def row_edge(oof: pd.DataFrame, kind: str, col: str) -> np.ndarray:
     """Net R after cost per OOF decision row, 0 where the learner does not keep (model_quality's read)."""
     v = oof[col].to_numpy(float)
     k = np.isfinite(v) & L.keep(kind, np.nan_to_num(v, nan=-np.inf), oof["cost"].to_numpy(float))  # type: ignore[arg-type]
-    return oof["net"].to_numpy(float) * k
+    return oof["net_read"].to_numpy(float) * k
 
 
 def rows_key(f: pd.DataFrame) -> str:

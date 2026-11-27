@@ -672,3 +672,30 @@ def test_a_fold_with_no_training_row_under_the_gap_is_skipped_and_reported(monke
     res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1])
     assert res.report["folds_without_training_rows"] == [2012, 2013, 2014]
     assert set(res.oof["year"]) == {2015, 2016, 2017}
+
+
+# ---------------------------------------------------------------------------------------------- M2: net_read
+def test_net_read_charges_the_realised_overshoot_and_the_nights_held() -> None:
+    """Quant M2 on #488: net_read = gross − k·(RT_ub95 + OV·1[stop]) − nights held × swap; cost(x) keeps."""
+    f = _frame("XAUUSD", 2013).head(200)
+    full = f["nights_full"].to_numpy(float)
+    per_night = np.divide(f["cost_c"].to_numpy(float), full, out=np.zeros(len(f)), where=full > 0)
+    want = np.clip(f["gross"] - f["cost_a"] - f["cost_b"] * f["stop"] - per_night * f["nights_held"], -10, 10)
+    assert np.allclose(T.net_read(f), want)
+    stop, held = f["stop"].to_numpy(bool), f["nights_held"].to_numpy(float)
+    calm = ~stop & (held == 0)
+    assert np.allclose(T.net_read(f)[calm], np.clip(f["gross"] - f["cost_a"], -10, 10)[calm]), "no stop, no night"
+    assert (T.net_read(f)[stop] < np.clip(f["gross"] - f["cost_a"], -10, 10)[stop]).all(), "OV only on stops"
+
+
+def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) -> None:
+    _, _, res = fitted
+    o, r = res.oof, res.report
+    assert not np.allclose(o["net_read"], o["net"]), "the fixture's realised leg differs from cost(x)"
+    mean = float(o["net_read"].mean())
+    assert r["baselines"]["B1_take_all"] == pytest.approx(mean - max(0.0, mean))
+    lr = T.learner_read(o, "L-cw")
+    assert lr["mean_net"] == pytest.approx(mean)
+    k = o["k_L-cw"].to_numpy(float)
+    assert lr["s_2x_cost"] == pytest.approx(float((o["net2"] * k).mean() - max(0.0, float(o["net2"].mean()))))
+    assert np.array_equal(o["k_L-cw"], o["v_L-cw"] - o["cost"] > 0), "keep is ĝ − cost(x) > 0, never realised"
