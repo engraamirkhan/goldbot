@@ -64,17 +64,20 @@ def _costs(a: argparse.Namespace) -> T.CostTable | None:
     return T.CostTable.from_manifest(a.cost_manifest) if a.cost_manifest else None
 
 
-def _key(unit: str, a: argparse.Namespace) -> str:
-    """This run's read-once key for `unit` (the same in phase 1 and phase 3)."""
-    c = _costs(a)
-    return ST.run_key(unit, [m for m in a.members.split(",") if m],
-                     cost_version=c.version if c else T.W2_COST_VERSION)
-
-
-def _store(a: argparse.Namespace, unit: str | None = None) -> ST.StoreData:
+def _store(a: argparse.Namespace, unit: str | None = None, key: str | None = None) -> ST.StoreData:
+    """A fit store (no booking), or with `key` a read's store: every label load needs the unit's booking (N1)."""
     return ST.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
-                       ledger=Path(a.ledger), rho=Path(a.rho), costs=_costs(a), unit=unit,
-                       read_key=_key(unit, a) if unit else None)
+                        ledger=Path(a.ledger), rho=Path(a.rho), costs=_costs(a), unit=unit, read_key=key,
+                        read=key is not None)
+
+
+def frozen_fit(unit: str, a: argparse.Namespace) -> dict[str, Any]:
+    """The frozen fit-only run a read is keyed on (its report: artifact shas and the sealed OOF scores sha)."""
+    p = Path(a.out) / unit / "report.json"
+    rep = json.loads(p.read_text()) if p.exists() else {}
+    if not rep.get("artifacts") or not rep.get("oof_scores_sha256"):
+        raise SystemExit(f"refused --read of {unit}: no frozen fit-only run in {p.parent} (run fit-only first)")
+    return dict(rep)
 
 
 def require_trial(trial_id: int | None) -> None:
@@ -111,8 +114,6 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if extra:                    # quant M1 on #488: a served block column's longer lookback widens the unit's gap
         from goldbot.research import dense_labels as D
         plan.extra_lookback_s = max(D.input_lookback(t, extra).total_seconds() for t in plan.tfs)
-    # quant H3 on #488: the unit's learn read is booked in the read-once ledger before its first label read
-    ST.book_learn_read(Path(a.ledger), unit, _key(unit, a))
     col = T.collect(store, plan, seed=T.SEEDS[0])
     save_collected(col, out)
     (out / "plan.json").write_text(json.dumps(plan.__dict__, indent=1, default=str))
@@ -184,14 +185,22 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if not (out / "collected.json").exists():
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
-    store, plan = _store(a, unit), _plan(out)
+    key = None
+    if a.read:            # quant N1 on #488: the read books sr-v3:<unit> once, keyed on the frozen fit-only run
+        frozen = frozen_fit(unit, a)
+        key = ST.read_key(frozen)
+        ST.book_learn_read(Path(a.ledger), unit, key)
+    store, plan = _store(a, unit, key), _plan(out)
     res = R.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read,     # type: ignore[arg-type]
                      trial_id=a.trial_id)
+    if a.read and (res.report["artifacts"] != frozen["artifacts"]
+                   or res.report["oof_scores_sha256"] != frozen["oof_scores_sha256"]):
+        raise SystemExit(f"refused --read of {unit}: the refit does not reproduce the frozen fit-only run")
     hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
     tiers = Path(a.tiers)
     mans = R.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
                          source={"kind": "store", "labels": str(a.labels), "features": str(a.features),
-                                 "tiers_file": tiers.name, "unit": unit, "read_key": _key(unit, a),
+                                 "tiers_file": tiers.name, "unit": unit, "read_key": key,
                                  "cost_manifest": a.cost_manifest},
                          data_root=tiers.parent, data_files=[tiers.name], hb_plans=hb_plans,
                          root=Path(a.out) / "manifests")

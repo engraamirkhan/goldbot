@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import zlib
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -215,9 +216,7 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
         raise D.SealedStore("sealed")
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", sealed)
-    ST.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
-                        read_key="run-a")
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     with pytest.raises(D.SealedStore):
         store.frame("XAUUSD", "4h", 2013)
@@ -432,9 +431,7 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
     empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
     monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
     monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
-    ST.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
-                        read_key="run-a")
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
     store.frame("XAUUSD", "4h", 2013)
@@ -446,7 +443,7 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
 
 
 # ---------------------------------------------------------------------------------------------- H4: one ledger
-def _cli() -> object:
+def _cli() -> Any:
     import importlib.util
     spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
     assert spec and spec.loader
@@ -467,7 +464,7 @@ def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypa
     want = default_registry().with_name(T.WN.READS_LEDGER)
     assert want == _ledgers()[0]
     assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
-    assert Path(_cli().parser().parse_args([]).ledger) == want   # type: ignore[attr-defined]
+    assert Path(_cli().parser().parse_args([]).ledger) == want
     monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
     assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
 
@@ -494,7 +491,7 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     data, plan = _data(readable=False), _plan()
     store = _FixtureStore(data.frames)
     s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
-    monkeypatch.setattr(cli, "_store", lambda a, unit=None: store)
+    monkeypatch.setattr(cli, "_store", lambda a, unit=None, key=None: store)
     monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
     monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
     tiers = tmp_path / "tiers.csv"
@@ -502,13 +499,13 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
                            tiers=str(tiers), rho=str(RHO_FILE), ledger=str(tmp_path / "l.jsonl"), out=str(tmp_path / "o"),
                            stage0_only=False, read=False, cost_manifest=None, trial_id=None)
-    cli.phase1("4h", a)                                                                   # type: ignore[attr-defined]
+    cli.phase1("4h", a)
     col = T.collect(data, plan, seed=T.SEEDS[0])
     saved = json.loads((tmp_path / "o" / "4h" / "collected.json").read_text())
     assert pd.Timestamp(saved["train_end"]) == col.train_end
     assert pd.Timestamp(saved["label_end_max"]) == col.label_end_max
-    cli.phase2(["4h"], a)                                                                 # type: ignore[attr-defined]
-    out = cli.phase3("4h", a)                                                             # type: ignore[attr-defined]
+    cli.phase2(["4h"], a)
+    out = cli.phase3("4h", a)
     root = tmp_path / "o" / "manifests"
     files = sorted(root.glob("*.json"))
     report = json.loads((tmp_path / "o" / "4h" / "report.json").read_text())
@@ -517,8 +514,8 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     for mid in report["manifests"].values():
         m = RM.load(mid, root)
         assert m.train_end == col.train_end and m.label_end_max == col.label_end_max
-    rows = [r for r in T.WN.read_ledger(tmp_path / "l.jsonl") if r.get("family") == "sr-v3:4h"]
-    assert len(rows) == 1 and rows[0]["window"] == "learn", "phase 1 books the unit's learn read once (quant H3)"
+    assert not [r for r in T.WN.read_ledger(tmp_path / "l.jsonl") if r.get("family") == "sr-v3:4h"], \
+        "a fit-only run books no read-once row (quant N1)"
 
 
 def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -790,37 +787,102 @@ def test_every_sr_v3_unit_is_a_read_once_family_of_learn() -> None:
     assert {f for f in T.WN.READ_ONCE_FAMILIES if f.startswith("sr-v3:")} == {f"sr-v3:{u}" for u in V.UNITS}
 
 
-def test_a_unit_books_its_learn_read_once_per_run_key(tmp_path: Path) -> None:
-    """Quant H3 on #488: record_read_once per unit before the first label read. The same run (key) continues
-    without a second row (phase 3 after phase 1, or the read after the fit of the same frozen run); any other run of
-    the unit raises AlreadyRead; units are independent."""
+def test_a_unit_books_its_learn_read_once(tmp_path: Path) -> None:
+    """Quant N1 on #488: the unit's read-once row is written only by a read; a second read of the unit, under the
+    same key or another, raises AlreadyRead; units are independent."""
     led = tmp_path / "window_reads.jsonl"
-    ST.book_learn_read(led, "4h", "run-a")
-    ST.book_learn_read(led, "4h", "run-a")
+    ST.book_learn_read(led, "4h", "read-a")
     rows = T.WN.read_ledger(led)
-    assert len(rows) == 1 and rows[0]["family"] == "sr-v3:4h" and rows[0]["key"] == "run-a"
-    with pytest.raises(T.WN.AlreadyRead):
-        ST.book_learn_read(led, "4h", "run-b")
-    ST.book_learn_read(led, "1h", "run-b")
+    assert len(rows) == 1 and rows[0]["family"] == "sr-v3:4h" and rows[0]["ref"]["read_key"] == "read-a"
+    for key in ("read-a", "read-b"):
+        with pytest.raises(T.WN.AlreadyRead):
+            ST.book_learn_read(led, "4h", key)
+    ST.book_learn_read(led, "1h", "read-b")
     assert len(T.WN.read_ledger(led)) == 2
 
 
-def test_the_store_refuses_a_label_read_its_unit_has_not_booked(monkeypatch: pytest.MonkeyPatch,
-                                                              tmp_path: Path) -> None:
-    def boom(*a: object, **k: object) -> None:
-        raise AssertionError("a label was read before the unit's learn read was booked")
+def test_the_key_of_a_read_is_the_frozen_fit(tmp_path: Path) -> None:
+    rep = {"artifacts": {"L-cw": "a" * 64, "B8": "b" * 64}, "oof_scores_sha256": "c" * 64}
+    k = ST.read_key(rep)
+    assert k == ST.read_key({**rep, "note": "x"}) and len(k) == 64
+    assert k != ST.read_key({**rep, "oof_scores_sha256": "d" * 64})
+    assert k != ST.read_key({**rep, "artifacts": {"L-cw": "e" * 64, "B8": "b" * 64}})
+
+
+def test_only_a_read_store_refuses_an_unbooked_label_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def sealed(*a: object, **k: object) -> None:
+        seen.append("load")
+        raise D.SealedStore("sealed")
     _sequenced(monkeypatch)
-    monkeypatch.setattr(D, "load_labels", boom)
+    monkeypatch.setattr(D, "load_labels", sealed)
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     led = tmp_path / "l.jsonl"
-    for kw in ({}, {"unit": "4h", "read_key": "run-a"}):
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    with pytest.raises(D.SealedStore):          # fit-only: consume rows only, no booking needed
+        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led).frame("XAUUSD", "4h", 2013)
+    assert seen == ["load"]
+    for kw in ({"unit": "4h", "read_key": None}, {"unit": "4h", "read_key": "read-a"}):
         with pytest.raises(ST.ReadNotBooked):
-            ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, **kw).frame(  # type: ignore[arg-type]
-                "XAUUSD", "4h", 2013)
-    ST.book_learn_read(led, "4h", "run-b")
-    with pytest.raises(ST.ReadNotBooked):            # another run's booking is not this run's
-        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, unit="4h",
-                    read_key="run-a").frame("XAUUSD", "4h", 2013)
+            ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, **kw,
+                         read=True).frame("XAUUSD", "4h", 2013)
+    ST.book_learn_read(led, "4h", "read-b")
+    with pytest.raises(ST.ReadNotBooked):            # another read's booking is not this read's
+        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+                     read_key="read-a", read=True).frame("XAUUSD", "4h", 2013)
+    with pytest.raises(D.SealedStore):
+        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+                     read_key="read-b", read=True).frame("XAUUSD", "4h", 2013)
+
+
+def test_fit_only_reruns_never_book_and_the_read_books_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant N1 on #488: fit-only runs (also after a label spec or trainer code change) write no read-once row and
+    never raise; `--read` books sr-v3:<unit> at the start of phase 3, keyed on the frozen fit, and succeeds once; a
+    second `--read` raises AlreadyRead."""
+    import argparse
+    from types import SimpleNamespace
+    cli = _cli()
+    data, plan = _data(), _plan()
+    store = _FixtureStore(data.frames, gate=ELIGIBLE, cost_version="fixture-ub95")
+    s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
+    monkeypatch.setattr(cli, "_store", lambda a, unit=None, key=None: store)
+    monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
+    monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    led = tmp_path / "l.jsonl"
+    a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
+                           tiers=str(tiers), rho=str(RHO_FILE), ledger=str(led), out=str(tmp_path / "o"),
+                           stage0_only=False, read=False, cost_manifest=None, trial_id=TRIAL)
+
+    def fit_only() -> None:
+        cli.phase1("4h", a)
+        cli.phase2(["4h"], a)
+        cli.phase3("4h", a)
+    fit_only()
+    monkeypatch.setattr(D, "spec_hash", lambda *x, **k: "f" * 64)          # a label spec change
+    monkeypatch.setattr(T, "code_version", lambda *x, **k: {"files": {"changed": "1"}})   # a trainer code change
+    fit_only()
+    assert not [r for r in T.WN.read_ledger(led) if str(r.get("family", "")).startswith("sr-v3:")]
+    a.read = True
+    out = cli.phase3("4h", a)
+    assert out["mode"] == "read"
+    rows = [r for r in T.WN.read_ledger(led) if r.get("family") == "sr-v3:4h"]
+    assert len(rows) == 1 and rows[0]["ref"]["label_spec_hash"] == "f" * 64
+    with pytest.raises(T.WN.AlreadyRead):
+        cli.phase3("4h", a)
+
+
+def test_a_read_refuses_without_a_frozen_fit_only_run(tmp_path: Path) -> None:
+    import argparse
+    cli = _cli()
+    a = argparse.Namespace(out=str(tmp_path / "o"), read=True)
+    (tmp_path / "o" / "4h").mkdir(parents=True)
+    (tmp_path / "o" / "4h" / "collected.json").write_text("{}")
+    with pytest.raises(SystemExit, match="fit-only"):
+        cli.frozen_fit("4h", a)
 
 
 def test_a_judged_unit_reads_only_under_a_booked_trial_id() -> None:

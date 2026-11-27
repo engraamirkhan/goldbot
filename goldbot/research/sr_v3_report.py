@@ -577,7 +577,7 @@ def build_artifact(spec: Any) -> bytes:
         st = cfg["source"]
         data = StoreData(labels=Path(st["labels"]), features=Path(st["features"]),
                          tiers_path=Path(spec.data_files[st["tiers_file"]]), unit=st.get("unit"),
-                         read_key=st.get("read_key"),
+                         read_key=st.get("read_key"), read=st.get("read_key") is not None,
                          costs=CostTable.from_manifest(st["cost_manifest"]) if st.get("cost_manifest") else None)
     plan = plan_of(cfg["plan"])
     seeds = tuple(int(s) for s in spec.seeds)

@@ -2,15 +2,16 @@
 the dl-v1 label store, the fs-v1 feature store and the uniqueness weights, read ONLY through
 `dense_labels.load_labels` on the learn window, and every refusal in front of a label read:
 - quant sequencing on #482 (`sequencing_gaps`, `SequencingRefused`);
-- the read-once booking of each unit's learn read (quant H3 on #488: `book_learn_read`, `require_booked`, family
-  `sr-v3:<unit>` in windows.READ_ONCE_FAMILIES), in the ledger beside the research registry (H4, `default_ledger`);
+- the read-once booking of each unit's learn read, by a read only (quant H3/N1 on #488: `book_learn_read`,
+  `require_booked`, family `sr-v3:<unit>` in windows.READ_ONCE_FAMILIES), in the ledger beside the research registry
+  (H4, `default_ledger`); fit-only label loads are ledgered by load_labels' consumption rows only;
 - load_labels' gate status per load, kept for the report and every manifest (H2).
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,6 @@ from goldbot.research.sr_v3_train import (
     ROW_COLS,
     W2_COST_VERSION,
     CostTable,
-    code_version,
     cost_parts,
 )
 
@@ -76,35 +76,34 @@ def learn_family(unit: str) -> str:
     return f"sr-v3:{unit}"
 
 
-def book_learn_read(ledger: Path | str, unit: str, run_key: str) -> None:
-    """Quant H3 on #488: record the unit's learn read (`windows.record_read_once`) BEFORE its first label read. The
-    same run key continues without a new row (phase 3 after phase 1; the read after the fit of the same frozen run:
-    same code, data and plan, so the same rows and fits); another run key of the unit raises `AlreadyRead`."""
-    fam = learn_family(unit)
-    if any(r.get("family") == fam and r.get("window") == WN.Window.LEARN.value and r.get("key") == run_key
-           for r in WN.read_ledger(ledger)):
-        return
-    WN.record_read_once(ledger, fam, WN.Window.LEARN, ref={"procedure": V.SPEC_VERSION, "unit": unit,
-                                                          "manifest_key": MANIFEST_KEY}, resume_key=run_key)
-
-
-def require_booked(ledger: Path | str, unit: str | None, run_key: str | None) -> None:
-    """Refuse a label read unless this run (`run_key`) booked its unit's learn read in `ledger`."""
-    fam = learn_family(unit) if unit else None
-    if fam is None or run_key is None or not any(
-            r.get("family") == fam and r.get("window") == WN.Window.LEARN.value and r.get("key") == run_key
-            for r in WN.read_ledger(ledger)):
-        raise ReadNotBooked(f"refused the label read: unit {unit!r} run {run_key!r} has no learn booking in {ledger} "
-                            "(book_learn_read before the first label read; quant H3 on #488)")
-
-
-def run_key(unit: str, members: Sequence[str], *, cost_version: str = W2_COST_VERSION) -> str:
-    """The run's identity for its read-once booking: manifest key, unit, members, label spec and code hashes, the
-    trainer's code files and the cost version (the same in phase 1 and phase 3 of one run)."""
+def book_learn_read(ledger: Path | str, unit: str, key: str) -> None:
+    """Quant N1 on #488: a READ books the unit's learn read (`windows.record_read_once`, family `sr-v3:<unit>`) at the
+    start of phase 3, before its first label read, keyed on the frozen fit (`read_key`). Once per unit: a second read,
+    under any key, raises `AlreadyRead`. A fit-only run never books (its label loads are ledgered by load_labels'
+    consumption rows only), so refits after a spec or code change never burn the read."""
     from goldbot.research import dense_labels as D
-    blob = {"manifest_key": MANIFEST_KEY, "unit": unit, "members": sorted(members), "spec": D.spec_hash(),
-            "code": D.code_hash(), "trainer": code_version()["files"], "costs": cost_version}
+    WN.record_read_once(ledger, learn_family(unit), WN.Window.LEARN,
+                        ref={"procedure": V.SPEC_VERSION, "unit": unit, "manifest_key": MANIFEST_KEY, "read_key": key,
+                             "label_spec_hash": D.spec_hash()})
+
+
+def read_key(frozen: Mapping[str, Any]) -> str:
+    """The key of a read: the frozen fit-only run's artifact shas and sealed OOF scores sha, and the label spec hash
+    (quant N1 on #488)."""
+    from goldbot.research import dense_labels as D
+    blob = {"artifacts": dict(sorted((frozen.get("artifacts") or {}).items())),
+            "oof_scores_sha256": frozen.get("oof_scores_sha256"), "label_spec_hash": D.spec_hash()}
     return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
+
+
+def require_booked(ledger: Path | str, unit: str | None, key: str | None) -> None:
+    """A read's label load refuses unless this read (`key`) booked its unit's learn read in `ledger`."""
+    fam = learn_family(unit) if unit else None
+    if fam is None or key is None or not any(
+            r.get("family") == fam and r.get("window") == WN.Window.LEARN.value
+            and (r.get("ref") or {}).get("read_key") == key for r in WN.read_ledger(ledger)):
+        raise ReadNotBooked(f"refused the read's label load: unit {unit!r} read {key!r} has no learn booking in "
+                            f"{ledger} (book_learn_read at the start of phase 3; quant N1 on #488)")
 
 
 def default_ledger() -> Path:
@@ -128,8 +127,9 @@ class StoreData:
     weights: Path | None = None
     rho: Path | None = None                              # the D-12 rho file Stage 0 read (in the data version, H5)
     costs: CostTable | None = None                       # the per-cell cost of record (H1); None = w2-point
-    unit: str | None = None                              # the unit and run whose learn read is booked (H3)
+    unit: str | None = None                              # the unit and read whose learn read is booked (N1)
     read_key: str | None = None
+    read: bool = False                                   # a read's store: every label load needs the booking
     # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
     # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
     ledger: Path = field(default_factory=lambda: default_ledger())
@@ -196,7 +196,8 @@ class StoreData:
     def _learn_frame(self, instrument: str, tf: str, phases: Sequence[int]) -> pd.DataFrame:
         from goldbot.research import dense_labels as D
         refuse_unsequenced(f"the label read {instrument} {tf}")
-        require_booked(self.ledger, self.unit, self.read_key)
+        if self.read:
+            require_booked(self.ledger, self.unit, self.read_key)
         from goldbot.research import feature_store as F
         from goldbot.research.self_retrain import design
         ks = {(y, int(p)): k for y in V.LEARN_YEARS for p in phases
@@ -276,4 +277,4 @@ class StoreData:
 
 
 __all__ = ["ReadNotBooked", "SequencingRefused", "StoreData", "book_learn_read", "default_ledger", "learn_family",
-           "refuse_unsequenced", "require_booked", "run_key", "sequencing_gaps"]
+           "read_key", "refuse_unsequenced", "require_booked", "sequencing_gaps"]
