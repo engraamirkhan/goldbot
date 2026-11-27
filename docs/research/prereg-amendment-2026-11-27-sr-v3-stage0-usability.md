@@ -38,14 +38,13 @@ Cause, re-derived by the research director from the tiers file and the code path
   and listed (ADR 0108 decision 4, unchanged). Their P30 medians come from their own smallest fold with usable rows.
   They stay unjudged and sealed (zoo-v2), so they add 0 K.
 - **Pooled body.** The same per-prefix rule for every member, on the pooled level order.
+- **Row sets for comparisons and priors (quant C1).** Every read statistic of the judged learner, its baselines B0-B8, the twin, the fold cost priors (p_stop, night share) and gates 10-12 are computed on one population, the rows usable under the served columns. A comparison between the judged learner and a P30-wide learner (paired D, AVG inputs) is computed only on the intersection of their usable rows, and that row count is reported beside it. Every ladder prefix and every candidate served prefix is charged in full, with all its parameters, on its own usable rows; the charges are never computed incrementally on one row set.
 
 **D2. Folds unchanged.** Smallest fold 2010-11, first OOF 2012; remedy (b) (fold 2010-13, first OOF 2014) only for a
 unit still below L3 after (a). Code fix: `decide_unit` must try (b) when the gold body has no usable row on (a), and
 return NOT STARTED (data) only when gold has no usable row on both folds.
 
-**D3. Gap unchanged.** Quant M1 on #488 (max over P30 and the served columns) stands. It is conservative: it costs
-training rows, never honesty. The quant may rule separately, label-blind, on a per-learner gap. This amendment does not
-assume that ruling.
+**D3. Gap per quant ruling on #488 (2026-11-27, quant C2):** gap = max(1 d, max H over the unit's tfs) for every unit and learner (1d+1w: 20 d). Under expanding forward folds with a full-horizon purge, an input lookback carries no information from after the cut, so it is not in the gap.
 
 **D4. Disclosure.** The Stage 0 report lists, per unit, the C and B months excluded in 2010-17 and the realised-vol
 tercile mix of the excluded vs kept months (`confirm_disclosure` method, applied to learn), before Stage L.
@@ -102,7 +101,7 @@ of the grid approximation. Core-6/core-12 rows in section 4 come from the same r
 
 | Owner | Change | Acceptance check |
 |---|---|---|
-| implementer (PR #488) | `stage0`/`stage0_counts`: usable per ladder prefix via `attach_tiers(columns=prefix)`; `decide_unit` tries (b) before NOT STARTED; L-cw train/impute/score on the served-columns mask; HB/G-cw keep P30 and skip empty folds | Failing tests first: (i) a fixture with a B/C month 60 days before an A month gives core-6 rows and 0 P30 rows; (ii) `decide_unit` with no (a) rows and (b) rows returns fit on (b); (iii) on the served tiers file, Stage 0 gold fold 2010-11 core-6 1m rows = 377,337 ± 1 %; card test 18 (iv) still label-blind |
+| implementer (PR #488) | `stage0`/`stage0_counts`: usable per ladder prefix via `attach_tiers(columns=prefix)`; `decide_unit` tries (b) before NOT STARTED; L-cw train/impute/score on the served-columns mask; HB/G-cw keep P30 and skip empty folds | Failing tests first: (i) a fixture with a B/C month 60 days before an A month gives core-6 rows and 0 P30 rows; (ii) `decide_unit` with no (a) rows and (b) rows returns fit on (b); (iii) on the served tiers file, Stage 0 gold fold 2010-11 core-6 1m rows = 377,337 ± 1 %; card test 18 (iv) still label-blind. Quant C3: `load_labels` is called with `columns` = the narrowest served column set of the unit (so it drops no row the judged learner needs). The P30 mask for HB, G-cw and AVG is applied in the trainer with `attach_tiers(columns=P30)`, never by a second label load. Test (iv): a fixture with a C month inside the P30 lookback but outside the core-6 lookback is kept for L-cw and dropped for HB. |
 | data-engineer | Training sets carry every `label_ok` row 2010-17 with fs-v1 features. Rows are not filtered by the P30 mask, and `usable` is not precomputed for P30 only. Per-row `decision_utc`, `horizon_end_utc`, `tf`, `template` stay so the trainer can mask per column set | Yearly row counts per tf match section 4's synthetic grid within 2 % (1m-1h), and features are non-NaN outside warm-up for core-12 in 2010-13 A months |
 | ml-researcher | Republish the 2.3 ladder table with the measured ρ inputs on the D1 counts before Stage 0 | Table in the Stage 0 report, hashes recorded |
 | quant-reviewer | Signs D1-D4 (required) | Sign-off line below |
@@ -111,5 +110,5 @@ of the grid approximation. Core-6/core-12 rows in section 4 come from the same r
 ## Sign-off
 
 - Research director, 2026-11-27: written label-blind; no sr-v3 label, Stage 0 or L statistic read.
-- Quant-reviewer: pending.
+- Quant-reviewer, 2026-11-27: signed with C1-C3 (inserted verbatim above). Notes: 4h fails gate 10 mechanically (OOF 2012 45 rows, 2013 0 under core-6), report it and do not re-fold; if the excluded months' vol mix differs from the kept months', the judged S applies only to the kept regime mix and the report says so.
 - Evaluator: pending.
