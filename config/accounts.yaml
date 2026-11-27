@@ -837,17 +837,18 @@ accounts:
     magic_base: 260300
     enabled: false  # only the owner's `unlock-live icm-live` and typed phrase enable it (ADR 0055)
     dynamic_limits: false     # ADR 0055: "Dynamic or adaptive limits off"
-    # ADR 0055: "£6.25 (two full stops), absolute, account currency"; the pilot's daily_cap_frac keeps the 2% rule
-    # from binding first. Entries only; exits are never gated
+    # ADR 0055: "£6.25 (two full stops), absolute, account currency"; with the 2% rule (ADR 0106) the smaller binds.
+    # Entries only; exits are never gated
     daily_loss_limit_abs: 6.25
     approval_mode: propose    # ADR 0036 / 0055: the owner confirms every entry (approval_window_seconds: 90)
     # ADR 0055, option (a), this account only (goldbot/risk/pilot.py): 0.01 lot exactly, stops <= $4 (refused, never
     # shrunk), <= £3.12 a trade including the round trip, one position, 15m only; entries halt for good after £25
     # realised loss or 30 filled entries (counted from the broker's deals since start_utc, kept in core.db), checked
-    # before every entry with the open risk and the new trade; exits keep running. The four rails it changes, for
-    # this account only: max_risk_frac (1% -> £3.12), daily_cap_frac (2% -> £6.25), leverage_cap (20 -> 500, the
-    # terminal's own leverage when lower; the bridge's notional ceiling follows it) and drawdown_stages (the 12% kill
-    # gives way to the £25 stop). The field bounds are ADR 0055's terms. It enables nothing by itself
+    # before every entry with the open risk and the new trade; exits keep running. Of the four rails it changed, ADR
+    # 0106 decision 2 (the owner's real-money limits, goldbot/risk/real_money.py) supersedes three: max_risk_frac is at
+    # most 1% (so the £3.12 trade needs about £312 of equity), daily_cap_frac at most 2% and drawdown_stages always
+    # on (the 12% stage, the 15% halt in code); the loader refuses anything looser. leverage_cap stays 500 (the
+    # terminal's own leverage when lower; the bridge's notional ceiling follows it). It enables nothing by itself
     pilot:
       enabled: true
       adr: 55
@@ -861,12 +862,12 @@ accounts:
       timeframes: [15m]
       max_positions: 1
       leverage_cap: 500
-      max_risk_frac: 0.125            # £3.12 of £25: the £ cap binds over the pilot's whole range
-      daily_cap_frac: 0.25            # £6.25 of £25: daily_loss_limit_abs binds over the pilot's whole range
-      drawdown_stages: false
-      # ADR 0055 amendment (trading-safety rulings): the weekly cap 25% (£12.50 at £50) instead of 5%, and every
-      # position closed at the Friday cut, winners too
-      weekly_cap_frac: 0.25
+      max_risk_frac: 0.01             # ADR 0106: 1% (was 0.125, ADR 0055)
+      daily_cap_frac: 0.02            # ADR 0106: 2%, latched for the day (was 0.25)
+      drawdown_stages: true           # ADR 0106: the stages run, 15% halts (was false)
+      # ADR 0055 amendment: every position closed at the Friday cut, winners too; its weekly 25% is restored to the
+      # standing 5% (ADR 0106 trading-safety review L3, PD + CFO)
+      weekly_cap_frac: 0.05
       weekend_flat: true
     # BACKLOG 135, PD decision on the trading-safety review of 49335812: a live account takes entries only while its
     # bridge's order lane is up (/health order_lane: separate); exits work without it. Its drill: RUNBOOK "Order lane"

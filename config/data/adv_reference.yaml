@@ -1,0 +1,19 @@
+# ADR 0106 decision 2: "order size <= about 1 % of the asset's daily volume". The reference average daily volume per
+# instrument (registry key, config/instruments.yaml), read by goldbot/risk/real_money.py `load_adv_reference` into
+# the RiskGate of a real-money account only (ops.services.engine.engine_limits). A demo account never reads it.
+#
+# Owner of the values: the data engineer. Each value is the notional traded per day in the instrument's quote
+# currency (`currency`, which must equal the instrument's currency_profit): for an OTC CFD, its exchange reference
+# (XAUUSD: COMEX GC futures, contracts a day x 100 oz x the settlement price, USD), averaged over a stated window.
+# A value needs `source` (where and which window) and `as_of` (the last day of the window); the loader refuses one
+# without them, and treats one older than 400 days (ADV_MAX_AGE_DAYS) as unknown.
+#
+# `adv_notional: null` = not filled yet: every real-money entry in that instrument is refused `rm_volume_unknown`
+# (fail closed). Market data never lives here, only the one reference figure (ADR 0048).
+schema: 1
+instruments:
+  XAUUSD:
+    adv_notional: null        # USD per day; to be filled by the data engineer (COMEX GC reference)
+    currency: USD
+    source: ""                # e.g. "CME Group GC daily volume report, 60 trading days to as_of, x 100 oz x settle"
+    as_of: null
