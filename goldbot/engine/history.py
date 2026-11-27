@@ -513,6 +513,7 @@ class History:
         self.gaps: dict[str, dict[str, Any]] = {}
         self.covered: list[Span] = []
         self.stale_logged: set[tuple[pd.Timestamp, pd.Timestamp]] = set()    # `stale` holes already logged
+        self.cap_logged: set[tuple[str, tuple[Span, ...]]] = set()           # (tf, old holes) refused by the cap, logged
         self.pending: dict[Span, pd.Timestamp] = {}   # closure -> the fill that first found it (unrecorded: `_confirm`)
         self.recorded: set[Span] = set()              # closures in aux.db `history_closures`
         self.gap_memo = GapMemo()             # window_gaps' holes already judged (GapMemo)
@@ -1089,6 +1090,7 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
     first = pd.Timestamp(fr.dec["ts_utc"].iloc[0])
     inside = [g for g in gaps if g.end > first]
     hit = [g for g in inside if not stale(eng, g, close_ts)]
+    _log_stale(eng, tf, [g for g in inside if g not in hit])
     # quant review of #508: the old holes cleared one by one must not add up to more than the cap in one window
     if sum(g.open_min for g in inside if g not in hit) > eng.cfg.history_stale_gap_max_min:
         hit = inside
@@ -1104,18 +1106,30 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
 
 def stale(eng: Engine, g: HistoryGap, now: pd.Timestamp) -> bool:
     """True when `g` is a closure for the refusal by age: it ends at or before the fill floor (now - backfill_max_days,
-    so no fill ever pulls it again) and has at most history_stale_gap_max_min open minutes. Logged once per hole. False
-    with either setting at 0 (a fill window of 0 would make every hole old: fail closed)."""
-    cfg, h = eng.cfg, eng.history
+    so no fill ever pulls it again) and has at most history_stale_gap_max_min open minutes. A pure check (`refuse`
+    logs). False with either setting at 0 (a fill window of 0 would make every hole old: fail closed)."""
+    cfg = eng.cfg
     if not cfg.history_stale_gap_max_min or not cfg.backfill_max_days or g.open_min > cfg.history_stale_gap_max_min:
         return False
-    if g.end > now - pd.Timedelta(days=cfg.backfill_max_days):
-        return False
-    if (g.start, g.end) not in h.stale_logged:
-        h.stale_logged.add((g.start, g.end))
-        log.warning("history: the hole %s..%s (%d open minutes) is older than the fill floor and no broker pull covered "
-                    "it: treated as a closure", g.start, g.end, g.open_min)
-    return True
+    return bool(g.end <= now - pd.Timedelta(days=cfg.backfill_max_days))
+
+
+def _log_stale(eng: Engine, tf: str, old: list[HistoryGap]) -> None:
+    """`refuse`'s log of the old holes inside tf's frame (code review of #508): over the cap together, one line per
+    set of holes and timeframe that the frame is refused; else "treated as a closure" once per hole cleared."""
+    h, cap = eng.history, eng.cfg.history_stale_gap_max_min
+    total = sum(g.open_min for g in old)
+    if total > cap:
+        key = (tf, tuple((g.start, g.end) for g in old))
+        if key not in h.cap_logged:
+            h.cap_logged.add(key)
+            log.warning("history %s: old holes sum %d > cap %d: refused", tf, total, cap)
+        return
+    for g in old:
+        if (g.start, g.end) not in h.stale_logged:
+            h.stale_logged.add((g.start, g.end))
+            log.warning("history: the hole %s..%s (%d open minutes) is older than the fill floor and no broker pull "
+                        "covered it: treated as a closure", g.start, g.end, g.open_min)
 
 
 def _age_shadow(eng: Engine, tf: str, fr: Any) -> None:

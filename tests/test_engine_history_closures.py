@@ -256,3 +256,23 @@ def test_old_holes_summing_past_the_cap_inside_one_window_are_refused(tmp_path):
     ts = _cut(_minutes((HOLE[1], HOLE[1])), H200A, H200B)
     assert _refuse(eng, ts, LATE, "4h") is not None
     assert eng.history.gaps["4h"]["open_min"] == 200
+
+
+def test_the_log_names_only_holes_actually_cleared_and_says_once_when_the_cap_refuses(tmp_path, caplog):
+    """Code review LOW on #508: `stale` is a pure check; `refuse` logs "treated as a closure" only for a hole it
+    cleared (once per hole) and one "old holes sum N > cap M: refused" line when the cap applies."""
+    ok = _engine(tmp_path)
+    capped = _engine(tmp_path / "b")
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.history"):
+        assert _refuse(capped, _cut(_minutes((HOLE[1], HOLE[1])), H200A, H200B), LATE, "4h") is not None
+        assert _refuse(capped, _cut(_minutes((HOLE[1], HOLE[1])), H200A, H200B), LATE + pd.Timedelta(hours=4),
+                       "4h") is not None
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not any("treated as a closure" in m for m in msgs)
+    assert sum("old holes sum 400 > cap 240: refused" in m for m in msgs) == 1
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="goldbot.engine.history"):
+        assert _refuse(ok, _cut(_minutes((HOLE[1], HOLE[1])), H200A), LATE, "4h") is None
+        assert _refuse(ok, _cut(_minutes((HOLE[1], HOLE[1])), H200A), LATE + pd.Timedelta(hours=4), "4h") is None
+    msgs = [r.getMessage() for r in caplog.records]
+    assert sum("treated as a closure" in m for m in msgs) == 1 and not any("refused" in m for m in msgs)
