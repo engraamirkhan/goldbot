@@ -23,6 +23,15 @@
     registry lock and keeps the demoted one as previous (run it again to roll forward); it refuses when there is none or
     when that one would not serve. A CUSUM alarm whose previous model would not serve retires the champion and fails
     health `model_watch`.
+  - Safety review round 2: the Saturday retrain (`saturday_retrain`, off while `research.specialist_retrain` is false)
+    fits seed_list(key) 5 seeds, records a family-C manifest with a seed_stability verdict, and registers seed 0 only
+    when the serving rule admits it (else it reports why and registers nothing). `promote` refuses a challenger the
+    serving rule refuses. A blackout re-score with no served model writes `blackout_rescore_no_model` and the engine
+    publishes `open_without_model` (health `engine:<account>` warns); exits untouched. New health check
+    `model_serving` fails while a champion is refused and warns for a refused challenger. Registry writes re-read
+    registry.json under `registry.lock`, so a long-lived scheduler or engine instance can no longer undo a
+    rollback-model. Other trainers are not affected: self_retrain (aux.db) and the nightly classifier never touch
+    the model registry.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart
