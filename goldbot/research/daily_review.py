@@ -463,7 +463,8 @@ def cost_cells(db: Database, broker: str, as_of: pd.Timestamp) -> dict[str, floa
         return {s: v[0] for s, v in _cells(conn, broker, as_of).items()}
 
 
-# research-director 2026-11-27: a refit cell older than this at the label's slot (slot - fitted_ns) is stale. It no
+# research-director 2026-11-27: a refit cell older than this at the label's slot is stale, aged on the fills it rests
+# on (slot - through_ns; quant #507: a late fit of old fills is still old). It no
 # longer raises the replay cost (a host that stopped filling, e.g. vantage-demo replay-only since PR #505, would
 # otherwise charge an 11-06 cell forever) and the label records `+cells-stale:<day>`. Exactly 14 days is still fresh.
 CELL_MAX_AGE = pd.Timedelta(days=14)
@@ -472,17 +473,19 @@ CELL_MAX_AGE = pd.Timedelta(days=14)
 @dataclass(frozen=True)
 class ReplayCells:
     """The refit cells of a broker in effect at a slot: the dearest FRESH one (None when every cell is stale), the
-    newest fresh fit day and when it took effect, and the newest stale fit day set aside (None when none was)."""
+    newest fresh fit day and when it took effect; the newest stale fit day set aside and the dearest stale value (None
+    when none was)."""
     slippage_usd: float | None
     day: str | None
     effective_utc: pd.Timestamp | None
     stale_day: str | None
+    stale_slippage_usd: float | None = None
 
 
 def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
                  max_age: pd.Timedelta = CELL_MAX_AGE) -> ReplayCells | None:
     """For the label replay (jobs.exploration_costs): the refit cells of `broker` in effect at `as_of` (fitted_ns <=
-    as_of, the latest per session), split into fresh (as_of - fitted <= `max_age`) and stale; None without any, without
+    as_of, the latest per session), split into fresh (as_of - through_ns <= `max_age`) and stale; None without any, without
     aux.db or before migration 18. Read only."""
     p = db_path(state_dir, "aux")
     if not p.exists():
@@ -498,13 +501,14 @@ def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
     if not cells:
         return None
     oldest_ok = int(pd.Timestamp(as_of).value) - int(max_age.value)
-    fresh = [v for v in cells.values() if v[2] >= oldest_ok]
-    stale = [v for v in cells.values() if v[2] < oldest_ok]
+    fresh = [v for v in cells.values() if v[3] >= oldest_ok]          # slot - through_ns <= max_age
+    stale = [v for v in cells.values() if v[3] < oldest_ok]
     return ReplayCells(
         slippage_usd=max(v[0] for v in fresh) if fresh else None,
         day=max(v[1] for v in fresh) if fresh else None,
         effective_utc=pd.Timestamp(max(v[2] for v in fresh), unit="ns", tz="UTC") if fresh else None,
-        stale_day=max(v[1] for v in stale) if stale else None)
+        stale_day=max(v[1] for v in stale) if stale else None,
+        stale_slippage_usd=max(v[0] for v in stale) if stale else None)
 
 
 def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, min_fills: int,

@@ -131,8 +131,8 @@ BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
-# A label replayed while one of its broker's refit cost cells was stale (older than daily_review.CELL_MAX_AGE at the
-# slot) carries this in its cost_model_version: the cell was set aside, the label is costed on the table/prior only.
+# A label replayed while a stale refit cost cell of its broker (older than daily_review.CELL_MAX_AGE at the slot) was
+# set aside AND would have raised the cost charged carries this in its cost_model_version (r1's cost; r2 inherits it).
 STALE_CELLS_TAG = "+cells-stale:"
 
 
@@ -817,7 +817,8 @@ def bar_implied_stop_legs(legs: pd.DataFrame, bars_by_account: Mapping[str, pd.D
 def replay_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, before: pd.Timestamp, min_fills: int,
                     prior_usd: float = SLIPPAGE_FLOOR_USD) -> ReplayCostsV2:
     """`base.broker`'s r2 cost model from its own ledger legs strictly before `before` (`ledger_legs`, stops through
-    `bar_implied_stop_legs`), commission and swap from its r1 model. Never another broker's measurements, with the
+    `bar_implied_stop_legs`), commission and swap from its r1 model. The version inherits `base.version`, so a
+    `+cells-stale:` tag in it describes r1's slippage, not r2's (r2 slippage comes from the legs, never the cells). Never another broker's measurements, with the
     exceptions the quant ruled (2026-11-09 and C7): a broker whose demo server fills stops and targets at the level
     (`costs.DEMO_EXIT_AT_LEVEL`) has no measurable exit leg, so each exit cell charges "the larger of the ICM-measured
     exit slip per leg and session and the stop-slip prior"; when 95 % or more of its entries also fill within $0.005 of

@@ -67,16 +67,37 @@ def test_a_fresh_session_cell_applies_while_a_stale_one_is_set_aside_and_flagged
     assert "+cells:2026-11-20" in c.version and "+cells-stale:2026-11-06" in c.version
 
 
-def test_a_stale_cell_cheaper_than_the_table_still_flags_nothing_is_raised(tmp_path):
-    _seed(tmp_path, slip=0.10)
+def test_a_stale_cell_no_dearer_than_the_charged_cost_is_not_tagged(tmp_path):
+    _seed(tmp_path, slip=0.10)                                         # stale, cheaper than the 0.15 prior
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
-    assert c.slippage_usd == pytest.approx(0.15) and ex.cost_cells_stale(c.version)
+    assert c == BASE and not ex.cost_cells_stale(c.version)
+    _seed(tmp_path, slip=0.40, session="newyork", day="2026-11-06")    # stale 0.40 vs a fresh 0.50 below
+    _seed(tmp_path, slip=0.50, session="asia", day="2026-11-25", fitted=FIT + pd.Timedelta(days=18))
+    c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
+    assert c.slippage_usd == pytest.approx(0.50) and not ex.cost_cells_stale(c.version)
+
+
+def test_a_stale_cell_dearer_than_the_table_and_the_fresh_cells_is_tagged(tmp_path):
+    _seed(tmp_path, slip=0.80, session="london")                               # stale
+    _seed(tmp_path, slip=0.50, session="asia", day="2026-11-25", fitted=FIT + pd.Timedelta(days=18))
+    c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
+    assert c.slippage_usd == pytest.approx(0.50)
+    assert c.version == "settings-priors:vantage+cells:2026-11-25+cells-stale:2026-11-06"
+
+
+def test_a_late_backfilled_cell_on_old_fills_is_stale(tmp_path):
+    db = Database.open(tmp_path, "aux")                 # fitted 11-24 (recent) on fills through 11-06 (old)
+    dr.write_cell(db, broker="vantage", session="london", day="2026-11-06", slippage_usd=0.60, fills=200,
+                  through=FIT - pd.Timedelta(days=1), now=FIT + pd.Timedelta(days=17))
+    c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
+    assert c.slippage_usd == pytest.approx(0.15) and "+cells-stale:2026-11-06" in c.version
 
 
 def test_replay_cells_reports_stale_cells_separately(tmp_path):
     _seed(tmp_path)
     r = dr.replay_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20))
     assert r is not None and r.slippage_usd is None and r.stale_day == "2026-11-06"
+    assert r.stale_slippage_usd == pytest.approx(0.60)
     fresh = dr.replay_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=1))
     assert fresh is not None and fresh.slippage_usd == pytest.approx(0.60) and fresh.stale_day is None
 
