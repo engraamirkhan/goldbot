@@ -1248,9 +1248,16 @@ class GateSettings(_Section):
     backtest_min_dsr: float = Field(0.95, gt=0, le=1)             # PROPOSED: owner sign-off required (roadmap 1.0 vs 0.95)
     backtest_min_trades: int = Field(500, ge=1)
     paper_min_trades: int = Field(150, ge=1)
-    paper_min_days: int = Field(182, ge=0)                        # PROPOSED: owner sign-off required (roadmap "6 months")
+    # ADR 0106: "2-3 months of paper trading" is met by the stricter 182 days, which stays (never below it)
+    paper_min_days: int = Field(182, ge=182)                      # PROPOSED: owner sign-off required (roadmap "6 months")
     paper_expectancy_within: float = Field(0.5, gt=0, le=1)
     paper_fills_within: float = Field(0.3, gt=0)
+    # ADR 0106 goals of record on the paper record (stricter only: the bounds refuse a looser value at load)
+    paper_min_sharpe: float = Field(1.0, ge=1.0)                  # "Live Sharpe ratio above 1.0": as-if daily Sharpe
+    paper_max_cost_share: float = Field(1 / 3, gt=0, le=1 / 3)    # "Trading costs under one third of gross profit"
+    # ADR 0106 decision 2: the paper record re-sized as one real-money account of this equity (research/as_if_sizing.py)
+    # a simulation parameter of promotion reads, not live sizing (PD + CFO 2026-11-26: 1,250 USD, ~GBP 1,000)
+    as_if_equity_usd: float = Field(1250.0, gt=0, le=10_000)      # bounded (trading-safety F3): more equity sizes more
     live_min_trades: int = Field(300, ge=1)
     live_min_days: int = Field(365, ge=0)                         # PROPOSED: owner sign-off required (roadmap "12 months")
     live_expectancy_within: float = Field(0.4, gt=0, le=1)

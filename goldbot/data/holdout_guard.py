@@ -149,6 +149,8 @@ LIVE_EXEMPT: dict[str, str] = {
     "goldbot.data.news_coverage": "the news collector's coverage readout, a health check",
     "goldbot.ops.checks.engine": "engine health check on today's live rows",
     "goldbot.ops.checks.feeds": "feed health check on today's live rows",
+    "goldbot.ops.gates_phase": "store_buy_hold: gold's buy-and-hold over the paper period only (ADR 0106 promotion "
+                               "gate), the same live span the engine already traded; no fit or research output",
     "goldbot.ops.jobs": "scheduler jobs on live rows; research jobs read through their own guarded modules",
     "goldbot.ops.limits_job": "daily limit job on the live account's fills and bars",
     "goldbot.ops.limits_replay": "replays today's limit decisions on the live store",
