@@ -335,7 +335,7 @@ def test_the_saturday_job_does_not_promote_a_refused_challenger_and_reports_it(t
     monkeypatch.setattr(jobs, "shadow_stats", lambda ctx, entry: SimpleNamespace(n_trades=60, n_clusters=60))
     monkeypatch.setattr(jobs, "evaluate_promotion",
                         lambda bt, sh, champ: PromotionDecision(promote=True, ready=True, checks=[]))
-    out = jobs._decide_challengers(SimpleNamespace(models=reg, state_dir=tmp_path), "bb", FIT_AT)
+    out = jobs._decide_challengers(SimpleNamespace(models=reg, state_dir=tmp_path), "bb", FIT_AT)  # type: ignore[arg-type]
     assert out[0]["action"] == "promotion_refused" and "no run manifest" in out[0]["refused"]
     assert reg.get(e.version).status == "challenger" and reg.champion("bb") is None
 
