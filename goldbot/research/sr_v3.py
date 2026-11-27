@@ -197,7 +197,10 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
         # xt-v1 exit freeze (quant ruling on #514, D-12-xt; code review of #514). Gold reads neither. `freeze_sha` is
         # dense_labels.EXIT_FREEZE_SHA256 from the (unguarded) caller; None refuses (fail closed).
         from goldbot.config import xt_v1_rho_refusal
-        if (why := xt_v1_rho_refusal(d, path, freeze_sha or "")) is not None:
+        if freeze_sha is None:
+            raise ValueError(f"pooled Stage 0 on {path!s} without freeze_sha: a power read needs the xt-v1 exit freeze "
+                             "sha (dense_labels.EXIT_FREEZE_SHA256) to check the rho file (D-12-xt): refused")
+        if (why := xt_v1_rho_refusal(d, path, freeze_sha)) is not None:
             raise ValueError(why)
         rho_inst = min(1.0, float(b["rho_u_inst_day_mean"][f"{rc}|{bucket}"]["max"]))
         tau = max(TAU_A_FLOOR, float(b["tau_a"][f"pooled|{bucket}"]["tau_a"]))     # D-12 (d): the pooled-body row

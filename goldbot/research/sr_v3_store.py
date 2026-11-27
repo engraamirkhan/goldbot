@@ -145,6 +145,7 @@ def cost_table(manifest: Path | str) -> CostTable:
     the record's own `gold_row_bp` (files verified from their bytes); it needs the manifest's gold_spread_table, else
     refused (F6 on #515). An unrecorded version keeps the builder's legacy charge and is never a gate read."""
     import dataclasses
+    import functools
 
     from goldbot.research import srv3_cost_record as CR
     table = CostTable.from_manifest(manifest)
@@ -154,8 +155,9 @@ def cost_table(manifest: Path | str) -> CostTable:
         raise CR.CostRecordRefused(f"cost {table.version} is recorded but the manifest has no gold_spread_table: the "
                                    "per-row gold charge of record cannot be made (F6 on #515): refused")
     rec = CR.verify(table.version, table.paths)
-    spread = table.gold_spread
-    return dataclasses.replace(table, gold_charge=lambda rows: CR.gold_row_bp(rows, rec, spread))
+    # a partial of a module-level function, not a lambda: the table stays picklable (code review)
+    return dataclasses.replace(table, gold_charge=functools.partial(CR.gold_row_bp, rec=rec,
+                                                                    spread=table.gold_spread))
 
 @dataclass
 class StoreData:

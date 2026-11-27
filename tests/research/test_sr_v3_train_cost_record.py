@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -14,6 +16,7 @@ import pytest
 from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 from goldbot.research import sr_v3 as V
+from goldbot.research import sr_v3_report as R
 from goldbot.research import sr_v3_store as S
 from goldbot.research import sr_v3_train as T
 from goldbot.research import srv3_cost_record as CR
@@ -117,7 +120,7 @@ def test_pooled_stage0_refuses_a_rho_file_without_the_xt_v1_freeze(tmp_path: Pat
     members = sorted(V.POOLED_MEMBERS)[:3]
     with pytest.raises(ValueError, match="xt-v1"):
         V.rho_inputs(RHO, body="pooled", members=members, tf="1h", freeze_sha=D.EXIT_FREEZE_SHA256)
-    with pytest.raises(ValueError, match="xt-v1"):                   # no sha from the caller: fail closed
+    with pytest.raises(ValueError, match="freeze_sha"):              # no sha from the caller: fail closed
         V.rho_inputs(RHO, body="pooled", members=members, tf="1h")
     V.rho_inputs(RHO, body="gold", members=[V.GOLD], tf="1h")       # gold reads no rho_u,inst / tau_a: allowed
     xt = tmp_path / "rho.json"
@@ -127,3 +130,35 @@ def test_pooled_stage0_refuses_a_rho_file_without_the_xt_v1_freeze(tmp_path: Pat
 
 def test_gold_rows_in_the_learn_window_are_charged_at_a_london_stamp() -> None:
     assert pd.Timestamp(LONDON).year in V.LEARN_YEARS
+
+
+def test_the_recorded_cost_table_pickles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, man = _recorded_manifest(tmp_path, monkeypatch)
+    table = S.cost_table(man)
+    back = pickle.loads(pickle.dumps(table))
+    lab = _labels(n=3)
+    assert np.allclose(back.rt_bp(lab), table.rt_bp(lab), rtol=0, atol=0)
+
+
+def test_artifact_rebuild_charges_at_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_manifest's rebuild (sr_v3_report.build_artifact) builds its StoreData with the record's charge, as the
+    run did (code review): with plain from_manifest every recorded read would be refused by apply."""
+    _, man = _recorded_manifest(tmp_path, monkeypatch)
+    seen: dict[str, Any] = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_store(**kw: Any) -> None:
+        seen.update(kw)
+        raise Stop
+    monkeypatch.setattr(R, "StoreData", fake_store)
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("x\n")
+    spec = SimpleNamespace(settings={"sr_v3": {"source": {"kind": "store", "labels": str(tmp_path),
+                                                          "features": str(tmp_path), "tiers_file": "tiers.csv",
+                                                          "cost_manifest": str(man)}}},
+                           data_files={"tiers.csv": tiers}, seeds=[1])
+    with pytest.raises(Stop):
+        R.build_artifact(spec)
+    assert seen["costs"].gold_charge is not None

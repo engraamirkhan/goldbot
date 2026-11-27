@@ -32,7 +32,7 @@ from goldbot.research import model_quality as MQ
 from goldbot.research import objective as O
 from goldbot.research import sr_v3 as V
 from goldbot.research import sr_v3_train as T
-from goldbot.research.sr_v3_store import StoreData
+from goldbot.research.sr_v3_store import StoreData, cost_table
 from goldbot.research.sr_v3_train import (
     BUILT,
     HB_COLUMNS,
@@ -41,7 +41,6 @@ from goldbot.research.sr_v3_train import (
     SEED_SUBSAMPLE,
     W2_COST_VERSION,
     Collected,
-    CostTable,
     FoldModels,
     UnitData,
     UnitPlan,
@@ -608,7 +607,7 @@ def build_artifact(spec: Any) -> bytes:
         data = StoreData(labels=Path(st["labels"]), features=Path(st["features"]),
                          tiers_path=Path(spec.data_files[st["tiers_file"]]), unit=st.get("unit"),
                          read_key=st.get("read_key"), read=st.get("read_key") is not None,
-                         costs=CostTable.from_manifest(st["cost_manifest"]) if st.get("cost_manifest") else None)
+                         costs=cost_table(st["cost_manifest"]) if st.get("cost_manifest") else None)
     plan = plan_of(cfg["plan"])
     seeds = tuple(int(s) for s in spec.seeds)
     hb_plans = [plan_of(p) for p in cfg["hb_plans"]]
