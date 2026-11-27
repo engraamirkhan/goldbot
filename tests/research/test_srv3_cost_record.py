@@ -1,12 +1,14 @@
 """D-3 of the sr-v3 card: the frozen ub95 cost of record per class (W2-2, A9; ADR 0098 R-H). A label read is a gate
 read on cost only when its rows are charged EXACTLY the recorded cost of record (version + content sha256, the table
 files hashed from their bytes), and only for instruments whose class is measured; a prior keeps the D-3 block (quant
-A4 on #482; quant review of #515: F1-F5, F7, R1)."""
+A4 on #482; quant review of #515: F1-F5, F7, R1; code review of #515: 1-4)."""
 from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -19,11 +21,13 @@ from goldbot.research import srv3_cost_record as CR
 
 ROOT = Path(__file__).resolve().parents[2]
 SUPERSEDED = "srv3-cost-bb199294fe509df0"          # era term without slippage (quant F4): never recorded
-FROZEN_SPEC = D.SPEC.model_copy(update={"h_ref": "frozen-D4"})
+FROZEN_SPEC = D.SPEC                                 # xt-v1 (D-4, #514)
+NOT_XT_V1 = D.SPEC.model_copy(update={"h_ref": {**D.H_BY_TF, "15m": D.H_BY_TF["15m"] // 4}})
 FX10 = ("AUDJPY", "AUDUSD", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY")
 TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 LONDON = "2015-03-02 10:00"                         # a London-session stamp (DEFAULT_SESSIONS)
 BIG = 5.0                                           # an era spread (USD) that binds every broker
+SHIPPED = ROOT / "config" / "research" / "srv3_cost_record"
 
 
 def _rec() -> CR.CostRecord:
@@ -31,37 +35,61 @@ def _rec() -> CR.CostRecord:
     return rec
 
 
-def _spread(months: pd.PeriodIndex, usd: float) -> pd.DataFrame:
+def _spread(months: pd.PeriodIndex, usd: float, sessions: tuple[str, ...] = ("asia", "london", "newyork")
+            ) -> pd.DataFrame:
     return pd.DataFrame([{"session": s, "month": str(m), "ub95_usd": usd,
                           "available_utc": (m + 1).start_time.tz_localize("UTC")}
-                         for s in ("asia", "london", "newyork") for m in months])
+                         for s in sessions for m in months])
+
+
+def _write_record(rec: CR.CostRecord, rd: Path) -> CR.CostRecord:
+    rec = rec.model_copy(update={"record_sha256": CR.record_sha256(rec)})
+    (rd / f"{rec.version}.yaml").write_text(yaml.safe_dump(rec.model_dump(mode="json"), sort_keys=False))
+    return rec
+
+
+Make = Callable[..., tuple[CR.CostRecord, dict[str, Path], pd.DataFrame]]
 
 
 @pytest.fixture
-def fx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CR.CostRecord, dict[str, Path], pd.DataFrame]:
-    """A recorded copy of the real record whose table files exist (tmp parquet): the record, the paths, the spread."""
-    spread = _spread(pd.period_range("2014-01", "2015-02", freq="M"), BIG)
-    paths = {"cost_table": tmp_path / "cost_table.parquet", "swap_table": tmp_path / "swap_table.parquet",
-             "gold_spread_table": tmp_path / "gold_spread_table.parquet"}
-    pd.DataFrame({"instrument": ["XAUUSD"], "rt_bp": [1.0]}).to_parquet(paths["cost_table"], index=False)
-    pd.DataFrame({"instrument": ["XAUUSD"], "month": ["2015-01"]}).to_parquet(paths["swap_table"], index=False)
-    spread.to_parquet(paths["gold_spread_table"], index=False)
-    sha = "a" * 64
-    rec = _rec().model_copy(update={"version": "srv3-cost-" + sha[:16], "content_sha256": sha, "files": {
-        k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()}})
-    rd = tmp_path / "records"
-    rd.mkdir()
-    (rd / f"{rec.version}.yaml").write_text(yaml.safe_dump(rec.model_dump(mode="json"), sort_keys=False))
-    monkeypatch.setattr(CR, "RECORD_DIR", rd)
-    got = CR.recorded()[rec.version]
-    return got, paths, spread
+def make(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Make:
+    """A recorded, self-consistent copy of the shipped record over real temp table files: the gold cells in the cost
+    file are the record's, the content sha256 is recomputed from the files (as the builder does)."""
+    def _make(spread: pd.DataFrame | None = None, **update: Any) -> tuple[CR.CostRecord, dict[str, Path], pd.DataFrame]:
+        base = _rec().model_copy(update=update)
+        spread = _spread(pd.period_range("2014-01", "2015-02", freq="M"), BIG) if spread is None else spread
+        d = tmp_path / f"t{len(list(tmp_path.glob('t*')))}"
+        d.mkdir()
+        paths = {"cost_table": d / "cost_table.parquet", "swap_table": d / "swap_table.parquet",
+                 "gold_spread_table": d / "gold_spread_table.parquet"}
+        cost = base.cells().assign(instrument="XAUUSD", w2_bp=DC.RT_BP)
+        swap = pd.DataFrame({"instrument": ["XAUUSD"], "month": ["2015-01"]})
+        cost.to_parquet(paths["cost_table"], index=False)
+        swap.to_parquet(paths["swap_table"], index=False)
+        spread.to_parquet(paths["gold_spread_table"], index=False)
+        frames = [pd.read_parquet(p) for p in paths.values()]
+        sha = CR.content_sha256(*frames, base.commission_rt_usd_per_oz)
+        rec = base.model_copy(update={"version": "srv3-cost-" + sha[:16], "content_sha256": sha, "files": {
+            k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()}})
+        rd = tmp_path / "records"
+        rd.mkdir(exist_ok=True)
+        rec = _write_record(rec, rd)
+        monkeypatch.setattr(CR, "RECORD_DIR", rd)
+        return CR.recorded()[rec.version], paths, frames[2]
+    return _make
+
+
+@pytest.fixture
+def fx(make: Make) -> tuple[CR.CostRecord, dict[str, Path], pd.DataFrame]:
+    return make()
 
 
 def _labels(instrument: str = "XAUUSD", n: int = 4, tf: str = "15m", start: str = LONDON,
             entry: float = 1200.0) -> pd.DataFrame:
     return pd.DataFrame({"instrument": instrument, "tf": tf,
                          "decision_utc": pd.date_range(start, periods=n, freq="1min", tz="UTC"),
-                         "entry": entry, "cost_rt_bp": DC.RT_BP, "cost_version": "w2-point"})
+                         "entry": entry, "cost_rt_bp": DC.RT_BP, "cost_version": "w2-point",
+                         "exit_freeze_sha": D.EXIT_FREEZE_SHA256})
 
 
 def _meta(lab: pd.DataFrame, spec: D.LabelSpec = FROZEN_SPEC) -> dict:
@@ -81,6 +109,81 @@ def _apply(fx: tuple, lab: pd.DataFrame, meta: dict, rt: np.ndarray | None = Non
     rec, paths, spread = fx
     rt = _charge(lab, rec, spread) if rt is None else rt
     return CR.apply(lab, meta, rec.version, paths, rt_bp=rt, spec=spec)
+
+
+# ---------------------------------------------------------------------------------------------- code review of #515
+def test_cr1_the_shipped_record_passes_its_self_hash_and_a_tampered_cell_is_refused(tmp_path: Path,
+                                                                                    monkeypatch: pytest.MonkeyPatch
+                                                                                    ) -> None:
+    rec = _rec()
+    assert rec.record_sha256 == CR.record_sha256(rec)
+    for field, edit in (("gold_cells", lambda d: d["gold_cells"][0].update(rt_bp=d["gold_cells"][0]["rt_bp"] + 1)),
+                        ("w2_bp", lambda d: d.update(w2_bp=0.1))):
+        d = yaml.safe_load((SHIPPED / f"{rec.version}.yaml").read_text())
+        edit(d)
+        rd = tmp_path / field
+        rd.mkdir()
+        (rd / f"{rec.version}.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
+        monkeypatch.setattr(CR, "RECORD_DIR", rd)
+        with pytest.raises(CR.CostRecordRefused, match="record_sha256"):
+            CR.recorded()
+
+
+def test_cr1_verify_recomputes_the_content_sha_and_the_cells_from_the_file_bytes(make: Make) -> None:
+    rec, paths, _ = make()
+    assert CR.verify(rec.version, paths) == rec
+    # a record whose cells were re-hashed after an edit still disagrees with the hashed cost table
+    cells = list(rec.gold_cells)
+    cells[0] = cells[0].model_copy(update={"rt_bp": cells[0].rt_bp + 1.0})
+    forged = _write_record(rec.model_copy(update={"gold_cells": tuple(cells)}), CR.RECORD_DIR)
+    with pytest.raises(CR.CostRecordRefused, match="cells"):
+        CR.verify(forged.version, paths)
+    # a commission edit (re-hashed record) no longer reproduces the content sha256 of the files
+    forged = _write_record(rec.model_copy(update={"commission_rt_usd_per_oz": {"icm": 0.0, "vantage": 0.0}}),
+                           CR.RECORD_DIR)
+    with pytest.raises(CR.CostRecordRefused, match="content sha256"):
+        CR.verify(forged.version, paths)
+
+
+def test_cr2_a_row_without_a_prior_spread_month_is_refused() -> None:
+    rec = _rec()
+    sp = _spread(pd.period_range("2003-05", "2004-12", freq="M"), 0.5)
+    lab = _labels(start="2003-03-03 10:00")
+    with pytest.raises(CR.CostRecordRefused, match=r"4 gold rows.*2003-03-03 10:00"):
+        CR.gold_row_bp(lab, rec, sp)
+
+
+def test_cr2_a_spread_table_with_other_session_names_is_refused(make: Make) -> None:
+    rec = _rec()
+    sp = _spread(pd.period_range("2014-01", "2015-02", freq="M"), 0.5, ("asia", "London", "newyork"))
+    with pytest.raises(CR.CostRecordRefused, match="session"):
+        CR.gold_row_bp(_labels(), rec, sp)
+    rec2, paths, _ = make(spread=sp)
+    with pytest.raises(CR.CostRecordRefused, match="session"):
+        CR.verify(rec2.version, paths)
+
+
+def test_cr2_a_nan_spread_ub95_is_refused() -> None:
+    sp = _spread(pd.period_range("2014-01", "2015-02", freq="M"), 0.5)
+    sp.loc[(sp["session"] == "london") & (sp["month"] == "2015-02"), "ub95_usd"] = np.nan
+    with pytest.raises(CR.CostRecordRefused, match="4 gold rows"):
+        CR.gold_row_bp(_labels(), _rec(), sp)
+
+
+def test_cr4_a_nat_decision_is_refused_clearly() -> None:
+    lab = _labels()
+    lab.loc[1, "decision_utc"] = pd.NaT
+    with pytest.raises(CR.CostRecordRefused, match="decision_utc"):
+        CR.gold_row_bp(lab, _rec(), _spread(pd.period_range("2014-01", "2015-02", freq="M"), 0.5))
+
+
+def test_apply_refuses_a_record_that_measures_anything_but_gold(make: Make) -> None:
+    classes = tuple(c.model_copy(update={"basis": "measured"}) if c.instrument == "XAGUSD" else c
+                    for c in _rec().classes)
+    rec, paths, spread = make(classes=classes)
+    lab = _labels()
+    with pytest.raises(CR.CostRecordRefused, match="gold"):
+        CR.apply(lab, _meta(lab), rec.version, paths, rt_bp=CR.gold_row_bp(lab, rec, spread), spec=FROZEN_SPEC)
 
 
 # ---------------------------------------------------------------------------------------------- the record
@@ -123,7 +226,7 @@ def test_record_pins_the_engine_cost_of_record_in_the_repo() -> None:
 def test_record_is_on_an_adr_0098_recording_line_with_the_version_of_record_rule() -> None:
     adr = (ROOT / "docs/decisions/0098-objective-of-record-obj-v1.md").read_text()
     for rec in CR.recorded().values():
-        assert any("Recorded" in ln and rec.content_sha256 in ln and rec.version in ln for ln in adr.splitlines()), \
+        assert any("Recorded" in ln and rec.content_sha256 in ln and rec.version in ln and rec.record_sha256 in ln for ln in adr.splitlines()), \
             f"{rec.version}: not on an ADR 0098 R-H recording line"
     assert SUPERSEDED not in CR.recorded() and not any("Recorded" in ln and SUPERSEDED in ln for ln in adr.splitlines())
     assert ("The cost version a unit is first read under is its version of record. A read of the same unit under "
@@ -222,7 +325,7 @@ def test_f3_gold_1m_5m_stay_blocked_until_the_d15_wait_cost_is_pinned(fx: tuple,
 
 def test_d4_block_stays_when_only_the_cost_is_frozen(fx: tuple) -> None:
     lab = _labels()
-    _, m2 = _apply(fx, lab, _meta(lab, D.SPEC), spec=D.SPEC)
+    _, m2 = _apply(fx, lab, _meta(lab, NOT_XT_V1), spec=NOT_XT_V1)
     assert m2["gate_eligible"] is False
     assert not any("(D-3)" in b for b in m2["gate_block"]) and sum("(D-4)" in b for b in m2["gate_block"]) == 1
 
