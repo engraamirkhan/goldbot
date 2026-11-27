@@ -18,6 +18,7 @@ from goldbot.research.population import (
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
+from tests.test_costs_promotion_registry import AS_IF, PAIRED
 
 BT = PerfStats(n_trades=400, sharpe_ann=1.4, hit_rate=0.55, max_dd=0.06, trades_per_week=10, weeks=52)
 
@@ -32,30 +33,39 @@ def _shadow(**kw) -> PerfStats:
 @pytest.mark.parametrize("kw, ready", [(dict(weeks=3.99), False), (dict(n_clusters=39), False),
                                        (dict(weeks=4.0, n_clusters=40), True)])
 def test_shadow_needs_four_weeks_and_forty_trades_whichever_is_later(kw, ready):
-    d = evaluate_promotion(BT, _shadow(**kw))
+    # ADR 0106: with the paired read vs live and the as-if read supplied (tests/test_costs_promotion_registry.py)
+    d = evaluate_promotion(BT, _shadow(**kw), paired=PAIRED, as_if=AS_IF)
     assert d.ready is ready
     if not ready:
-        assert not d.promote and d.failed == ["shadow_length"] and len(d.checks) == 1
+        assert not d.promote and d.failed == ["shadow_length"]
+
+
+def test_without_the_adr_0106_paired_and_as_if_reads_a_full_record_is_not_ready():
+    d = evaluate_promotion(BT, _shadow())
+    assert not d.ready and not d.promote and {"paired_window", "as_if_real_money"} <= set(d.failed)
 
 
 @pytest.mark.parametrize("kw, gate", [
-    (dict(sharpe_ann=0.8), "sharpe_floor"),                    # the floor is strict: 0.8 itself fails
+    (dict(sharpe_ann=1.0), "sharpe_floor"),                    # ADR 0106 floor is strict: 1.0 itself fails
     (dict(max_dd=0.09), "drawdown"),                            # exactly 1.5x the backtest drawdown fails
     (dict(hit_rate=0.55 + 0.07), "hit_rate"),                   # too GOOD is also outside one binomial SE
 ])
 def test_gate_boundaries(kw, gate):
-    d = evaluate_promotion(BT, _shadow(**kw))
+    d = evaluate_promotion(BT, _shadow(**kw), paired=PAIRED, as_if=AS_IF)
     assert d.ready and not d.promote and gate in d.failed
 
 
 def test_sharpe_shortfall_and_turnover_boundaries():
-    assert evaluate_promotion(BT, _shadow(sharpe_ann=0.9)).promote                 # exactly 0.5 below backtest
-    assert "sharpe_vs_backtest" in evaluate_promotion(BT, _shadow(sharpe_ann=0.89)).failed
+    def ev(bt, sh, champ=None):
+        return evaluate_promotion(bt, sh, champ, paired=PAIRED, as_if=AS_IF)
+    bt = BT.model_copy(update={"sharpe_ann": 1.6})                                 # above the ADR 0106 floor + 0.5
+    assert ev(bt, _shadow(sharpe_ann=1.1)).promote                                 # exactly 0.5 below backtest
+    assert "sharpe_vs_backtest" in ev(bt, _shadow(sharpe_ann=1.09)).failed
     champ = PerfStats(n_trades=100, sharpe_ann=1.0, hit_rate=0.5, max_dd=0.05, trades_per_week=10)
-    assert evaluate_promotion(BT, _shadow(trades_per_week=13.0), champ).promote     # +30% allowed
-    assert evaluate_promotion(BT, _shadow(trades_per_week=13.1), champ).failed == ["turnover"]
+    assert ev(BT, _shadow(trades_per_week=13.0), champ).promote                    # +30% allowed
+    assert ev(BT, _shadow(trades_per_week=13.1), champ).failed == ["turnover"]
     idle = PerfStats(n_trades=0, sharpe_ann=0, hit_rate=0, max_dd=0, trades_per_week=0)
-    assert "turnover" not in [c.name for c in evaluate_promotion(BT, _shadow(), idle).checks]
+    assert "turnover" not in [c.name for c in ev(BT, _shadow(), idle).checks]
 
 
 def test_cusum_alarms_on_a_sustained_drop_but_not_on_the_expected_record():
