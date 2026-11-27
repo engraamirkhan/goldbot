@@ -4,7 +4,7 @@ Amends `docs/research/prereg-2026-11-26-sr-v3.md` (H-103) rev 8, sections 2.3, 3
 (ADR 0108 decisions 2 and 4). Written by the research director on 2026-11-27. **Label-blind:** the only inputs are the
 served tiers file (`raw/tiers/tiers_served_r11-v2.1.csv`, sha256 ff653ea7..., the r11-v2.1 grades), the registry's
 declared column lookbacks and the Stage 0 event counts (outcome-blind). No label value, R, gross, net or Stage 0/L
-statistic of sr-v3 exists; the read-once ledger holds no `sr-v3:<unit>` row. If either holds an sr-v3 row dated before
+statistic of sr-v3 exists; the ledger holds no `sr-v3:<unit>` read-once row and no `consumption` row with procedure sr-v3. If either holds an sr-v3 row dated before
 this amendment's merge commit, the amendment is void and the fold question goes back to the quant. K 0.
 Quant-reviewer signs (required). Evaluator countersigns item 4 (read population).
 
@@ -30,13 +30,14 @@ Cause, re-derived by the research director from the tiers file and the code path
 **D1. Usability follows the columns that are read.** For every ladder prefix, body and learner, a row is usable iff
 `dense_labels.attach_tiers(rows, tiers, columns=<that column set>)` says so, under R-a unchanged:
 - **Ladder (2.3).** The n_eff charged for prefix k is counted on rows usable under prefix k's columns. The level is the
-  longest prefix that meets the gate on its own rows. Rows can only shrink as k grows; the gate is monotone in k.
-- **Served body and the judged learner (L-cw).** Train, impute (medians of the fold-2010-11 rows usable under the
-  served columns) and score on rows usable under the served columns. The judged read population (gates 10-12) is that
-  set.
+  longest prefix that meets the gate on its own rows. Rows can only shrink as k grows; the gate is monotone in k. The same per-prefix rule sets the served body (served-order prefixes).
+- **Served body and the judged learner (L-cw).** Train, impute (medians of the smallest training fold (2010-11, or 2010-13 under (b)) rows usable under the
+  served columns) and score on rows usable under the served columns. The judged read population is the set of rows usable under the served body's columns, the T2 head, and the chosen body's members (gold rows only for the gold body). Gates 1-14, the baselines B0-B8, the control twin, the S split and N22 are all computed on that set, never on P30 rows. Gate 10 counts learn OOF 2012-17 per fold. Gates 11-12 count confirm rows usable under the same columns, after the C6 edge drop. Rows dropped by the mask are reported per year.
 - **P30-wide learners (HB, D-40/G-cw, AVG).** Keep the P30 mask. Their folds with no P30-usable training row are skipped
   and listed (ADR 0108 decision 4, unchanged). Their P30 medians come from their own smallest fold with usable rows.
   They stay unjudged and sealed (zoo-v2), so they add 0 K.
+- **Block A/B tests.** Both arms of a block test use the rows usable under core-6 + admitted blocks + X.
+- **Freeze.** The served column list, the tiers sha256 and the `COLUMN_LOOKBACKS` hash are recorded in the read-once ref before each Stage L/C read. A monthly regrade or a lookback change never alters a read that is already booked.
 - **Pooled body.** The same per-prefix rule for every member, on the pooled level order.
 - **Row sets for comparisons and priors (quant C1).** Every read statistic of the judged learner, its baselines B0-B8, the twin, the fold cost priors (p_stop, night share) and gates 10-12 are computed on one population, the rows usable under the served columns. A comparison between the judged learner and a P30-wide learner (paired D, AVG inputs) is computed only on the intersection of their usable rows, and that row count is reported beside it. Every ladder prefix and every candidate served prefix is charged in full, with all its parameters, on its own usable rows; the charges are never computed incrementally on one row set.
 
