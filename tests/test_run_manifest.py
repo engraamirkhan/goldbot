@@ -640,3 +640,36 @@ def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_
     assert ctx.models.get(b).status == "retired" and ctx.models.get(a).status == "previous"
     hc = HealthContext(state_dir=tmp_path, now=promoted + pd.Timedelta(days=6), get_secret=lambda k: None)
     assert check_model_watch(hc).status == "fail"
+
+
+# ---------------------------------------------------------------------------------------------- PR #494 safety LOW-4
+def _serving_check(tmp_path: Path) -> Any:
+    from goldbot.ops.checks.feeds import check_model_serving
+    from tests.test_health import SETTINGS, make_ctx
+    s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(
+        update={"models_dir": str(tmp_path / "models")})})
+    return check_model_serving(make_ctx(tmp_path, settings=s))
+
+
+def test_health_fails_while_a_champion_is_refused_for_serving_and_warns_for_a_refused_challenger(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refused champion is left out by the engine (its agent trades no model): only logged until now. Health reads
+    the registry with the engine's own rule (`serving_refusal`), so no second copy of the state can go stale."""
+    assert _serving_check(tmp_path).status == "ok"                         # no registry yet
+    reg = ModelRegistry(tmp_path / "models")
+    before = mq.MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)
+    ok = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="good", backtest={},
+                            now=before)
+    reg.promote(ok.version, now=before)
+    assert _serving_check(tmp_path).status == "ok"
+    late = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="cand", backtest={},
+                              now=FIT_AT)
+    c = _serving_check(tmp_path)
+    assert c.status == "warn" and late.version in c.reason and "challenger" in c.reason
+    bad = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={},
+                             now=FIT_AT)
+    with monkeypatch.context() as mp:                                     # promoted while it served
+        mp.setattr(reg, "serving_refusal", lambda e: None)
+        reg.promote(bad.version, now=FIT_AT)
+    c = _serving_check(tmp_path)
+    assert c.status == "fail" and "bb" in c.reason and "no run manifest" in c.reason and "good" not in c.reason

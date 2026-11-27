@@ -321,6 +321,11 @@
    "no champion watch report yet"
   ],
   [
+   "model_serving",
+   "ok",
+   "no model registry yet"
+  ],
+  [
    "feature_versions",
    "ok",
    "no model registry yet"
@@ -878,6 +883,11 @@
    "model_watch",
    "ok",
    "no champion watch report yet"
+  ],
+  [
+   "model_serving",
+   "ok",
+   "no model registry yet"
   ],
   [
    "feature_versions",
