@@ -225,15 +225,30 @@ def _s(te: pd.DataFrame, k: np.ndarray, gross: np.ndarray | None = None) -> floa
     return O.s_statistic(net_read(te, gross=gross), k.astype(float))
 
 
+MIN_SHIFT_DAYS = 20       # N6: the whole-day circular shift moves labels at least this many trading days
+
+
 def block_permutation(f: pd.DataFrame, *, seed: int) -> np.ndarray:
-    """N6's shuffle (card 5.1, quant M3 on #488): a seeded permutation of the rows WITHIN each (instrument, session
-    day) block, so a shuffled label keeps its instrument and day and only its position inside the day is random."""
-    key = f["instrument"].astype(str).to_numpy() + "|" + np.asarray(session_date(f["decision_utc"]).astype(str))
-    rand = np.random.default_rng(seed).random(len(f))
-    by_key = np.argsort(key, kind="stable")
-    by_key_random = np.lexsort((rand, key))
-    perm = np.empty(len(f), dtype=np.int64)
-    perm[by_key] = by_key_random
+    """N6's shuffle (card 5.1; quant M3 re-verify on #488): permute whole days, not rows within a day. Each
+    instrument's time-ordered label series is shifted circularly by a seeded offset of k >= `MIN_SHIFT_DAYS` trading
+    days (k <= days - 20), i.e. by the rows of its first k session days, so a label keeps its instrument and its
+    intraday position (exactly when the days hold equal row counts) and lands on a day k sessions away. Returns perm
+    with shuffled[r] = gross[perm[r]]."""
+    inst = (f["instrument"].astype(str) + "|" + (f["tf"].astype(str) if "tf" in f else "")).to_numpy()  # per series
+    day = np.asarray(session_date(f["decision_utc"]).astype(str))
+    t = _ns(f["decision_utc"])
+    rng = np.random.default_rng(seed)
+    perm = np.arange(len(f), dtype=np.int64)
+    for i in sorted(set(inst)):
+        idx = np.flatnonzero(inst == i)
+        idx = idx[np.argsort(t[idx], kind="stable")]
+        days, counts = np.unique(day[idx], return_counts=True)       # session dates sort in time order
+        n = len(days)
+        if n < 2:
+            continue
+        lo, hi = (MIN_SHIFT_DAYS, n - MIN_SHIFT_DAYS) if n >= 2 * MIN_SHIFT_DAYS else (1, n - 1)
+        k = int(rng.integers(lo, hi + 1))
+        perm[idx] = np.roll(idx, -int(counts[:k].sum()))
     return perm
 
 
@@ -248,8 +263,9 @@ def n6_cells(f: pd.DataFrame) -> np.ndarray:
 def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: Sequence[str] = ("L-cw", "HB", "G-cw"),
             max_rows: int = 200_000) -> dict[str, Any]:
     """On the last OOF fold of the thinned sample (capped at `max_rows`, deterministic): oracle canaries at +0.03 /
-    +0.05 / +0.10 R (a planted fair-coin column), the N6 shuffle (gross R permuted within (instrument, session day)
-    blocks; the false-keep rule per (instrument x tf, session) cell; OOF AUC within 0.5 ± 4·SE, diagnostic), the parameter shift (each named setting x 0.8 / x 1.25, report only), seed
+    +0.05 / +0.10 R (a planted fair-coin column), the N6 shuffle (whole days of gross R shifted circularly per
+    instrument by >= 20 trading days; the false-keep rule per (instrument x tf, session) cell; OOF AUC within
+    0.5 ± 4·SE, diagnostic), the parameter shift (each named setting x 0.8 / x 1.25, report only), seed
     stability and the learning curve (L-cw). Descriptive: nothing here selects."""
     Y = plan.oof_years[-1]
     s = col.sample

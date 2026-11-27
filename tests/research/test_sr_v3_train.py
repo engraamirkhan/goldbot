@@ -709,14 +709,26 @@ def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) 
 
 
 # ---------------------------------------------------------------------------------------------- M3: N6 by block
-def test_the_shuffle_permutes_gross_only_within_instrument_session_day_blocks() -> None:
-    """Quant M3 on #488 (card 5.1 N6): "gross labels permuted in (instrument, day) blocks"."""
-    f = pd.concat([_frame(i, 2013).head(300) for i in ("XAUUSD", "EURUSD")], ignore_index=True)
+def test_the_shuffle_moves_whole_days_by_a_seeded_circular_shift_of_at_least_20_trading_days() -> None:
+    """Quant M3 re-verify on #488: N6 permutes whole days, not rows within a day: each instrument's label series is
+    shifted circularly by a seeded offset of >= 20 trading days, keeping each row's intraday position."""
+    f = pd.concat([_frame(i, y) for i in ("XAUUSD", "EURUSD") for y in (2013, 2014)], ignore_index=True)
     perm = R.block_permutation(f, seed=V.SEED_B2)
-    key = f["instrument"].astype(str).to_numpy() + "|" + np.asarray(T.session_date(f["decision_utc"]).astype(str))
-    assert (key[perm] == key).all(), "every row draws its gross from its own instrument x session day"
-    assert sorted(perm.tolist()) == list(range(len(f))) and (perm != np.arange(len(f))).any()
+    assert sorted(perm.tolist()) == list(range(len(f))), "a permutation"
     assert np.array_equal(perm, R.block_permutation(f, seed=V.SEED_B2)), "seeded"
+    inst = f["instrument"].astype(str).to_numpy()
+    day = np.asarray(T.session_date(f["decision_utc"]).astype(str))
+    assert (inst[perm] == inst).all(), "an instrument's labels stay its own"
+    pos = f.groupby([inst, day]).cumcount().to_numpy()
+    assert (pos[perm] == pos).all(), "intraday position kept"
+    for i in ("XAUUSD", "EURUSD"):
+        m = inst == i
+        days = np.unique(day[m])
+        idx = {d: k for k, d in enumerate(days)}
+        shift = {(idx[day[perm][r]] - idx[day[r]]) % len(days) for r in np.flatnonzero(m)}
+        assert len(shift) == 1, "one circular offset per instrument: whole days move together"
+        (k,) = shift
+        assert 20 <= k <= len(days) - 20
 
 
 def test_the_shuffle_check_passes_per_instrument_tf_session_cell(fitted: tuple) -> None:
