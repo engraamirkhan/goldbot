@@ -13,22 +13,67 @@ so same-day trades share one move and carry less evidence than their count. The 
 per agent per session day (`timeutil.opportunity_day` of the entry: [D-1 22:00, D 22:00) UTC), not raw trades; the
 shadow Sharpe is computed on the cluster sums (annualised by clusters a year), the hit rate's binomial SE uses the
 cluster count, and `t_stat` is the cluster-robust t of the mean trade return. The 4-week minimum is unchanged.
+
+ADR 0106 (owner, 2026-11-26), stricter only, as ruled by the quant on #490 (P1-P4, closing texts quoted):
+* decision 6, "A challenger replaces the live model only after beating it for 30-60 days on paper or demo, after
+  costs": `paired_day_test` reads the challenger minus the live model per session day (`session_days`, a book with no
+  trade that day books 0), on their as-if real-money daily P&L. Fewer than MIN_PAIRED_DAYS paired days is not ready;
+  the read stops at MAX_PAIRED_DAYS (the first 60 from the challenger's start: a rolling window could be shopped).
+  "Looks happen only at paired days n in LOOK_DAYS = (30, 35, 40, 45, 50, 55, 60). On any other day the read is
+  'waiting', with no bound computed or logged. The bound at look k is the basic one-sided bootstrap bound at alpha_k
+  from the O'Brien-Fleming table (c = 1.8117 for these looks, overall one-sided 0.05 under independent increments;
+  table pinned in code and in a test). Promote at the first look with LB > 0. At 60 the decision is final."
+  The bootstrap is the card's stationary day-block draws (eval2.confirm). "Mean block = max(5, ceil(1.5 x the mean
+  holding episode length in session days of either book over the window)), the ADR 0085 Q5 rule (E1 lag), recorded
+  with the read." "Challenger and live are replayed as two separate as-if accounts with identical start equity,
+  start day, ADR 0106 constants and cost model. Each runs as it would alone. The live book is the live model as
+  deployed each day, with its sha logged per day." "The challenger is a procedure (ADR 0085 N18). Retrained children
+  inside the window are pooled under the procedure, and every forward row is tagged with its scoring sha. Each
+  challenger's paired read is one registry trial (K +1), booked at its first look" (`book_first_look`). With no live
+  model the challenger is compared with a flat book.
+* decision 2, "Every promotion read ... is judged on the trades as if sized under the real-money limits ..., and a
+  model that would breach them is not promoted": `as_if` (research/as_if_sizing.py) must be supplied and clean; its
+  sized session days cap the cluster count (a trade below the minimum lot never counts toward the 40).
+* goal "Live Sharpe ratio above 1.0": MIN_SHADOW_SHARPE 1.0 (was 0.8).
+Missing evidence (no paired read, no as-if read) is "not ready", never a retirement: the challenger waits.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Hashable, Sequence
+from datetime import date, timedelta
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import opportunity_day
+from goldbot.research.as_if_sizing import AsIfReport
 from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, WATCH_WEEKS, calibrated_h
+
+if TYPE_CHECKING:          # the engine imports this module: keep the registry out of its import graph
+    from goldbot.research.registry import TrialRegistry
 
 MIN_SHADOW_WEEKS = 4.0
 MIN_SHADOW_TRADES = 40
-MIN_SHADOW_SHARPE = 0.8
+MIN_SHADOW_SHARPE = 1.0          # ADR 0106 goal "Live Sharpe ratio above 1.0" (was 0.8); stricter only
+# ADR 0106 decision 6: challenger vs live, paired by session day, after costs (module docstring)
+MIN_PAIRED_DAYS = 30
+MAX_PAIRED_DAYS = 60
+PAIRED_ALPHA = 0.05              # one-sided, over every look of one challenger
+LOOK_DAYS: tuple[int, ...] = (30, 35, 40, 45, 50, 55, 60)
+# quant ruling on #490 (P1): O'Brien-Fleming for these 7 looks, alpha_k = 1 - Phi(OBF_C / sqrt(n_k / 60)); pinned
+# (tests/test_promotion_adr0106.py recomputes it and checks the overall level)
+OBF_C = 1.8117
+OBF_ALPHA: dict[int, float] = {30: 0.00520, 35: 0.00884, 40: 0.01325, 45: 0.01822, 50: 0.02359, 55: 0.02923,
+                               60: 0.03502}
+MIN_BLOCK_DAYS = 5               # mean block floor; the rule is max(5, ceil(1.5 x mean holding episode days))
+BLOCK_EPISODE_MULT = 1.5
+PAIRED_RESAMPLES = 10_000       # = eval2.confirm.RESAMPLES_MIN (>= 20 beyond the 0.5% tail)
+PAIRED_READ = "paired_read"     # registry status of a challenger procedure's paired read: one trial (K +1)
 MAX_SHARPE_SHORTFALL = 0.5
 MAX_DD_RATIO = 1.5
 MAX_TURNOVER_CHANGE = 0.30
@@ -96,6 +141,124 @@ def cluster_t_stat(ret: Sequence[float], clusters: Sequence[Hashable]) -> float 
     return m / math.sqrt(var) if var > 0 else None
 
 
+def session_days(start: date, end: date) -> list[date]:
+    """The Monday-Friday session days (`timeutil.opportunity_day` labels) from `start` to `end`, both included."""
+    out, d = [], start
+    while d <= end:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+class PairedRead(FrozenRecord):
+    """ADR 0106 decision 6: the challenger minus the live model, per session day, after costs (module docstring)."""
+    procedure: str                     # the challenger procedure (ADR 0085 N18)
+    status: Literal["not_ready", "waiting", "look"]
+    n_days: int = Field(ge=0)
+    window_start: date
+    window_end: date                   # the last paired day read (the 60th when capped)
+    capped: bool                       # the window held more than MAX_PAIRED_DAYS: read at MAX_PAIRED_DAYS
+    live_present: bool                 # False: compared with a flat book (no live model)
+    mean_diff: float                   # mean daily difference, fraction of the day-start as-if equity
+    lower_bound: float | None          # one-sided at alpha_look; None unless status is "look"
+    alpha_look: float | None
+    mean_episode_days: float           # the longer mean holding episode of the two books
+    mean_block: float
+    resamples: int
+    challenger_shas: list[str]         # every scoring sha pooled under the procedure
+    live_shas_by_day: dict[date, list[str]] = Field(default_factory=dict)   # the live model as deployed each day
+
+
+def mean_episode_days(rep: AsIfReport, grid: Sequence[date]) -> float:
+    """Mean length, in session days of `grid`, of the runs of consecutive grid days on which the book holds at least
+    one sized trade (entry to exit day, both included). 0 without one."""
+    pos = {d: i for i, d in enumerate(grid)}
+    held = np.zeros(len(grid), dtype=bool)
+    for t in rep.trades:
+        if t.status != "sized":
+            continue
+        lo = next((pos[d] for d in grid if d >= t.entry_day), None)
+        hi = max((pos[d] for d in grid if d <= t.day), default=None)
+        if lo is not None and hi is not None and hi >= lo:
+            held[lo:hi + 1] = True
+    runs, n = [], 0
+    for h in held:
+        if h:
+            n += 1
+        elif n:
+            runs.append(n)
+            n = 0
+    if n:
+        runs.append(n)
+    return float(np.mean(runs)) if runs else 0.0
+
+
+def paired_day_test(challenger: AsIfReport, live: AsIfReport | None, *, procedure: str, end: date,
+                    resamples: int = PAIRED_RESAMPLES) -> PairedRead:
+    """The paired read of ADR 0106 decision 6 (module docstring). Two separate as-if accounts: `live` must share the
+    challenger's start and start equity (ValueError otherwise), and every sized challenger row must carry its
+    scoring sha. The grid is every session day from the challenger's start day to `end`, plus any day either book
+    has P&L on (a weekend crypto close), in order, cut to the first MAX_PAIRED_DAYS. A day missing from a book is 0
+    for it; `live` None: a flat book."""
+    if challenger.start_utc is None:
+        raise ValueError("the challenger's as-if account needs its start (as_if_real_money(start=...))")
+    if live is not None and (live.start_utc != challenger.start_utc or live.equity_start != challenger.equity_start):
+        raise ValueError("challenger and live must be replayed from the same start and start equity (two accounts)")
+    unsigned = [t.index for t in challenger.trades if t.status == "sized" and not t.scoring_sha]
+    if unsigned:
+        raise ValueError(f"{len(unsigned)} challenger row(s) without their scoring sha (ADR 0085 N18)")
+    start = opportunity_day(pd.DatetimeIndex([challenger.start_utc]))[0].date()
+    ch, lv = challenger.daily, (live.daily if live is not None else {})
+    grid = sorted({*session_days(start, end), *(d for d in (*ch, *lv) if start <= d <= end)})
+    capped = len(grid) > MAX_PAIRED_DAYS
+    grid = grid[:MAX_PAIRED_DAYS]
+    x = np.array([float(ch.get(d, 0.0)) - float(lv.get(d, 0.0)) for d in grid])
+    if not np.isfinite(x).all():
+        raise ValueError("every paired day must be finite")
+    n = len(x)
+    mean = float(x.mean()) if n else 0.0
+    episode = max(mean_episode_days(challenger, grid), mean_episode_days(live, grid) if live is not None else 0.0)
+    block = float(max(MIN_BLOCK_DAYS, math.ceil(BLOCK_EPISODE_MULT * episode)))
+    status: Literal["not_ready", "waiting", "look"] = (
+        "not_ready" if n < MIN_PAIRED_DAYS else "look" if n in LOOK_DAYS else "waiting")
+    lb: float | None = None
+    alpha = OBF_ALPHA.get(n) if status == "look" else None
+    if alpha is not None:
+        # the card's day-block draws; imported here so the engine's import of this module stays light
+        from goldbot.research.eval2.confirm import _day_count_chunks, _DayBlocks
+        blocks = _DayBlocks(pd.DataFrame({"day": np.arange(n)}))
+        key = hashlib.sha256(f"adr0106-paired|{procedure}|{grid[0]}|{grid[-1]}".encode()).hexdigest()
+        t = np.concatenate([(c @ x) / n for c in _day_count_chunks(blocks, mean_block=block, resamples=resamples,
+                                                                  seed_key=key)])
+        lb = 2.0 * mean - float(np.quantile(t, 1.0 - alpha))
+    in_window = set(grid)
+    return PairedRead(procedure=procedure, status=status, n_days=n, window_start=start,
+                      window_end=grid[-1] if grid else start, capped=capped, live_present=live is not None,
+                      mean_diff=mean, lower_bound=lb, alpha_look=alpha, mean_episode_days=episode, mean_block=block,
+                      resamples=resamples,
+                      challenger_shas=sorted({t.scoring_sha for t in challenger.trades
+                                              if t.status == "sized" and t.scoring_sha}),
+                      live_shas_by_day={d: v for d, v in (live.shas_by_day if live is not None else {}).items()
+                                        if d in in_window})
+
+
+def book_first_look(registry: TrialRegistry, read: PairedRead, *, agent_id: str, feature_version: str) -> dict | None:
+    """Book the procedure's paired read as one registry trial (K +1) at its first look, once: None when the read is
+    not a look or the procedure already has its row. Under the registry lock."""
+    if read.status != "look":
+        return None
+    config = {"procedure": read.procedure, "window_start": read.window_start.isoformat()}
+    with registry.locked():
+        if any(r.get("status") == PAIRED_READ and (r.get("config") or {}).get("procedure") == read.procedure
+               for r in registry._rows()):
+            return None
+        return registry.record(agent_id=agent_id, family=f"challenger:{read.procedure}", config=config,
+                               feature_version=feature_version, status=PAIRED_READ,
+                               rationale="ADR 0106 decision 6: challenger vs live paired read, first look",
+                               results={"paired_read": read.model_dump(mode="json")})
+
+
 class GateCheck(FrozenRecord):
     name: str
     passed: bool
@@ -112,20 +275,46 @@ class PromotionDecision(FrozenRecord):
         return [c.name for c in self.checks if not c.passed]
 
 
-def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfStats | None = None) -> PromotionDecision:
+def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfStats | None = None, *,
+                       paired: PairedRead | None = None, as_if: AsIfReport | None = None) -> PromotionDecision:
+    """Every gate of the module docstring. `ready` is True only when the decision is final: promoted, a limit breached
+    under as-if sizing, or the paired window complete (MAX_PAIRED_DAYS) with a gate failed. Missing or short evidence
+    is not ready (the challenger waits; it is never retired for evidence it has not had time to build)."""
     n_eff = effective_n(shadow)
-    enough = shadow.weeks >= MIN_SHADOW_WEEKS and n_eff >= MIN_SHADOW_TRADES
+    sized = as_if.n_sized_days if as_if is not None else 0
+    n_power = min(n_eff, sized)
+    enough = shadow.weeks >= MIN_SHADOW_WEEKS and n_power >= MIN_SHADOW_TRADES
+    n_paired = paired.n_days if paired is not None else 0
     checks = [GateCheck(name="shadow_length", passed=enough,
-                        detail=f"{shadow.weeks:.1f} weeks / {n_eff} independent clusters ({shadow.n_trades} trades) "
-                               f"(need {MIN_SHADOW_WEEKS:.0f} and {MIN_SHADOW_TRADES} clusters)")]
-    if not enough:
+                        detail=f"{shadow.weeks:.1f} weeks / {n_eff} independent clusters ({shadow.n_trades} trades), "
+                               f"{sized} as-if sized session days (need {MIN_SHADOW_WEEKS:.0f} and "
+                               f"{MIN_SHADOW_TRADES} clusters, as-if sized)"),
+              GateCheck(name="paired_window", passed=n_paired >= MIN_PAIRED_DAYS,
+                        detail=f"{n_paired} paired session days vs the live model (need {MIN_PAIRED_DAYS}, read at "
+                               f"{MAX_PAIRED_DAYS}; ADR 0106)" if paired is not None else "no paired read vs the live model"),
+              GateCheck(name="as_if_real_money", passed=as_if is not None and as_if.clean,
+                        detail=as_if.text() if as_if is not None else "no as-if real-money read (ADR 0106 decision 2)")]
+    if as_if is not None and not as_if.clean:          # final: more days cannot undo a breach
+        return PromotionDecision(promote=False, ready=True, checks=checks)
+    if paired is None or not all(c.passed for c in checks):
         return PromotionDecision(promote=False, ready=False, checks=checks)
+    if paired.status != "look":                        # off a look day: waiting, no bound computed or logged
+        checks.append(GateCheck(name="paired_vs_live", passed=False,
+                                detail=f"waiting: paired day {paired.n_days} is not a look day {LOOK_DAYS}"))
+        return PromotionDecision(promote=False, ready=False, checks=checks)
+    lb = paired.lower_bound
+    checks.append(GateCheck(name="paired_vs_live", passed=lb is not None and lb > 0,
+                            detail=f"challenger - {'live' if paired.live_present else 'flat book (no live model)'}: "
+                                   f"mean {paired.mean_diff:+.5f}/day, one-sided lower bound "
+                                   f"{'n/a' if lb is None else format(lb, '+.5f')} at O'Brien-Fleming alpha "
+                                   f"{paired.alpha_look or 0:.5f}, look day {paired.n_days}, mean block "
+                                   f"{paired.mean_block:.0f} (needs > 0)"))
     checks.append(GateCheck(name="sharpe_floor", passed=shadow.sharpe_ann > MIN_SHADOW_SHARPE,
-                            detail=f"shadow Sharpe {shadow.sharpe_ann:.2f} vs floor {MIN_SHADOW_SHARPE}"))
+                            detail=f"shadow Sharpe {shadow.sharpe_ann:.2f} vs floor {MIN_SHADOW_SHARPE} (ADR 0106)"))
     checks.append(GateCheck(name="sharpe_vs_backtest", passed=shadow.sharpe_ann >= backtest.sharpe_ann - MAX_SHARPE_SHORTFALL,
                             detail=f"shadow {shadow.sharpe_ann:.2f} vs backtest {backtest.sharpe_ann:.2f} (max shortfall {MAX_SHARPE_SHORTFALL})"))
     p = backtest.hit_rate
-    se = math.sqrt(max(p * (1 - p), 1e-12) / n_eff)          # effective N: the cluster count
+    se = math.sqrt(max(p * (1 - p), 1e-12) / n_power)        # effective N: the as-if sized cluster count
     checks.append(GateCheck(name="hit_rate", passed=abs(shadow.hit_rate - p) <= se,
                             detail=f"shadow {shadow.hit_rate:.3f} vs expected {p:.3f} ± {se:.3f} (1 binomial SE)"))
     dd_cap = MAX_DD_RATIO * backtest.max_dd
@@ -135,7 +324,8 @@ def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfSta
         change = abs(shadow.trades_per_week - champion.trades_per_week) / champion.trades_per_week
         checks.append(GateCheck(name="turnover", passed=change <= MAX_TURNOVER_CHANGE,
                                 detail=f"{shadow.trades_per_week:.1f}/week vs champion {champion.trades_per_week:.1f} ({change:.0%} change)"))
-    return PromotionDecision(promote=all(c.passed for c in checks), ready=True, checks=checks)
+    promote = all(c.passed for c in checks)
+    return PromotionDecision(promote=promote, ready=promote or n_paired >= MAX_PAIRED_DAYS, checks=checks)
 
 
 def cusum_alarm(returns: list[float], expected_mean: float, expected_std: float, k: float = DEFAULT_K,
