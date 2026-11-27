@@ -15,6 +15,15 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   engine's session table calls open refuse that timeframe's entries, journalled `history_gap:<tf>`, unless a broker
   pull covered the span (the broker had no ticks then: a real closure, e.g. a holiday the table calls open). A window
   with a hole is re-filled from the broker in the background every REFILL_EVERY of engine clock.
+- A broker closure inside a day is a closure too (vantage-demo 2026-10-26..11-27: the US/EU DST-gap week's ~2 h daily
+  break left 61 open minutes the table calls open, 20:58-23:02 UTC, and every 1h/4h close refused for weeks). A clean
+  pull (`BrokerRates.closures`: a good bar pull with a bar before the span and one at or after its end) that has no
+  minute, ticks or bars, in a run of at least CLOSURE_MIN_RUN minutes with an open minute in it covers that run; a run
+  the pull does not reach past (the live tail) never does. Covered spans are recorded in aux.db (`history_closures`)
+  and a restart starts with them (`load_closures`), so a closure stays one after the hole is older than the fill
+  reaches. A hole wholly older than the fill floor (backfill_max_days) that no pull covered, with at most
+  `history_stale_gap_max_min` open minutes, is a closure for the refusal (`stale`, logged once per hole): no fill can
+  ever reach it again. Off with either at 0; a hole inside the fill window is judged as before (fail closed).
 - A hole before the cut-over that the release cannot fill moves the cut-over back to the hole (`rebase`; vantage-demo
   2026-10-26..11-03: the release lacked the 10-11 Sunday open, the account's own minutes began 10-19, and every close
   refused for eight days). The broker's 1m bars from the hole to the old cut-over replace the release minutes there,
@@ -98,6 +107,7 @@ REREAD_WARN_S = 2.0                 # a store read (`StoreRead`, own thread) slo
 READ_HUNG_S = 120.0                 # a store read still running after this is logged once as an error
 RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
 WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
+CLOSURE_MIN_RUN = 15               # minutes without a broker minute that make a sub-day closure (`BrokerRates.closures`)
 
 Span = tuple[pd.Timestamp, pd.Timestamp]
 
@@ -211,6 +221,27 @@ class BrokerRates:
         f = self._load(since)
         return self.ok and not f.empty and pd.Timestamp(f["ts_utc"].iloc[0]) <= day
 
+    def closures(self, lo: pd.Timestamp, hi: pd.Timestamp, present: pd.Series, *, since: pd.Timestamp) -> list[Span]:
+        """The runs in [lo, hi) with no minute in `present` (the pulled ticks' and bars' minutes) the broker's bars show
+        were closed: CLOSURE_MIN_RUN minutes or more, at least one of them open by the table, and the good pull holds a
+        bar before the run and one at or after its end (it reached past it: never the live tail, fail closed)."""
+        f = self._load(since)
+        if not self.ok or f.empty:
+            return []
+        grid = pd.date_range(lo.ceil("min"), hi, freq="min", inclusive="left")
+        if not len(grid):
+            return []
+        miss = ~np.asarray(grid.isin(pd.DatetimeIndex(present)), dtype=bool)
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], miss.astype(np.int8), [0]))))
+        first, last = pd.Timestamp(f["ts_utc"].iloc[0]), pd.Timestamp(f["ts_utc"].iloc[-1])
+        out: list[Span] = []
+        for s, e in zip(edges[::2], edges[1::2]):
+            a, b = grid[s], grid[e - 1] + pd.Timedelta(minutes=1)
+            if e - s >= CLOSURE_MIN_RUN and first < a and last >= b \
+                    and bool(np.asarray(self.sessions.expected_open(grid[s:e]), dtype=bool).any()):
+                out.append((a, b))
+        return out
+
     def _load(self, since: pd.Timestamp) -> pd.DataFrame:
         if self.frame is not None:
             return self.frame
@@ -249,7 +280,8 @@ def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pa
     the ticks do not reach are taken from the broker's 1m bars (`rates`), so a terminal with a short tick history still
     fills a long hole. Returns (bars, covered, error): a day pulled whole is covered; with keep=False (a hole before the
     cut-over, where broker minutes would mix feeds) the bars are not kept and a day counts as covered only when the
-    broker had neither ticks nor bars in it."""
+    broker had neither ticks nor bars in it. Inside a day with minutes, a run the clean pull has none for is covered
+    (`BrokerRates.closures`)."""
     bars: list[pd.DataFrame] = []
     covered: list[Span] = []
     day, end = span
@@ -276,6 +308,11 @@ def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pa
         # them; a failed or too-short pull never vouches (safety review MEDIUM: fail closed)
         if b.empty and rates is not None and rates.vouches(day, since):
             covered.append((day, nxt))
+        elif not b.empty and rates is not None:
+            try:
+                covered += rates.closures(day, nxt, b["ts_utc"], since=since)
+            except PullDeferred:
+                return bars, covered, "budget"
         day = nxt
     return bars, covered, None
 
@@ -467,6 +504,7 @@ class History:
                                          "dropped": 0, "read_error": None, "read_short": None}
         self.gaps: dict[str, dict[str, Any]] = {}
         self.covered: list[Span] = []
+        self.stale_logged: set[tuple[pd.Timestamp, pd.Timestamp]] = set()    # `stale` holes already logged
         self.gap_memo = GapMemo()             # window_gaps' holes already judged (GapMemo)
         self.cutover: pd.Timestamp | None = None
         self.broker: Any = None
@@ -519,6 +557,7 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     # closed or quiet): rebuilding its minute would duplicate the stored one and block entries with duplicate_ts
     eng._history_through = pd.Timestamp(eng.bars_1m["visible_at"].max()) if not eng.bars_1m.empty else None
     h.backfill["cutover"] = h.cutover.isoformat() if h.cutover is not None else None
+    h.covered += [s for s in load_closures(eng, lo) if s not in h.covered]
     if h.read_error is None:
         _judge_short(eng, now)
     start_fill(eng, now)
@@ -719,8 +758,10 @@ def absorb(eng: Engine) -> bool:
     # a span counts as covered only where pulled bars can be merged (at or after the cut-over) or the broker had none
     # (keep=False spans are added by fill_spans only when empty); never a kept span before the cut-over
     cut = h.cutover
-    h.covered += [(max(a, cut), b) if cut is not None and a < cut < b else (a, b) for a, b in f.covered
-                  if cut is None or b > cut or not _kept_before(f, (a, b))]
+    new = [(max(a, cut), b) if cut is not None and a < cut < b else (a, b) for a, b in f.covered
+           if cut is None or b > cut or not _kept_before(f, (a, b))]
+    h.covered += [s for s in new if s not in h.covered]
+    save_closures(eng, new)
     got = pd.concat(f.bars, ignore_index=True) if f.bars else pd.DataFrame()
     h.backfill.update({"bars": int(h.backfill["bars"]) + len(got), "error": f.error, "running": False})
     if got.empty:
@@ -825,6 +866,38 @@ def save_cutover(eng: Engine, cutover: pd.Timestamp) -> None:
     except Exception as exc:                          # noqa: BLE001 - recording never stops trading
         log.warning("history cut-over record not written (%s): a restart derives it from the stored minutes",
                     type(exc).__name__)
+
+
+def save_closures(eng: Engine, spans: list[Span]) -> None:
+    """Record the covered spans of a fill (aux.db `history_closures`, idempotent), so a restart keeps them after the
+    hole is older than the fill reaches. A failed write is logged; the next fill within the window covers it again."""
+    from goldbot.db.connection import Database, now_ns
+    if not spans:
+        return
+    key, at = _cutover_key(eng), now_ns()
+    rows = [(*key, int(epoch_ns(pd.DatetimeIndex([a]))[0]), int(epoch_ns(pd.DatetimeIndex([b]))[0]), at)
+            for a, b in spans if b > a]
+    try:
+        with Database.open(eng.cfg.state_dir, "aux").write() as conn:
+            conn.executemany("INSERT INTO history_closures (account_id, source, symbol, start_ns, end_ns, updated_ns) "
+                             "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", rows)
+    except Exception as exc:                          # noqa: BLE001 - recording never stops trading
+        log.warning("history closures not recorded (%s): a restart judges those spans again", type(exc).__name__)
+
+
+def load_closures(eng: Engine, lo: pd.Timestamp) -> list[Span]:
+    """The recorded closures of this account's live feed that end after `lo`. An unreadable record is logged and
+    empty: the spans are holes again (fail closed)."""
+    from goldbot.db.connection import Database
+    lo_ns = int(epoch_ns(pd.DatetimeIndex([lo]))[0])
+    try:
+        with Database.open(eng.cfg.state_dir, "aux").connection() as conn:
+            got = conn.execute("SELECT start_ns, end_ns FROM history_closures WHERE account_id = ? AND source = ? "
+                               "AND symbol = ? AND end_ns > ? ORDER BY start_ns", (*_cutover_key(eng), lo_ns)).fetchall()
+    except Exception as exc:                          # noqa: BLE001 - a broken record never stops a warm start
+        log.warning("history closures unreadable (%s): their spans are judged as holes", type(exc).__name__)
+        return []
+    return [(pd.Timestamp(int(a), unit="ns", tz="UTC"), pd.Timestamp(int(b), unit="ns", tz="UTC")) for a, b in got]
 
 
 def _kept_before(f: HistoryFill, span: Span) -> bool:
@@ -968,7 +1041,7 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
         _age_shadow(eng, tf, fr)
         return [eng._record(a, close_ts, 0.0, 0.0, f"{held}:{tf}") for a in agents]
     first = pd.Timestamp(fr.dec["ts_utc"].iloc[0])
-    hit = [g for g in gaps if g.end > first]
+    hit = [g for g in gaps if g.end > first and not stale(eng, g, close_ts)]
     if not hit:
         eng.history.gaps.pop(tf, None)
         return None
@@ -977,6 +1050,22 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
                             "at": close_ts.isoformat()}
     _age_shadow(eng, tf, fr)
     return [eng._record(a, close_ts, 0.0, 0.0, f"history_gap:{tf}") for a in agents]
+
+
+def stale(eng: Engine, g: HistoryGap, now: pd.Timestamp) -> bool:
+    """True when `g` is a closure for the refusal by age: it ends at or before the fill floor (now - backfill_max_days,
+    so no fill ever pulls it again) and has at most history_stale_gap_max_min open minutes. Logged once per hole. False
+    with either setting at 0 (a fill window of 0 would make every hole old: fail closed)."""
+    cfg, h = eng.cfg, eng.history
+    if not cfg.history_stale_gap_max_min or not cfg.backfill_max_days or g.open_min > cfg.history_stale_gap_max_min:
+        return False
+    if g.end > now - pd.Timedelta(days=cfg.backfill_max_days):
+        return False
+    if (g.start, g.end) not in h.stale_logged:
+        h.stale_logged.add((g.start, g.end))
+        log.warning("history: the hole %s..%s (%d open minutes) is older than the fill floor and no broker pull covered "
+                    "it: treated as a closure", g.start, g.end, g.open_min)
+    return True
 
 
 def _age_shadow(eng: Engine, tf: str, fr: Any) -> None:

@@ -238,6 +238,9 @@ class EngineConfig(shadow_scoring.ModelScoringConfig):     # shadow_score, model
     backfill_page_ticks: int = Field(2000, ge=100, le=10_000)   # ~120 KB of JSON a page, as tick_record
     backfill_budget_s: float = Field(1800.0, gt=0, le=3600)
     history_gap_max_min: int = Field(60, ge=1)   # more open minutes missing, not a broker closure: no entry
+    # a hole wholly older than the fill floor (backfill_max_days) that no broker pull covered, with at most this many
+    # open minutes, is a closure for the refusal (engine/history.py `stale`; one 4h bar). 0 = off
+    history_stale_gap_max_min: int = Field(240, ge=0)
     history_min_bars: int = Field(0, ge=0)   # fewer at warm start: history_short (engine/history.py); 0 = off
     owner_user_id: int = 0
     # design (Approvals): the owner confirms an entry within this many seconds or it expires unapproved; production
