@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.data import holdout_guard as HG
 from goldbot.research import history_runs as HR
 from goldbot.research import model_quality as MQ
 from goldbot.research import run_manifest as RM
@@ -45,6 +46,23 @@ def test_episodes_round_trip_through_their_npz(tmp_path: Path):
     for a, b in zip(eps, back, strict=True):
         np.testing.assert_array_equal(a.close_r, b.close_r)
         assert (a.k, a.day, a.weight) == (b.k, b.day, b.weight)
+
+
+def test_a_design_whose_rows_reach_the_holdout_is_refused_at_load(tmp_path: Path):
+    data = _design()
+    keys = data.keys.copy()
+    keys.loc[keys.index[-1], "horizon_end_utc"] = HG.HOLDOUT_START + pd.Timedelta(hours=1)
+    path = HR.save_design(data.model_copy(update={"keys": keys}), tmp_path / "d.npz")
+    with pytest.raises(HG.HoldoutSealed):
+        HR.load_design(path)
+
+
+def test_episodes_on_a_holdout_session_day_are_refused_at_load(tmp_path: Path):
+    eps = _world(3, 1, reverting=True)
+    eps = [*eps[:-1], eps[-1].model_copy(update={"day": str(HG.HOLDOUT_START.date())})]
+    path = HR.save_episodes(eps, tmp_path / "e.npz")
+    with pytest.raises(HG.HoldoutSealed):
+        HR.load_episodes(path)
 
 
 def test_rlx1_records_a_family_d_manifest_that_rebuilds_exactly_and_never_serves(tmp_path: Path):

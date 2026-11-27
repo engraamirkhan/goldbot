@@ -3,7 +3,8 @@ brief 2026-11-26: "labels only via load_labels on learn 2010-17 ... never confir
 
 `load_learn` is a train read of `dense_labels.load_labels` with the window fixed to learn 2010-01..2017-12, phase 0
 only and no booked read, so confirm and test_old can not be reached from here (load_labels drops any row touching
-them on an unbooked read, and refuses the holdout). It never bypasses the store's seal: until ADR 0085 A4 records the
+them on an unbooked read, and refuses the holdout). Every read names its `procedure` (for example `seq-1`, `rl-x1`) and
+writes its consumption row to `ledger` (dense_labels.consume, quant L1 on #484). It never bypasses the store's seal: until ADR 0085 A4 records the
 tiers file's sha256 (`dense_labels.RECORDED_TIERS_SHA256`) the read raises `SealedStore`.
 
 Weights: one event per decision bar (both sides and every template of a bar share it), uniqueness over the event's
@@ -26,8 +27,8 @@ from goldbot.research import objective as O
 from goldbot.research import windows as WN
 
 
-def load_learn(cache: Path, *, instrument: str, tf: str, years: Iterable[int], tiers: F.Tiers | None,
-               columns: Sequence[str], keys: Mapping[tuple[int, int], str], templates: Sequence[str] | None = None,
+def load_learn(cache: Path, *, procedure: str, ledger: Path, instrument: str, tf: str, years: Iterable[int],
+               tiers: F.Tiers | None, columns: Sequence[str], keys: Mapping[tuple[int, int], str], templates: Sequence[str] | None = None,
                proxy_source: str | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Phase-0 learn rows of (instrument, tf) with an event weight `w`; years outside learn are refused first."""
     lo, hi = WN.SPANS[WN.Window.LEARN]
@@ -35,9 +36,9 @@ def load_learn(cache: Path, *, instrument: str, tf: str, years: Iterable[int], t
     bad = [y for y in ys if not lo.year <= y < hi.year]
     if bad:
         raise ValueError(f"learn_labels reads learn {lo.year}..{hi.year - 1} only, not {bad}")
-    lab, meta = D.load_labels(cache, instrument=instrument, tf=tf, years=ys, tiers=tiers, columns=columns, keys=keys,
-                              window=(lo, hi), purpose="train", phases=(0,), templates=templates,
-                              proxy_source=proxy_source, booked_read=None, ledger=None)
+    lab, meta = D.load_labels(cache, procedure=procedure, ledger=ledger, instrument=instrument, tf=tf, years=ys,
+                              tiers=tiers, columns=columns, keys=keys, window=(lo, hi), purpose="train", phases=(0,), templates=templates,
+                              proxy_source=proxy_source, booked_read=None)
     lab = lab[lab["label_ok"].astype(bool)].reset_index(drop=True) if len(lab) else lab
     meta = {**meta, "learn_only": True}
     if not len(lab):

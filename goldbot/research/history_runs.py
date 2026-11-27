@@ -15,6 +15,9 @@ walk-forward read into `seed_stability` (every seed's obj-v1 S > 0, >= 5 seeds) 
 run manifest on the same judged rows, after costs (ADR 0106 3). The embedding and RL-X1 record no verdict, so
 `require_servable` refuses both: the embedding is an input block (quant R-c), RL-X1 is never live.
 
+Designs and episodes are learn-window reads (learn_labels); a file whose rows reach the sealed holdout is refused at
+load (`holdout_guard.refuse`), so a hand-edited or mis-built design can never feed a fit or a rebuild.
+
 This module is the only one that imports run_manifest / model_quality for these models: seq1 stays on the obj-v1
 guarded list (objective.GUARDED_MODULES), which model_quality's import of model_zoo would break.
 """
@@ -27,6 +30,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.data import holdout_guard
 from goldbot.data.timeutil import epoch_ns
 from goldbot.research import model_quality as MQ
 from goldbot.research import rl_exits as X
@@ -69,6 +73,7 @@ def load_design(path: Path | str) -> S.Seq1Data:
         for c in KEY_TS:
             if f"t_{c}" in z.files:
                 keys[c] = pd.to_datetime(z[f"t_{c}"], unit="ns", utc=True)
+                holdout_guard.refuse(keys, what=f"history design {Path(path).name}", col=c)
         return S.Seq1Data(X=z["X"], y=z["y"], w=z["w"], keys=keys)
 
 
@@ -87,6 +92,7 @@ def save_episodes(eps: Sequence[X.Episode], path: Path | str) -> Path:
 
 def load_episodes(path: Path | str) -> list[X.Episode]:
     with np.load(path, allow_pickle=False) as z:
+        holdout_guard.refuse(pd.to_datetime(z["day"].astype(str), utc=True), what=f"history episodes {Path(path).name}")
         ends = np.cumsum(z["lens"])
         starts = ends - z["lens"]
         return [X.Episode(**{f: z[f][a:b] for f in ("open_r", "high_r", "low_r", "close_r", "swap_r")},
