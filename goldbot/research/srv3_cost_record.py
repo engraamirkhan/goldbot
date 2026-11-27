@@ -12,8 +12,9 @@ Frozen means (all checked here):
    sha256, `charge_rule` ub95, the W2 floor, the history months (none in the holdout) and every gold cell's value
    (rt_bp, ECR ub95 USD, slip_x USD);
 2. the record's version and content sha256 on an ADR 0098 R-H "Recorded" line (a test reads the ADR);
-3. `apply` itself verifies the reader's version and table-file sha256s against the record (`verify`), and refuses a
-   measured row charged below the record's own terms (`charge_floor`, quant F1 on #515);
+3. `apply` itself hashes the table files' bytes against the record (`verify`, from paths: never a caller's hash or
+   frame), reads the gold spread from the verified file, and stamps a measured row only when its charge equals the
+   record's own `gold_row_bp` (quant F1, R1 on #515; a stress charge is run unstamped, never as the record);
 4. per class: only instruments whose class basis is "measured" (gold: broker fills, ECR) are lifted; every
    other row keeps the D-3 block, whatever its cost_version (quant F2);
 5. gold 1m/5m rows stay blocked until the D-15 decision-to-fill wait cost is pinned (`wait_charged_tfs`, quant F3).
@@ -28,6 +29,7 @@ Label-blind: the record is built from broker fills and quoted spreads only; `app
 from __future__ import annotations
 
 import functools
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -119,13 +121,22 @@ def recorded() -> dict[str, CostRecord]:
     return dict(_load(RECORD_DIR))
 
 
-def verify(version: str, files: Mapping[str, str]) -> CostRecord:
-    """The recorded cost of record `version`, if every table file sha256 the reader hashed is the record's; refuses
-    otherwise (an unrecorded version is never a gate read, whatever its numbers)."""
+def _sha256(path: Path | str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify(version: str, paths: Mapping[str, Path | str]) -> CostRecord:
+    """The recorded cost of record `version`, if every table file at `paths` hashes (its bytes, here) to the
+    record's sha256; refuses otherwise (an unrecorded version is never a gate read, whatever its numbers)."""
     rec = recorded().get(version)
     if rec is None:
-        raise CostRecordRefused(f"cost version {version} is not recorded in {RECORD_DIR.relative_to(ROOT)} (D-3)")
-    bad = [k for k in TABLE_FILES if files.get(k) != rec.files[k]]
+        raise CostRecordRefused(f"cost version {version} is not recorded in {RECORD_DIR} (D-3)")
+    bad = [k for k in TABLE_FILES if k not in paths or not Path(paths[k]).is_file()
+           or _sha256(paths[k]) != rec.files[k]]
     if bad:
         raise CostRecordRefused(f"cost {version}: {', '.join(bad)} sha256 is not the record's: refused")
     return rec
@@ -165,7 +176,7 @@ def _cell_terms(rows: pd.DataFrame, rec: CostRecord, broker: str) -> pd.DataFram
 
 
 def charge_floor(rows: pd.DataFrame, rec: CostRecord) -> np.ndarray:
-    """The least a gold row may be charged under `rec`, from the record alone: max over brokers of max(cell rt_bp,
+    """DIAGNOSTIC only (never the gate; R1): the record's cell and ECR terms without the era term: max over brokers of max(cell rt_bp,
     ECR ub95 / entry x 1e4) (a NaN entry leaves the cell rt_bp), floored at W2."""
     entry = rows["entry"].to_numpy(float)
     per = []
@@ -199,16 +210,17 @@ def gold_row_bp(rows: pd.DataFrame, rec: CostRecord, spread: pd.DataFrame) -> np
     return np.asarray(np.maximum(rec.w2_bp, np.maximum.reduce(per)))
 
 
-def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, files: Mapping[str, str], *,
+def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, paths: Mapping[str, Path | str], *,
           rt_bp: np.ndarray, spec: D.LabelSpec = D.SPEC) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Charge `labels` (a `load_labels` frame) under the recorded cost of record `version` and re-derive the gate.
 
-    `files` are the table sha256s the reader hashed (sr_v3_train.CostTable.files); `rt_bp` is its per-row round trip
-    (CostTable.rt_bp on these rows). Refused: an unrecorded version or file (`verify`), a malformed charge, and a
-    measured row charged below `charge_floor`. Measured-class rows take cost_version = version and cost_rt_bp =
+    `paths` are the table files (cost_table, swap_table, gold_spread_table) the reader charged from; `apply` hashes
+    them itself and reads the spread from the verified file. `rt_bp` is the reader's per-row round trip
+    (CostTable.rt_bp on these rows). Refused: an unrecorded version or other bytes (`verify`), a malformed charge, and
+    any measured row whose charge is not the record's `gold_row_bp` within 1e-6 bp (higher too). Measured-class rows take cost_version = version and cost_rt_bp =
     rt_bp; every other row keeps its own and is blocked (D-3, named). Gold 1m/5m rows are blocked until their wait cost
     is pinned (D-15). Every existing block but the w2-point D-3 one is kept. The inputs are not mutated."""
-    rec = verify(version, files)
+    rec = verify(version, paths)
     rt = np.asarray(rt_bp, dtype=float)
     if rt.shape != (len(labels),):
         raise ValueError(f"rt_bp has {rt.shape} values for {len(labels)} label rows")
@@ -218,11 +230,12 @@ def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, files: Ma
         r = rt[meas]
         if not np.isfinite(r).all():
             raise ValueError(f"cost {version}: a measured row's rt_bp is not finite")
-        floor = charge_floor(labels[meas], rec)
-        low = r < floor - CELL_TOL
-        if low.any():
-            raise CostRecordRefused(f"cost {version}: {int(low.sum())} measured rows charged below the record's own "
-                                    f"cell / ECR ub95 terms (e.g. {r[low][0]:.3f} < {floor[low][0]:.3f} bp): refused")
+        want = gold_row_bp(labels[meas], rec, pd.read_parquet(paths["gold_spread_table"]))
+        off = ~np.isclose(r, want, rtol=0, atol=CELL_TOL)
+        if off.any():
+            raise CostRecordRefused(f"cost {version}: {int(off.sum())} measured rows differ from the record's charge, "
+                                    f"largest gap {float(np.max(np.abs(r - want)[off])):.6f} bp: refused (a stress "
+                                    "charge runs unstamped)")
     out = labels.copy()
     out.loc[meas, "cost_version"] = version
     out.loc[meas, "cost_rt_bp"] = rt[meas]
