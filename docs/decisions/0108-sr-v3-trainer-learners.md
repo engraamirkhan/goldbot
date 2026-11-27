@@ -60,7 +60,7 @@ read.
    - no beats_baseline: it books a registry trial (K +1), so it is read at promotion and never by the trainer. The
      report's paired D against G-cw stays diagnostic. A manifest is therefore not servable under ADR 0109 until the
      promotion read adds a beats_baseline on one row set (for the quant to rule on: param_shift on the same rows).
-   The builder is `sr_v3_train.build_artifact`, so `run_manifest.rebuild` refits any model byte for byte; fits run on
+   The builder is `sr_v3_report.build_artifact`, so `run_manifest.rebuild` refits any model byte for byte; fits run on
    one BLAS/OpenMP thread, as the rebuild does.
 8. **Core-12** follows the quant ruling of 2026-11-26: rv_ratio is position 4 and atr_ratio_14_100 moves to the rest
    of P30. The D-12a file has no ρ_x for rv_ratio, so the ladder charges it at ρ_x = 1 until the data team measures it.
@@ -70,6 +70,20 @@ read.
    (3) the rev 8 card amendment (rv_ratio replacing atr_ratio_14_100 in core order) merged". The store checks it at
    every label read and every Stage 0 event read (`sequencing_gaps`, `SequencingRefused`), not only the CLI, so no
    caller reads around it. X6 is the last block of the served order.
+
+10. **Module split** (quant LOW on #488): `sr_v3_train` is the fit path and is in `objective.GUARDED_MODULES`
+    (no AUC, accuracy or self-selecting estimator on it or anything it imports); `sr_v3_store` holds the stores and
+    every read refusal; `sr_v3_report` holds the read, the descriptive battery and the run record. The fit path
+    carries `model_quality.seed_list`'s formula for `SEEDS` (pinned equal by a test) rather than import it.
+11. **Fit-only by default, reads gated** (quant H2/H3 on #488): a run writes artifacts and sealed OOF scores (no
+    label column, sha in every manifest) and no read statistic. A read needs every load_labels read gate_eligible, the
+    ub95 cost of record, and for a judged unit a booked registry trial id. Each unit's learn read is booked once in
+    the read-once ledger (family `sr-v3:<unit>`) before its first label read. G-cw, HB and AVG stay sealed (scores
+    only, no S or D) until the zoo-v2 card is signed (`sr_v3_report.ZOO_V2_CARD`).
+12. **Cost of record** (quant H1 on #488): rt_bp per row is the cell's max(W2, ecr ub95) per instrument x session
+    x tf, and the swap is the instrument's own of record per month, from the data team's sha-checked tables; a row
+    with no cell is refused. **For the quant:** a history row has no account, so a cell charges the WORSE of its
+    brokers (icm, vantage), the conservative reading; one named broker of record is a one-line change.
 
 ## Consequences
 - The first real run needs A4 recorded (#482), X6 merged (#484), the dl-v1 and fs-v1 stores built under the current

@@ -618,7 +618,7 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "unknown key would change what was recorded and a manifest that does not read must refuse serving",
     ("goldbot/research/run_manifest.py", "record", "RunManifest"):
         "not persisted: builds a new manifest from the run's fields before it is stored (built strictly, ADR 0010)",
-    ("goldbot/research/sr_v3_train.py", "record_unit", "MQ.QualityVerdict"):
+    ("goldbot/research/sr_v3_report.py", "record_unit", "MQ.QualityVerdict"):
         "not persisted: the in-memory param_shift verdict of the same run, validated into its record",
     ("goldbot/ops/findings.py", "load_register", "Register"):
         "strict: config/findings.yaml, versioned config (a misspelt key or an unknown check must fail the load)",

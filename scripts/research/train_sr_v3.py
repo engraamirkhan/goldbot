@@ -1,5 +1,5 @@
 """Train sr-v3 on history: Stage 0 -> walk-forward fit of every built learner -> training report, for every unit
-(goldbot/research/sr_v3_train.py; card docs/research/prereg-2026-11-26-sr-v3.md).
+(goldbot/research/sr_v3_train.py, sr_v3_store.py, sr_v3_report.py; card docs/research/prereg-2026-11-26-sr-v3.md).
 
     python scripts/research/train_sr_v3.py --stage0-only            # label-blind ladder and body choice per unit
     python scripts/research/train_sr_v3.py --units 1m,5m,15m --workers 4       # fit-only (the default)
@@ -42,6 +42,8 @@ import pandas as pd
 from goldbot.data import holdout_guard
 from goldbot.research import learners as L
 from goldbot.research import sr_v3 as V
+from goldbot.research import sr_v3_report as R
+from goldbot.research import sr_v3_store as ST
 from goldbot.research import sr_v3_train as T
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,8 +54,8 @@ COSTS = Path.home() / "tmp" / "sr-v3-trainsets" / "manifest.json"     # the data
 def refuse_before_x6() -> None:
     """Quant sequencing (binding, 2026-11-26): no sr-v3 label value or Stage 0 statistic before #482 (A4), #484 (X6),
     the rev 8 rv_ratio amendment and price_action_x6.X6_MERGED_UTC are all on main. The store refuses each read on its
-    own (`sr_v3_train.refuse_unsequenced`); this stops the run before any phase starts."""
-    if gaps := T.sequencing_gaps():
+    own (`sr_v3_store.refuse_unsequenced`); this stops the run before any phase starts."""
+    if gaps := ST.sequencing_gaps():
         raise SystemExit("refused: quant sequencing 2026-11-26 - no sr-v3 label value or Stage 0 statistic until all "
                          "are on main: " + "; ".join(gaps))
 
@@ -65,12 +67,12 @@ def _costs(a: argparse.Namespace) -> T.CostTable | None:
 def _key(unit: str, a: argparse.Namespace) -> str:
     """This run's read-once key for `unit` (the same in phase 1 and phase 3)."""
     c = _costs(a)
-    return T.run_key(unit, [m for m in a.members.split(",") if m],
+    return ST.run_key(unit, [m for m in a.members.split(",") if m],
                      cost_version=c.version if c else T.W2_COST_VERSION)
 
 
-def _store(a: argparse.Namespace, unit: str | None = None) -> T.StoreData:
-    return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
+def _store(a: argparse.Namespace, unit: str | None = None) -> ST.StoreData:
+    return ST.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
                        ledger=Path(a.ledger), rho=Path(a.rho), costs=_costs(a), unit=unit,
                        read_key=_key(unit, a) if unit else None)
 
@@ -110,7 +112,7 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
         from goldbot.research import dense_labels as D
         plan.extra_lookback_s = max(D.input_lookback(t, extra).total_seconds() for t in plan.tfs)
     # quant H3 on #488: the unit's learn read is booked in the read-once ledger before its first label read
-    T.book_learn_read(Path(a.ledger), unit, _key(unit, a))
+    ST.book_learn_read(Path(a.ledger), unit, _key(unit, a))
     col = T.collect(store, plan, seed=T.SEEDS[0])
     save_collected(col, out)
     (out / "plan.json").write_text(json.dumps(plan.__dict__, indent=1, default=str))
@@ -183,11 +185,11 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
     store, plan = _store(a, unit), _plan(out)
-    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read,     # type: ignore[arg-type]
+    res = R.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read,     # type: ignore[arg-type]
                      trial_id=a.trial_id)
     hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
     tiers = Path(a.tiers)
-    mans = T.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
                          source={"kind": "store", "labels": str(a.labels), "features": str(a.features),
                                  "tiers_file": tiers.name, "unit": unit, "read_key": _key(unit, a),
                                  "cost_manifest": a.cost_manifest},
@@ -196,7 +198,7 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     # quant H5 on #488: the manifests are recorded BEFORE the unit's outputs are written, and the report names them,
     # so no artifact on disk lacks its run record
     res.report["manifests"] = {k: m.manifest_id for k, m in mans.items()}
-    T.write_unit(res, Path(a.out))
+    R.write_unit(res, Path(a.out))
     return {"unit": unit, "status": "fit", "mode": res.report["mode"], "gate_eligible": res.report["gate_eligible"],
             "artifacts": res.report.get("artifacts")}           # never a read statistic on stdout (quant H3)
 
@@ -209,7 +211,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--features", default=str(Path.home() / "tmp" / "feature-store"))
     ap.add_argument("--tiers", default=str(ROOT / "raw" / "tiers" / "tiers_served_r11-v2.1.csv"))
     ap.add_argument("--rho", default=str(RHO))
-    ap.add_argument("--ledger", default=str(T.default_ledger()),
+    ap.add_argument("--ledger", default=str(ST.default_ledger()),
                     help="the read-once / consumption ledger load_labels appends to (#482); default beside the "
                          "research registry, the file the X6 guard reads (quant H4 on #488)")
     ap.add_argument("--cost-manifest", default=str(COSTS) if COSTS.exists() else None,

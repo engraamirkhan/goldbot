@@ -188,7 +188,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - CLI: `scripts/research/train_sr_v3.py`. Modules: `goldbot/research/sr_v3.py`, `learners.py`, `sr_v3_train.py` and
     `sr_v3_serve.py`. Decisions are in ADR 0108.
   - Quant sequencing (binding): the store refuses every label read and Stage 0 statistic
-    (`sr_v3_train.sequencing_gaps`, `SequencingRefused`) until #482 (A4), #484 (X6), card rev 8 (`rv_ratio` at core-12
+    (`sr_v3_store.sequencing_gaps`, `SequencingRefused`) until #482 (A4), #484 (X6), card rev 8 (`rv_ratio` at core-12
     position 4) and `price_action_x6.X6_MERGED_UTC` are all on main; the CLI stops before any phase on the same check.
   - Core-12 follows card rev 8: `rv_ratio` replaces `atr_ratio_14_100` at position 4 (charged at ρ_x = 1 until the
     D-12a file measures it).

@@ -15,7 +15,9 @@ from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 from goldbot.research import learners as L
 from goldbot.research import sr_v3 as V
+from goldbot.research import sr_v3_report as R
 from goldbot.research import sr_v3_serve as S
+from goldbot.research import sr_v3_store as ST
 from goldbot.research import sr_v3_train as T
 from goldbot.research.self_retrain import FEATURES, INPUTS, LogitModel, design, design_row
 
@@ -170,26 +172,26 @@ def test_no_label_or_stage0_read_while_x6_merged_utc_is_unset(monkeypatch: pytes
     monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
     monkeypatch.setattr(D, "load_labels", boom)
     monkeypatch.setattr(D, "skeleton", boom)
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
-    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
-    with pytest.raises(T.SequencingRefused, match="X6_MERGED_UTC"):
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    with pytest.raises(ST.SequencingRefused, match="X6_MERGED_UTC"):
         store.frame("XAUUSD", "4h", 2013)
-    with pytest.raises(T.SequencingRefused, match="X6_MERGED_UTC"):
+    with pytest.raises(ST.SequencingRefused, match="X6_MERGED_UTC"):
         store.events("XAUUSD", "4h", (2010, 2011))
 
 
 def test_each_missing_sequencing_step_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
     from goldbot.features import price_action_x6 as X6
     _sequenced(monkeypatch)
-    assert T.sequencing_gaps() == []
+    assert ST.sequencing_gaps() == []
     monkeypatch.setattr(D, "CORE12", (*REV8_CORE12[:3], "atr_ratio_14_100", *REV8_CORE12[4:]))
-    assert any("rev 8" in g for g in T.sequencing_gaps())
+    assert any("rev 8" in g for g in ST.sequencing_gaps())
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset())
-    assert T.sequencing_gaps() == ["ADR 0085 A4 tiers sha (PR #482)"]
+    assert ST.sequencing_gaps() == ["ADR 0085 A4 tiers sha (PR #482)"]
     _sequenced(monkeypatch)
     monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
-    assert len(T.sequencing_gaps()) == 1 and "X6_MERGED_UTC" in T.sequencing_gaps()[0]
+    assert len(ST.sequencing_gaps()) == 1 and "X6_MERGED_UTC" in ST.sequencing_gaps()[0]
 
 
 def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -198,7 +200,7 @@ def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, t
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("Stage 0 read a label")
     monkeypatch.setattr(D, "load_labels", boom)
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
     assert store.events("XAUUSD", "4h", (2010, 2011)).empty
 
 
@@ -213,10 +215,10 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
         raise D.SealedStore("sealed")
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", sealed)
-    T.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
+    ST.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
                         read_key="run-a")
-    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     with pytest.raises(D.SealedStore):
         store.frame("XAUUSD", "4h", 2013)
     assert seen["window"] == T.WN.SPANS[T.WN.Window.LEARN] and seen["purpose"] == "train"
@@ -236,8 +238,8 @@ def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
     col = T.collect(data, plan, seed=T.SEEDS[0])
     hb = T.hb_from_plans(data, [plan], seed=T.SEEDS[0])
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(T, "ZOO_V2_CARD", "fixture: zoo-v2 signed")
-        return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True,
+        mp.setattr(R, "ZOO_V2_CARD", "fixture: zoo-v2 signed")
+        return data, plan, R.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True,
                                       trial_id=TRIAL)
 
 
@@ -277,7 +279,7 @@ def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitt
 
 def test_v0_artifacts_are_deterministic_and_load(fitted: tuple) -> None:
     data, plan, res = fitted
-    again = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    again = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
     for k in ("L-cw", "B8", "G-cw", "D-40"):
         assert res.report["artifacts"][k] == again.report["artifacts"][k]
         assert isinstance(L.load_artifact(res.artifacts[k]), (L.LcwArtifact, L.GcwArtifact, L.DenseArtifact))
@@ -289,11 +291,11 @@ def test_every_v0_artifact_is_recorded_with_its_quality_and_rebuilds_byte_exactl
     from goldbot.research import run_manifest as RM
     data, plan, res = fitted
     frames = T.frames_file(data, tmp_path / "frames.parquet")
-    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version=data.manifest()[
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version=data.manifest()[
         "frames_sha256"], data_root=tmp_path, data_files=[frames.name], hb_plans=[plan], root=tmp_path / "manifests")
     assert set(mans) == set(res.artifacts)
     g = mans["G-cw"]
-    assert g.family == "C" and g.builder == T.BUILDER and g.data_files[frames.name]
+    assert g.family == "C" and g.builder == R.BUILDER and g.data_files[frames.name]
     assert g.manifest_key == T.MANIFEST_KEY and g.seeds == list(T.SEEDS) and len(g.seeds) == 5 and g.served == "seed0"
     assert g.unit == plan.unit and g.fold_keys[-1] == "v0:2010-2017"
     assert {q.check for q in g.quality} == {"seed_stability", "param_shift"}
@@ -306,7 +308,7 @@ def test_every_v0_artifact_is_recorded_with_its_quality_and_rebuilds_byte_exactl
                         train_end=g.train_end, scaler_fit_end=g.scaler_fit_end)
     for name in ("G-cw", "HB"):
         m = mans[name]
-        got = RM.build(T.BUILDER, spec.model_copy(update={"settings": m.settings}))
+        got = RM.build(R.BUILDER, spec.model_copy(update={"settings": m.settings}))
         assert RM.sha256_bytes(got) == m.artifact_sha256, name
 
 
@@ -314,16 +316,16 @@ def test_rebuild_from_changed_data_gives_other_bytes(fitted: tuple, tmp_path: Pa
     data, plan, res = fitted
     bumped = dict(data.frames)
     bumped[("XAUUSD", "4h", 2016)] = bumped[("XAUUSD", "4h", 2016)].assign(gross=lambda f: f["gross"] + 0.5)
-    other = T.fit_unit(T.FrameData(bumped), plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    other = R.fit_unit(T.FrameData(bumped), plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
     assert other.report["artifacts"]["L-cw"] != res.report["artifacts"]["L-cw"]
 
 
 def test_intercept_only_unit_serves_level_minus_cost() -> None:
     data, plan = _data(), _plan(cols=())
-    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
     a = L.load_artifact(res.artifacts["L-cw"])
     assert isinstance(a, L.LcwArtifact) and a.columns == () and set(a.levels) == {"XAUUSD", "EURUSD"}
-    assert "intercept-only" in T.report_md(res.report)
+    assert "intercept-only" in R.report_md(res.report)
 
 
 # ---------------------------------------------------------------------------------------------- serving parity
@@ -379,7 +381,7 @@ READ_KEYS = ("learners", "paired_d", "baselines", "seed_stability", "harness", "
 
 def test_fit_only_is_the_default_and_writes_artifacts_and_sealed_scores_but_no_read_statistic(tmp_path: Path) -> None:
     data, plan = _data(readable=False), _plan()
-    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:2])
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:2])
     r = res.report
     assert r["mode"] == "fit-only"
     assert not [k for k in READ_KEYS if k in r], "fit-only computes no S, kept mean, S@2x, D or other read statistic"
@@ -388,7 +390,7 @@ def test_fit_only_is_the_default_and_writes_artifacts_and_sealed_scores_but_no_r
     assert {"v_L-cw", "k_L-cw", "v_G-cw", "cost", "decision_utc", "instrument"} <= set(res.oof.columns)
     assert r["oof_scores_sha256"] == T.scores_sha(res.oof)
     assert r["gate_eligible"] is False and r["gate_block"]
-    d = T.write_unit(res, tmp_path)
+    d = R.write_unit(res, tmp_path)
     assert not (d / "oof.parquet").exists() and (d / "oof_scores.parquet").exists()
     assert T.scores_sha(pd.read_parquet(d / "oof_scores.parquet")) == r["oof_scores_sha256"]
     for text in ((d / "report.json").read_text(), (d / "report.md").read_text()):
@@ -399,20 +401,20 @@ def test_read_statistic_mode_refuses_unless_the_label_read_is_gate_eligible() ->
     data, plan = _data(readable=False), _plan()
     blocked = T.FrameData(data.frames, gate={"gate_eligible": False, "gate_block": ["cost_version w2-point"]},
                           cost_version="fixture-ub95")
-    with pytest.raises(T.ReadRefused, match="w2-point"):
-        T.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+    with pytest.raises(R.ReadRefused, match="w2-point"):
+        R.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
                    trial_id=TRIAL)
     unknown = T.FrameData(data.frames, cost_version="fixture-ub95")
-    with pytest.raises(T.ReadRefused, match="gate"):
-        T.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+    with pytest.raises(R.ReadRefused, match="gate"):
+        R.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
                    trial_id=TRIAL)
 
 
 def test_gate_status_and_mode_are_written_into_every_manifest(tmp_path: Path) -> None:
     data, plan = _data(readable=False), _plan()
-    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS)
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS)
     frames = T.frames_file(data, tmp_path / "frames.parquet")
-    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
                          data_files=[frames.name], hb_plans=[], root=tmp_path / "m")
     assert set(mans) == set(res.artifacts)
     for m in mans.values():
@@ -430,10 +432,10 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
     empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
     monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
     monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
-    T.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
+    ST.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
                         read_key="run-a")
-    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
     store.frame("XAUUSD", "4h", 2013)
     g = store.gate_status()
@@ -464,10 +466,10 @@ def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypa
     monkeypatch.delenv("GOLDBOT_READ_LEDGERS", raising=False)
     want = default_registry().with_name(T.WN.READS_LEDGER)
     assert want == _ledgers()[0]
-    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
+    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
     assert Path(_cli().parser().parse_args([]).ledger) == want   # type: ignore[attr-defined]
     monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
-    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
+    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
 
 
 # ---------------------------------------------------------------------------------------------- H5: one run record
@@ -528,8 +530,8 @@ def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.Monk
     rho, tiers = tmp_path / "rho.json", tmp_path / "tiers.csv"
     rho.write_text("{}")
     tiers.write_text("key,month,tier\n")
-    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
     v0 = store.version(["XAUUSD"], ["4h"], (0,))
     (w / "4h.parquet").write_bytes(b"two")
     v1 = store.version(["XAUUSD"], ["4h"], (0,))
@@ -555,7 +557,7 @@ def test_gcw_seeds_fit_different_resamples_even_below_the_tree_row_cap() -> None
 def test_closed_form_learners_record_no_seed_stability_verdict(fitted: tuple, tmp_path: Path) -> None:
     data, plan, res = fitted
     frames = T.frames_file(data, tmp_path / "frames.parquet")
-    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
                          data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
     for name in ("L-cw", "HB", "B8"):
         assert "seed_stability" not in {q.check for q in mans[name].quality}
@@ -642,16 +644,16 @@ def test_a_tampered_cost_file_is_refused(tmp_path: Path) -> None:
 def test_read_mode_refuses_w2_point_costs_even_on_a_gate_eligible_read() -> None:
     data, plan = _data(readable=False), _plan()
     w2 = T.FrameData(data.frames, gate=ELIGIBLE)
-    with pytest.raises(T.ReadRefused, match="w2-point"):
-        T.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+    with pytest.raises(R.ReadRefused, match="w2-point"):
+        R.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
                    trial_id=TRIAL)
 
 
 def test_the_store_reports_its_cost_table_version(tmp_path: Path) -> None:
     table = T.CostTable.from_manifest(_cost_files(tmp_path))
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
+    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
     assert store.cost_version() == "srv3-cost-fixture"
-    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
+    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
 
 
 def test_the_data_teams_cost_manifest_loads_when_present() -> None:
@@ -685,7 +687,7 @@ def test_the_pinned_p30_lookbacks_equal_dense_labels_input_lookback() -> None:
 def test_a_fold_with_no_training_row_under_the_gap_is_skipped_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(V.P30_LOOKBACK_S, "4h", (4 * 365 + 30) * 86_400)     # 2014's cut falls before 2010
     data, plan = _data(readable=False), _plan()
-    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1])
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1])
     assert res.report["folds_without_training_rows"] == [2012, 2013, 2014]
     assert set(res.oof["year"]) == {2015, 2016, 2017}
 
@@ -710,7 +712,7 @@ def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) 
     assert not np.allclose(o["net_read"], o["net"]), "the fixture's realised leg differs from cost(x)"
     mean = float(o["net_read"].mean())
     assert r["baselines"]["B1_take_all"] == pytest.approx(mean - max(0.0, mean))
-    lr = T.learner_read(o, "L-cw", trial_id=TRIAL, judged=True)
+    lr = R.learner_read(o, "L-cw", trial_id=TRIAL, judged=True)
     assert lr["mean_net"] == pytest.approx(mean)
     k = o["k_L-cw"].to_numpy(float)
     assert lr["s_2x_cost"] == pytest.approx(float((o["net2"] * k).mean() - max(0.0, float(o["net2"].mean()))))
@@ -721,11 +723,11 @@ def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) 
 def test_the_shuffle_permutes_gross_only_within_instrument_session_day_blocks() -> None:
     """Quant M3 on #488 (card 5.1 N6): "gross labels permuted in (instrument, day) blocks"."""
     f = pd.concat([_frame(i, 2013).head(300) for i in ("XAUUSD", "EURUSD")], ignore_index=True)
-    perm = T.block_permutation(f, seed=V.SEED_B2)
+    perm = R.block_permutation(f, seed=V.SEED_B2)
     key = f["instrument"].astype(str).to_numpy() + "|" + np.asarray(T.session_date(f["decision_utc"]).astype(str))
     assert (key[perm] == key).all(), "every row draws its gross from its own instrument x session day"
     assert sorted(perm.tolist()) == list(range(len(f))) and (perm != np.arange(len(f))).any()
-    assert np.array_equal(perm, T.block_permutation(f, seed=V.SEED_B2)), "seeded"
+    assert np.array_equal(perm, R.block_permutation(f, seed=V.SEED_B2)), "seeded"
 
 
 def test_the_shuffle_check_passes_per_instrument_tf_session_cell(fitted: tuple) -> None:
@@ -767,7 +769,7 @@ def test_year_y_oof_scores_and_fold_priors_ignore_every_label_at_or_after_the_cu
     def run(d: T.FrameData) -> tuple[pd.DataFrame, T.DC.CostPriors]:
         col = T.collect(d, plan, seed=T.SEEDS[0])
         hb = T.hb_from_plans(d, [plan], seed=T.SEEDS[0])
-        res = T.fit_unit(d, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:2])
+        res = R.fit_unit(d, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:2])
         return res.oof[res.oof["year"] == Y].reset_index(drop=True), col.priors[Y].priors(cut_dec)
     a, pa = run(data)
     b, pb = run(other)
@@ -793,13 +795,13 @@ def test_a_unit_books_its_learn_read_once_per_run_key(tmp_path: Path) -> None:
     without a second row (phase 3 after phase 1, or the read after the fit of the same frozen run); any other run of
     the unit raises AlreadyRead; units are independent."""
     led = tmp_path / "window_reads.jsonl"
-    T.book_learn_read(led, "4h", "run-a")
-    T.book_learn_read(led, "4h", "run-a")
+    ST.book_learn_read(led, "4h", "run-a")
+    ST.book_learn_read(led, "4h", "run-a")
     rows = T.WN.read_ledger(led)
     assert len(rows) == 1 and rows[0]["family"] == "sr-v3:4h" and rows[0]["key"] == "run-a"
     with pytest.raises(T.WN.AlreadyRead):
-        T.book_learn_read(led, "4h", "run-b")
-    T.book_learn_read(led, "1h", "run-b")
+        ST.book_learn_read(led, "4h", "run-b")
+    ST.book_learn_read(led, "1h", "run-b")
     assert len(T.WN.read_ledger(led)) == 2
 
 
@@ -809,33 +811,33 @@ def test_the_store_refuses_a_label_read_its_unit_has_not_booked(monkeypatch: pyt
         raise AssertionError("a label was read before the unit's learn read was booked")
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", boom)
-    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     led = tmp_path / "l.jsonl"
     for kw in ({}, {"unit": "4h", "read_key": "run-a"}):
-        with pytest.raises(T.ReadNotBooked):
-            T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, **kw).frame(  # type: ignore[arg-type]
+        with pytest.raises(ST.ReadNotBooked):
+            ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, **kw).frame(  # type: ignore[arg-type]
                 "XAUUSD", "4h", 2013)
-    T.book_learn_read(led, "4h", "run-b")
-    with pytest.raises(T.ReadNotBooked):            # another run's booking is not this run's
-        T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, unit="4h",
+    ST.book_learn_read(led, "4h", "run-b")
+    with pytest.raises(ST.ReadNotBooked):            # another run's booking is not this run's
+        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, unit="4h",
                     read_key="run-a").frame("XAUUSD", "4h", 2013)
 
 
 def test_a_judged_unit_reads_only_under_a_booked_trial_id() -> None:
     data, plan = _data(), _plan()
     assert plan.stage0["judged"]
-    with pytest.raises(T.ReadRefused, match="trial"):
-        T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
-    with pytest.raises(T.ReadRefused, match="trial"):
-        T.learner_read(pd.DataFrame(), "L-cw", trial_id=None, judged=True)
-    with pytest.raises(T.ReadRefused, match="trial"):
-        T.paired_d(pd.DataFrame(), "L-cw", "B8", trial_id=None, judged=True)
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.learner_read(pd.DataFrame(), "L-cw", trial_id=None, judged=True)
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.paired_d(pd.DataFrame(), "L-cw", "B8", trial_id=None, judged=True)
 
 
 def test_gcw_hb_and_avg_keep_sealed_scores_only_until_the_zoo_v2_card_is_signed(tmp_path: Path) -> None:
     data, plan = _data(), _plan()
-    assert T.ZOO_V2_CARD is None
-    res = T.fit_unit(data, plan, hb_by_fold=T.hb_from_plans(data, [plan], seed=T.SEEDS[0]), seeds=T.SEEDS,
+    assert R.ZOO_V2_CARD is None
+    res = R.fit_unit(data, plan, hb_by_fold=T.hb_from_plans(data, [plan], seed=T.SEEDS[0]), seeds=T.SEEDS,
                      read=True, trial_id=TRIAL, harness_rows=20_000)
     r = res.report
     assert set(r["learners"]) == {"L-cw"} and set(r["read_learners"]) == {"L-cw", "B8"}
@@ -847,8 +849,21 @@ def test_gcw_hb_and_avg_keep_sealed_scores_only_until_the_zoo_v2_card_is_signed(
     assert set(h["canaries"]) == set(h["shuffle"]) == set(h["parameter_shift"]) == {"L-cw"} and "seed_s" not in h
     assert {"v_G-cw", "v_HB", "v_AVG"} <= set(res.oof.columns), "their OOF scores are still written (sealed)"
     frames = T.frames_file(data, tmp_path / "frames.parquet")
-    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
                          data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
     for name in ("G-cw", "HB", "AVG"):
         assert "s" not in mans[name].results and not mans[name].quality, name
     assert "s" in mans["L-cw"].results
+
+
+# ---------------------------------------------------------------------------------------------- LOW: guarded fit
+def test_the_fit_path_is_a_guarded_module_and_its_guard_is_clean() -> None:
+    """Quant LOW on #488: sr_v3_train is in objective.GUARDED_MODULES; the read (diagnostics, AUC) and the run record
+    (model_quality, run_manifest) live in sr_v3_report, the stores in sr_v3_store, so nothing on the fit path reaches
+    a banned name or module."""
+    from goldbot.research import model_quality as MQ
+    from goldbot.research import objective as O
+    assert "goldbot.research.sr_v3_train" in O.GUARDED_MODULES
+    assert O.guard_violations("goldbot.research.sr_v3_train") == []
+    assert list(T.SEEDS) == MQ.seed_list(T.MANIFEST_KEY), "the fit path's copy of seed_list's formula"
+    assert R.BUILDER == "goldbot.research.sr_v3_report:build_artifact"
