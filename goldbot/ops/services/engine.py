@@ -558,6 +558,34 @@ def start_loop_watch(account_id: str, state_dir: str | Path = "state") -> "LoopW
     return watch
 
 
+# How long the engine waits for models/registry.lock to add a rule challenger (PR #494 round 3 safety MEDIUM): the
+# shadow set is built on the engine loop (startup and every model reload), which also runs exits.
+ENGINE_REGISTRY_LOCK_S = 1.0
+
+
+def rule_shadow_set(models_dir: str | Path, population_file: str | Path, *,
+                    lock_timeout_s: float = ENGINE_REGISTRY_LOCK_S) -> dict:
+    """The engine's shadow models. ADR 0038: a roster rule agent shadow-trades a RuleModel, so one is registered for
+    each that has no entry yet. When another writer holds the registry lock past `lock_timeout_s` the challenger is
+    not created this time (logged; the next reload retries) and the models already on disk are served."""
+    import pandas as pd
+
+    from goldbot.research.model_registry import ModelRegistry, RegistryLockTimeout
+    from goldbot.research.population import Population
+    from goldbot.specialists import SPECIALISTS
+    reg = ModelRegistry(models_dir, lock_timeout_s=lock_timeout_s)
+    pop = Population(Path(population_file))
+    pop.ensure_founders(pd.Timestamp.now("UTC"))
+    for m in pop.in_book():
+        if getattr(SPECIALISTS.get(m.family), "frozen_config", False):
+            try:
+                reg.ensure_rule_challenger(family=m.family, agent_id=m.agent_id)
+            except RegistryLockTimeout as exc:
+                log.warning("rule challenger for %s not created this reload: %s", m.agent_id, exc)
+                break                             # the lock is busy: do not wait once per agent
+    return reg.shadow_models()
+
+
 def run_engine(account_id: str) -> None:
     watch = resolve(start_loop_watch)(account_id)   # loop heartbeat + systemd watchdog (goldbot/ops/watchdog.py)
     try:
@@ -585,7 +613,6 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
-    from goldbot.specialists import SPECIALISTS
     from goldbot.telegram.approvals import ApprovalCenter
     from goldbot.telegram.bus import ApprovalBus
     configured = accounts.load_accounts()
@@ -681,13 +708,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         return {aid: ch.version for aid in reg.agent_ids() if (ch := reg.champion(aid)) is not None}
 
     def shadow_set() -> dict:
-        reg = ModelRegistry(settings.research.models_dir)
-        pop = Population(population_file)
-        pop.ensure_founders(pd.Timestamp.now("UTC"))
-        for m in pop.in_book():                           # ADR 0038: a roster rule agent shadow-trades a RuleModel
-            if getattr(SPECIALISTS.get(m.family), "frozen_config", False):
-                reg.ensure_rule_challenger(family=m.family, agent_id=m.agent_id)
-        return reg.shadow_models()
+        return rule_shadow_set(settings.research.models_dir, population_file)
 
     def population_view() -> tuple[list, dict[str, float]]:
         """Agents in the shadow book (live, shadow, recently retired) and the live agents' capital shares."""
@@ -866,7 +887,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                         eng.set_shadow_models(shadow_set())
                     log.info("reloaded: %d agents, %d live, models %s, shadow %s", len(eng.agents), len(live_shares),
                              sorted(eng.models), sorted(eng.shadow_models))
-                except (ValueError, TypeError, OSError) as exc:
+                except Exception as exc:   # noqa: BLE001 - one bad model or file never stops the engine (#494 H1)
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
 

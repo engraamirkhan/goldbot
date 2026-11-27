@@ -610,6 +610,11 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/risk/real_money.py", "load_adv_reference", "AdvReference"):
         "strict: config/data/adv_reference.yaml, versioned config (ADR 0106); an entry that does not validate gives no "
         "reference, so real-money entries are refused rm_volume_unknown (fail closed)",
+    ("goldbot/research/run_manifest.py", "load", "RunManifest"):
+        "strict: a content-addressed run manifest (ADR 0109); manifest_id is the hash of the body, so dropping an "
+        "unknown key would change what was recorded and a manifest that does not read must refuse serving",
+    ("goldbot/research/run_manifest.py", "record", "RunManifest"):
+        "not persisted: builds a new manifest from the run's fields before it is stored (built strictly, ADR 0010)",
     ("goldbot/ops/findings.py", "load_register", "Register"):
         "strict: config/findings.yaml, versioned config (a misspelt key or an unknown check must fail the load)",
     ("goldbot/ops/finding_checks.py", "parse_params", "spec.params"):

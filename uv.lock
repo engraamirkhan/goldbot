@@ -449,6 +449,7 @@ dependencies = [
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "structlog" },
+    { name = "threadpoolctl" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -511,6 +512,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-learn", specifier = ">=1.4" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "threadpoolctl", specifier = ">=3.5" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },

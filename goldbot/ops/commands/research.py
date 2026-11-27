@@ -1,5 +1,6 @@
 """Research commands (goldbot/research): `owner-history`, `ruin` (G-5), `sizing-feasibility` (G-7), the TradingView
-author ideas `tv-ideas`, the daily learning-ops review `daily-review`, and `autodisc-register` (ADR 0058 phase 4). The first three are the old dispatcher's branches, verbatim."""
+author ideas `tv-ideas`, the daily learning-ops review `daily-review`, `autodisc-register` (ADR 0058 phase 4) and
+`rollback-model` (ADR 0106 decision 7: restore an agent's previous champion model). The first three are the old dispatcher's branches, verbatim."""
 from __future__ import annotations
 
 import sys
@@ -47,3 +48,9 @@ def _daily_review(cmd: str, args: list[str]) -> None:
 def _autodisc_register(cmd: str, args: list[str]) -> None:
     from goldbot.ops.autodisc_register import main as autodisc_register_main
     sys.exit(autodisc_register_main(args))
+
+
+@register_command("rollback-model", pos=330)
+def _rollback_model(cmd: str, args: list[str]) -> None:
+    from goldbot.research.model_registry import rollback_main
+    sys.exit(rollback_main(args))

@@ -10,7 +10,7 @@ the registry and re-exports every name it always had.
                bridge-smoke, repair-lost-record
   auth.py      revoke-sessions, mail-test
   research.py  owner-history, ruin, sizing-feasibility, tv-ideas, ledger,
-               daily-review, autodisc-register
+               daily-review, autodisc-register, rollback-model
 
 Adding a command: write its handler in its area module with `@register_command("<name>", pos=...)` (registry.py
 explains the order; lazy imports only), add its line to the usage text in goldbot/ops/run.py, re-export any function

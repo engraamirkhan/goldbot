@@ -394,6 +394,27 @@ def test_a_raising_blackout_rescore_keeps_the_trade_and_still_manages_the_others
     assert len(failed) == 1 and failed[0]["position"] == first and "model blew up" in failed[0]["error"]
 
 
+def test_a_blackout_rescore_without_a_served_model_keeps_the_trade_and_says_so_once(tmp_path):
+    """PR #494 safety MEDIUM-3: an agent with an open trade can lose its model (a refused champion dropped at reload,
+    a restore refused). The re-score cannot run; the trade keeps its broker stop and target and its exit policy, and
+    the engine records `blackout_rescore_no_model` once per position and event instead of returning silently, and
+    publishes the position for health (`open_without_model`)."""
+    eng, pb = _engine(tmp_path, SESSION, ConstantModel(p=0.4), news_blackout=True)
+    _forbid_approvals(eng)
+    pid = _enter(eng, pb, SESSION, pd.Timestamp("2025-03-03 13:00", tz="UTC"), 2000.0)
+    eng.models = {}                                  # the model reload dropped the agent's model
+    eng._blackout_event = {"title": "US CPI", "ts_utc": "2025-03-03 13:30"}
+    for k in range(2):                               # two base bar closes in the same blackout
+        eng._blackout_close(pd.DataFrame(), pd.Timestamp("2025-03-03 13:15", tz="UTC") + pd.Timedelta(minutes=15 * k),
+                            {"15m": _frame()})
+    assert pid in eng.open and [p.position_id for p in pb.positions()] == [pid]
+    missing = [d for d in eng.decisions if d["action"] == "blackout_rescore_no_model"]
+    assert len(missing) == 1 and missing[0]["position"] == pid and missing[0]["event"] == "US CPI"
+    assert missing[0]["agent"] == SESSION.agent_id
+    from goldbot.engine import blackout
+    assert blackout.open_without_model(eng) == [pid]
+
+
 # ---------------------------------------------------------------------------------------------- safety review fixes
 def _hit(t0: pd.Timestamp, k: int = 0, px: float = 2001.0) -> Tick:
     return Tick(ts_utc=t0 + pd.Timedelta(minutes=5, seconds=k), bid=px, ask=px)

@@ -165,8 +165,14 @@ class Scored(FrozenRecord):
     primary: bool
 
 
-def _provenance_problem(row: tuple[Any, ...]) -> tuple[str | None, ServedModel | None]:
-    """(why the row is refused, None) or (None, the served model)."""
+NO_PROVENANCE = "no recorded"   # the prefix of the refusals of a row trained before provenance was recorded (mig. 45)
+MODEL_COLUMNS = ("model_version, arm_id, status, spec_version, cutoff_ns, activation_ns, model, model_sha256, "
+                 "feature_versions")   # the row `provenance_problem` reads (health model_influence reads the same)
+
+
+def provenance_problem(row: tuple[Any, ...]) -> tuple[str | None, ServedModel | None]:
+    """(why the row is refused, None) or (None, the served model). The one rule: the scorer serves by it and the
+    model_influence health check counts by it (goldbot/ops/checks/learning.py)."""
     from goldbot.research import self_retrain as sr
     from goldbot.research.self_retrain import LogitModel
     version, arm_id, status, spec, cutoff, activation, body, sha, fvs = row
@@ -206,13 +212,12 @@ def load_models(db: Database, broker: str) -> tuple[dict[str, tuple[ServedModel,
     q = ", ".join("?" for _ in SERVED_STATUSES)
     with db.connection() as conn:
         rows = conn.execute(
-            "SELECT model_version, arm_id, status, spec_version, cutoff_ns, activation_ns, model, model_sha256, "
-            f"feature_versions FROM self_retrain_models WHERE broker = ? AND status IN ({q}) "
+            f"SELECT {MODEL_COLUMNS} FROM self_retrain_models WHERE broker = ? AND status IN ({q}) "
             "ORDER BY arm_id, cutoff_ns, model_version", (broker, *SERVED_STATUSES)).fetchall()
     out: dict[str, list[ServedModel]] = {}
     problems: list[str] = []
     for row in rows:
-        why, served = _provenance_problem(tuple(row))
+        why, served = provenance_problem(tuple(row))
         if why is not None or served is None:
             problems.append(str(why))
             continue

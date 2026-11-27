@@ -22,7 +22,7 @@ from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m, triple
 from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
 from goldbot.research.lot_fit import LotFitSpec, lot_fit_overlay
 from goldbot.research.metrics import day_summed_dsr, expectancy, summarize
-from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
+from goldbot.research.model import DEFAULT_PARAMS, MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
 from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 
@@ -455,20 +455,21 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
                    n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
                    extra_cost_usd: float = 0.0, holdout: Window | None = None,
                    score_holdout: bool = False, swap: SwapSpec | None = None,
-                   full_coverage_columns: tuple[str, ...] = (), lot_fit: LotFitSpec | None = None) -> ResearchResult:
+                   full_coverage_columns: tuple[str, ...] = (), lot_fit: LotFitSpec | None = None,
+                   model_params: dict[str, Any] | None = None) -> ResearchResult:
     """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both). `full_coverage_columns` goes
     through to `evaluate`: a survivor trial of H-02 runs with the same per-fold mask (pre-registration pin 2026-10-17,
     item 3: "`run_specialist` passes the field through to `evaluate`"). `lot_fit` likewise (H-27)."""
     prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout, swap=swap)
     return evaluate(prep, model_features=model_features, n_trials=n_trials, trades_per_year=trades_per_year,
                     extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout,
-                    full_coverage_columns=full_coverage_columns, lot_fit=lot_fit)
+                    full_coverage_columns=full_coverage_columns, lot_fit=lot_fit, model_params=model_params)
 
 
 def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: int = 1,
              trades_per_year: float | None = None, extra_cost_usd: float = 0.0, holdout: Window | None = None,
              score_holdout: bool = False, full_coverage_columns: tuple[str, ...] = (),
-             lot_fit: LotFitSpec | None = None) -> ResearchResult:
+             lot_fit: LotFitSpec | None = None, model_params: dict[str, Any] | None = None) -> ResearchResult:
     """Purged walk-forward of one prepared configuration with the specialist's declared inputs and its walk-forward
     windows (the timeframe's, with the specialist's `walkforward` overrides).
 
@@ -480,7 +481,9 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     per configuration; see TrialRegistry.holdout_scored).
 
     full_coverage_columns: the per-fold mask of `_walk_forward` (H-02 amendment 2026-10-17); empty = no mask.
-    lot_fit: the H-27 overlay of `_walk_forward`; None (the default) = no overlay, every output as before."""
+    lot_fit: the H-27 overlay of `_walk_forward`; None (the default) = no overlay, every output as before.
+    model_params: LightGBM parameters over model.DEFAULT_PARAMS for every fold's fit, e.g. {"random_state": seed} for
+    one seed of a seed_stability read (model_quality); None (the default) = DEFAULT_PARAMS, every output as before."""
     spec = prep.spec
     if prep.labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=prep.labels, metrics={"n": 0},
@@ -493,7 +496,8 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
                          n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
                          holdout=holdout, score_holdout=score_holdout, window=window, timeframe=spec.timeframe,
-                         swap=prep.swap, full_coverage_columns=full_coverage_columns, lot_fit=lot_fit)
+                         swap=prep.swap, full_coverage_columns=full_coverage_columns, lot_fit=lot_fit,
+                         model_params=model_params)
 
 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
@@ -504,7 +508,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE,
                   tercile_q: float = TERCILE_Q,
                   full_coverage_columns: tuple[str, ...] = (),
-                  lot_fit: LotFitSpec | None = None) -> ResearchResult:
+                  lot_fit: LotFitSpec | None = None,
+                  model_params: dict[str, Any] | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
@@ -529,7 +534,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         fc = (fold_cols or {}).get(f.k, cols)
         gone = uncovered_columns(feats, f.train_idx, full_coverage_columns) if full_coverage_columns else []
         masked[str(f.k)] = gone
-        mdl = MetaLabelModel(feature_names=fc, feature_version=version).fit(
+        mdl = MetaLabelModel(feature_names=fc, feature_version=version,
+                             **({"params": {**DEFAULT_PARAMS, **model_params}} if model_params else {})).fit(
             mask_columns(feats.iloc[f.train_idx], gone), y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
         oof_pred[f.test_idx] = mdl.predict_raw(mask_columns(feats.iloc[f.test_idx], gone))
         last_model = mdl

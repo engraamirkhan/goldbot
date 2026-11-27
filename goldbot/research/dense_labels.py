@@ -74,7 +74,7 @@ from goldbot.data.daily import session_date
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features import build_features
-from goldbot.features.registry import column_lookback
+from goldbot.features.registry import CLOSE_ONLY_COLUMNS, column_lookback
 from goldbot.research import decision_cost as DC
 from goldbot.research import feature_store as F
 from goldbot.research import windows as WN
@@ -493,17 +493,33 @@ def input_lookback(tf: str, columns: Sequence[str], spec: LabelSpec = SPEC) -> p
     return pd.Timedelta(seconds=round(t))
 
 
+def close_only(column: str) -> bool:
+    """R-a: the column (a d1_ context column by its base column) is declared close-only in the registry."""
+    base = column[len(CONTEXT) + 1:] if column.startswith(f"{CONTEXT}_") else column
+    return base in CLOSE_ONLY_COLUMNS
+
+
 def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, columns: Sequence[str],
                  proxy_source: str | None = None, spec: LabelSpec = SPEC) -> pd.DataFrame:
-    """ADR 0104 4: a row is usable only if every session month its served inputs read (decision - `input_lookback`
-    of `columns`), its decision month and its label horizon are usable under the template rule (intraday: A /
-    A-consistent; 1d/1w barrier: A / A-consistent, T0 also B). `tier` = the worst tier over those months. The tiers
-    must grade the rows' own source (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the
-    graded one; any other source is `ungraded` and never usable."""
+    """ADR 0104 4 with rule R-a (quant ruling on PR #486): "A column declared close-only in the registry
+    (`CLOSE_ONLY_COLUMNS`) accepts lookback months graded B. Every other column needs A or A-consistent over its
+    lookback. The label window (decision month through horizon end) needs A or A-consistent for barrier templates, and
+    also B for T0 at 1d/1w as before. C, F, P and ungraded months are never usable. A row's usability is the
+    conjunction over its requested columns."
+    Two spans per row: strict = [decision - `input_lookback` of the columns that are not close-only, horizon end]
+    under the template rule; close = [decision - `input_lookback` of the close-only columns, decision] at A /
+    A-consistent / B. `tier` = the worst tier over every month the row reads (reporting). The tiers must grade the
+    rows' own source (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the graded one; any
+    other source is `ungraded` and never usable."""
     if labels.empty:
         return labels.assign(tier=pd.Series(dtype=str), usable=pd.Series(dtype=bool))
     out = labels.copy()
-    tier = np.full(len(out), "ungraded", dtype=object)
+    n = len(out)
+    names = {v: k for k, v in F.TIER_RANK.items()}
+    worst_strict = np.full(n, F.TIER_RANK["ungraded"])
+    worst_close = np.zeros(n, dtype=int)                    # no close-only column: nothing extra to read
+    strict_cols = [c for c in columns if not close_only(c)]
+    close_cols = [c for c in columns if close_only(c)]
     if tiers is not None:
         inst = str(out["instrument"].iloc[0])
         src = out["source"].astype(str)
@@ -511,23 +527,31 @@ def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, columns: Sequen
         graded = (key == tiers.key(inst)) | (proxy_source is not None and proxy_source == tiers.key(inst))
         if graded.any():
             g = out[graded]
-            lb = {t: input_lookback(t, columns, spec) for t in g["tf"].unique()}
-            start = pd.DatetimeIndex(g["decision_utc"]) - pd.to_timedelta(g["tf"].map(lb).to_numpy())
-            a, b = months_between(pd.Series(start), g["horizon_end_utc"])
-            lo, hi = min(a.min(), b.min()), max(a.max(), b.max())
-            allm = pd.period_range(lo, hi, freq="M").astype(str)
-            ranks = np.array([F.TIER_RANK.get(x, 6) for x in tiers.tier_of(inst, list(allm))])
-            pos = {mm: i for i, mm in enumerate(allm)}
-            names = {v: k for k, v in F.TIER_RANK.items()}
-            worst_of = {(x, y): names[int(ranks[pos[x]:pos[y] + 1].max())] for x, y in set(zip(a, b, strict=True))}
-            tier[graded] = [worst_of[(x, y)] for x, y in zip(a, b, strict=True)]
-    out["tier"] = tier.astype(str)
+            dec = pd.DatetimeIndex(g["decision_utc"])
+
+            def span_worst(cols: Sequence[str], end: pd.Series) -> np.ndarray:
+                lb = {t: input_lookback(t, cols, spec) for t in g["tf"].unique()}
+                start = dec - pd.to_timedelta(g["tf"].map(lb).to_numpy())
+                a, b = months_between(pd.Series(start), end)
+                allm = pd.period_range(min(a.min(), b.min()), max(a.max(), b.max()), freq="M").astype(str)
+                ranks = np.array([F.TIER_RANK.get(x, 6) for x in tiers.tier_of(inst, list(allm))])
+                pos = {mm: i for i, mm in enumerate(allm)}
+                w = {(x, y): int(ranks[pos[x]:pos[y] + 1].max()) for x, y in set(zip(a, b, strict=True))}
+                return np.array([w[(x, y)] for x, y in zip(a, b, strict=True)], dtype=int)
+            mask = np.asarray(graded, dtype=bool)
+            worst_strict[mask] = span_worst(strict_cols, g["horizon_end_utc"])
+            if close_cols:
+                worst_close[mask] = span_worst(close_cols, g["decision_utc"])
+    out["tier"] = pd.Series([names[int(x)] for x in np.maximum(worst_strict, worst_close)], index=out.index, dtype=str)
+    strict_name = pd.Series([names[int(x)] for x in worst_strict], index=out.index)
+    close_name = pd.Series([names[int(x)] for x in worst_close], index=out.index)
     is_daily = {t: tf_seconds(t) >= DAY_S for t in out["tf"].unique()}
     daily = out["tf"].map(is_daily).to_numpy(dtype=bool)
     barrier = ~out["template"].isin(CLOSE_TO_CLOSE).to_numpy()
-    allowed_a = out["tier"].isin(F.INTRADAY_TIERS).to_numpy()
-    allowed_b = out["tier"].isin(F.DAILY_TIERS).to_numpy()
-    out["usable"] = out["label_ok"].to_numpy(bool) & np.where(daily & ~barrier, allowed_b, allowed_a)
+    allowed_a = strict_name.isin(F.INTRADAY_TIERS).to_numpy()
+    allowed_b = strict_name.isin(F.DAILY_TIERS).to_numpy()
+    close_ok = close_name.isin(F.DAILY_TIERS).to_numpy()
+    out["usable"] = out["label_ok"].to_numpy(bool) & np.where(daily & ~barrier, allowed_b, allowed_a) & close_ok
     return out
 
 
@@ -922,7 +946,7 @@ def require_gate_eligible(meta: Mapping[str, Any]) -> None:
 
 __all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
            "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
-           "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "code_hash",
+           "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "close_only", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",
            "label_rows", "load_labels", "readable", "n_eff", "net_r", "partition_exists", "purge", "skeleton", "spec_hash",
            "uniqueness", "weights", "write_partition"]

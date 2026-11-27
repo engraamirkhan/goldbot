@@ -113,6 +113,12 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail" if unreadable >= alert_after else "warn")
         parts.append(f"broker positions/deals unreadable {unreadable} time(s) in a row (terminal fault?): entries "
                      f"blocked, exits retried every tick, closes not confirmed until it reads again")
+    # PR #494 safety MEDIUM-3: open trades of an agent whose model was refused or dropped at reload
+    no_model = e.get("open_without_model") or []
+    if no_model:
+        statuses.append("warn")
+        parts.append(f"open position(s) {', '.join(str(p) for p in no_model)} of an agent with no served model: no "
+                     "blackout re-score; broker stop/target and exit policy still manage them")
     # trading-safety R1 (engine/terminal_account.py): the terminal is logged in to another account than this engine's
     moved = e.get("terminal_account_changed")
     if moved:

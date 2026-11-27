@@ -369,6 +369,10 @@ class SchedulerSettings(_Section):
     # the 18:00 calendar fetch and the 22:00 open; data cutoff Friday 21:00 UTC, activation at the Sunday open
     self_retrain: ScheduleSettings = ScheduleSettings(kind="weekly", at="15:00", weekday=6, max_late_hours=6,
                                                       run_if_never_run=True)
+    # ADR 0106 decision 7 (goldbot/research/monthly_walkforward.py): the monthly walk-forward refit of record on the
+    # 1st, window ending 00:00 UTC that day; after journal_compact (03:40) and before the 06:05-07:15 morning jobs, clear
+    # of the 01:00-04:05 discovery window. Writes run manifests, never promotes. Late by up to 20 h still runs that day
+    monthly_walkforward: ScheduleSettings = ScheduleSettings(kind="monthly", at="04:30", day=1, max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -1102,6 +1106,36 @@ class MonthlyReviewSettings(_Section):
     issue_label: str = Field("review-monthly", pattern=r"^[\w.-]+$")   # the program-director clears these each session
 
 
+class ModelQualitySettings(_Section):
+    """ADR 0106 model-quality studies (goldbot/research/model_quality.py) and the monthly walk-forward trainers
+    (goldbot/research/monthly_walkforward.py). The trainers pass these to `param_shift` and `beats_baseline`; the
+    serving rule itself (>= 5 seeds, A/B/D must beat C, a manifest per fitted model) is code, not a setting. A value
+    here may tighten a study, never loosen it."""
+    param_shifts: list[float] = Field(default_factory=lambda: [0.1, 0.2])   # +- each fraction of every parameter
+    baseline_alpha: float = Field(0.05, gt=0, le=0.05)       # beats_baseline: bootstrap p must be <= this
+    baseline_boot: int = Field(10_000, ge=10_000)             # stationary day-block bootstrap draws (card minimum)
+    # "package.module:function" trainers the monthly job calls with (window_end, manifests_root). Refused while non-empty
+    # until the job runs each one in a niced, budgeted, killable child (trading-safety M1 on #494)
+    monthly_trainers: list[str] = Field(default_factory=list)
+
+    @field_validator("param_shifts")
+    @classmethod
+    def _covers_ten_and_twenty(cls, v: list[float]) -> list[float]:
+        if not {0.1, 0.2} <= {round(abs(x), 6) for x in v}:
+            raise ValueError("model_quality.param_shifts must include 0.1 and 0.2 (ADR 0106: +-10 % and +-20 %)")
+        return v
+
+    @field_validator("monthly_trainers")
+    @classmethod
+    def _dotted(cls, v: list[str]) -> list[str]:
+        """Trading-safety M1 on #494: the scheduler is single-threaded, so no trainer is listed until the job runs
+        each one in a niced child process with a time budget and a kill, as discovery_nightly does."""
+        if v:
+            raise ValueError("model_quality.monthly_trainers must stay empty until the monthly_walkforward job runs "
+                             "each trainer in a niced child process with budget_s and a kill (trading-safety M1)")
+        return v
+
+
 class FindingsSettings(_Section):
     """The findings register (goldbot/ops/findings.py; owner 2026-11-20: "feedback must close itself"). Every audit
     finding and owner directive is a row of `register` with an owner, a due date and a measurable check; the daily
@@ -1442,6 +1476,7 @@ class Settings(_Section):
     weekly_review: WeeklyReviewSettings = Field(default_factory=WeeklyReviewSettings)
     monthly_review: MonthlyReviewSettings = Field(default_factory=MonthlyReviewSettings)
     findings: FindingsSettings = Field(default_factory=FindingsSettings)
+    model_quality: ModelQualitySettings = Field(default_factory=ModelQualitySettings)
     trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
