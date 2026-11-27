@@ -1047,3 +1047,81 @@ def test_p30_wide_learners_skip_rows_outside_the_p30_mask_and_lcw_keeps_them() -
         assert o.loc[~off, f"v_{name}"].notna().any(), name
     assert res.report["rows_per_year"] and res.report["p30_rows_per_year"]
     assert sum(res.report["p30_rows_per_year"].values()) < sum(res.report["rows_per_year"].values())
+
+
+# ---------------------------------------------------------------------------------------------- gold row cost (N2)
+def _gold_cost_files(tmp_path: Path) -> Path:
+    """A cost manifest like srv3-cost-bb199294...: cost table with ecr_ub95_usd, the Dukascopy gold session spread
+    per month (available the instant after the month) and cost_table.json's commission per oz round trip."""
+    import hashlib
+    import json
+    man = _cost_files(tmp_path)
+    d = tmp_path / "costs"
+    ct = pd.read_parquet(d / "cost_table.parquet")
+    ct["ecr_ub95_usd"] = np.where(ct["instrument"] == "XAUUSD", np.where(ct["broker"] == "icm", 0.28, 0.30), np.nan)
+    ct.to_parquet(d / "cost_table.parquet", index=False)
+    months = [str(m) for m in pd.period_range("2012-10", "2013-06", freq="M")]
+    sp = pd.DataFrame([{"instrument": "XAUUSD", "session": s, "month": mo,
+                        "ub95_usd": 5.0 if mo == "2013-03" else (0.35 if s == "asia" else 0.20),
+                        "available_utc": (pd.Period(mo, "M") + 1).start_time.tz_localize("UTC")}
+                       for s in ("asia", "london", "newyork") for mo in months])
+    sp.to_parquet(d / "gold_spread_table.parquet", index=False)
+    (d / "cost_table.json").write_text(json.dumps({"commission_rt_usd_per_oz": {"icm": 0.08, "vantage": 0.06}}))
+    m = json.loads(man.read_text())
+
+    def sha(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    m["costs"]["path"] = str(d / "cost_table.json")
+    m["costs"]["files"].update({"cost_table_sha256": sha(d / "cost_table.parquet"),
+                                "gold_spread_table": str(d / "gold_spread_table.parquet"),
+                                "gold_spread_table_sha256": sha(d / "gold_spread_table.parquet")})
+    man.write_text(json.dumps(m))
+    return man
+
+
+def test_a_gold_row_is_charged_the_max_of_cell_ecr_and_last_complete_month_spread(tmp_path: Path) -> None:
+    """Data team N2 (cost version srv3-cost-bb199294): per gold row rt = max(cell rt_bp, ECR ub95 USD / entry x 1e4,
+    (Dukascopy spread ub95 of the session's latest COMPLETE month before the decision + commission) / entry x 1e4),
+    at the worse broker; 2013-priced fixture (entry 1,600)."""
+    t = T.CostTable.from_manifest(_gold_cost_files(tmp_path))
+    rows = _cost_rows(hour=2).assign(entry=1_600.0)                # asia, 2013-03-04..07: Feb is the last complete
+    want_icm = max(1.4, 0.28 / 1_600 * 1e4, (0.35 + 0.08) / 1_600 * 1e4)
+    want_vantage = max(0.9, 0.30 / 1_600 * 1e4, (0.35 + 0.06) / 1_600 * 1e4)
+    assert np.allclose(t.rt_bp(rows), max(want_icm, want_vantage))
+    assert t.rt_bp(rows).max() < 5.0 / 1_600 * 1e4, "the decision month's own spread is never used"
+    eur = _cost_rows(inst="EURUSD", hour=10)
+    assert np.allclose(t.rt_bp(eur), 0.9), "non-gold rows keep the cell"
+    assert "gold_spread_table" in t.files
+
+
+def test_the_gold_row_cost_equals_the_data_teams_row_rt_bp(tmp_path: Path) -> None:
+    """Pinned to scripts/research/sr_v3_cost_table.py:row_rt_bp at PR #512 commit 17181d1b (reimplemented here:
+    the guarded fit path imports no script)."""
+    import subprocess
+    import types
+    try:
+        src = subprocess.run(["git", "show", "17181d1b:scripts/research/sr_v3_cost_table.py"], cwd=ROOT,
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("PR #512's commit is not in this clone")
+    mod = types.ModuleType("sr_v3_cost_table_pr512")
+    mod.__dict__["__file__"] = str(ROOT / "scripts" / "research" / "sr_v3_cost_table.py")
+    exec(compile(src, "sr_v3_cost_table.py", "exec"), mod.__dict__)
+    man = _gold_cost_files(tmp_path)
+    t = T.CostTable.from_manifest(man)
+    d = tmp_path / "costs"
+    cost, spread = pd.read_parquet(d / "cost_table.parquet"), pd.read_parquet(d / "gold_spread_table.parquet")
+    rows = pd.concat([_cost_rows(hour=h).assign(entry=1_600.0 + h) for h in (2, 10, 16)], ignore_index=True)
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    sess = np.asarray(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex(rows["decision_utc"]))).astype(str)
+    ref = np.maximum.reduce([mod.row_rt_bp(rows.assign(broker=b, session=sess), cost, spread,
+                                           {"icm": 0.08, "vantage": 0.06}) for b in ("icm", "vantage")])
+    assert np.allclose(t.rt_bp(rows), np.maximum(DC.RT_BP, ref))
+
+
+def test_a_tampered_gold_spread_table_is_refused(tmp_path: Path) -> None:
+    man = _gold_cost_files(tmp_path)
+    p = tmp_path / "costs" / "gold_spread_table.parquet"
+    pd.read_parquet(p).assign(ub95_usd=0.0).to_parquet(p, index=False)
+    with pytest.raises(ValueError, match="sha256"):
+        T.CostTable.from_manifest(man)

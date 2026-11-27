@@ -159,11 +159,20 @@ class CostTable:
     market-derived, never in the repo); `from_manifest` checks each file's sha256.
 
     A cell charges the WORSE of its brokers: a history row has no account, so the conservative broker is charged
-    (W2 stays the floor whatever the table says)."""
+    (W2 stays the floor whatever the table says).
+
+    Gold rows (data team N2, cost version srv3-cost-bb199294 on): per row and broker, max(the cell's rt_bp, ECR ub95
+    USD / entry x 1e4, (Dukascopy gold spread ub95 of the session's latest COMPLETE month before the decision + the
+    broker's commission per oz round trip) / entry x 1e4), the worse broker taken; the spread is joined as-of on its
+    `available_utc` (the instant after its month). Identical to scripts/research/sr_v3_cost_table.py:row_rt_bp
+    (pinned by a test). The swap table's metal rows are the USD rate rule, never a credit."""
     version: str
     rt: Mapping[tuple[str, str, str], float]             # (instrument, session, tf) -> rt bp, max over brokers
     swap: Mapping[tuple[str, str], tuple[float, float]]  # (instrument, "YYYY-MM") -> (long, short) per night
     files: Mapping[str, str] = field(default_factory=dict)
+    gold_cells: pd.DataFrame | None = None               # gold: broker, session, tf, rt_bp, ecr_ub95_usd
+    gold_spread: pd.DataFrame | None = None              # session, available_utc, ub95_usd (sorted)
+    commission_rt: Mapping[str, float] = field(default_factory=dict)   # broker -> USD per oz round trip
 
     @classmethod
     def from_manifest(cls, path: Path | str) -> CostTable:
@@ -171,7 +180,7 @@ class CostTable:
         c = m.get("costs", m)
         f = c["files"]
         shas = {}
-        for name in ("cost_table", "swap_table"):
+        for name in ("cost_table", "swap_table", *(("gold_spread_table",) if "gold_spread_table" in f else ())):
             p = Path(f[name])
             got = hashlib.sha256(p.read_bytes()).hexdigest()
             if got != f[f"{name}_sha256"]:
@@ -180,7 +189,14 @@ class CostTable:
         ct = pd.read_parquet(f["cost_table"])
         rt = ct.groupby(["instrument", "session", "tf"], as_index=False)["rt_bp"].max()
         sw = pd.read_parquet(f["swap_table"])
-        return cls(version=str(c["cost_version"]),
+        gold_cells = gold_spread = None
+        comm: dict[str, float] = {}
+        if "gold_spread_table" in f:
+            meta = json.loads(Path(c["path"]).read_text())
+            comm = {str(k): float(v) for k, v in meta["commission_rt_usd_per_oz"].items()}
+            gold_cells = ct[ct["instrument"] == V.GOLD][["broker", "session", "tf", "rt_bp", "ecr_ub95_usd"]]
+            gold_spread = pd.read_parquet(f["gold_spread_table"]).sort_values("available_utc").reset_index(drop=True)
+        return cls(version=str(c["cost_version"]), gold_cells=gold_cells, gold_spread=gold_spread, commission_rt=comm,
                    rt={(str(r.instrument), str(r.session), str(r.tf)): float(r.rt_bp)
                        for r in rt.itertuples()},
                    swap={(str(i), str(mo)): (float(lp), float(sp)) for i, mo, lp, sp in zip(
@@ -197,7 +213,34 @@ class CostTable:
         if missing:
             raise CostCellMissing(f"cost {self.version}: no cell for {missing[:5]}{' ...' if len(missing) > 5 else ''}"
                                   " (instrument:session:tf); refused, never charged at W2")
-        return np.maximum(DC.RT_BP, np.array([self.rt[k] for k in keys], dtype=float))
+        rt = np.array([self.rt[k] for k in keys], dtype=float)
+        gold = rows["instrument"].astype(str).to_numpy() == V.GOLD
+        if self.gold_cells is not None and gold.any():
+            g = rows[gold]
+            rt[gold] = np.maximum.reduce([self._gold_row_bp(g, sess[gold], b) for b in sorted(self.commission_rt)])
+        return np.maximum(DC.RT_BP, rt)
+
+    def _gold_row_bp(self, rows: pd.DataFrame, sess: np.ndarray, broker: str) -> np.ndarray:
+        """sr_v3_cost_table.row_rt_bp for one broker (quant N2): max(cell rt_bp, ECR ub95 / entry, (spread ub95 of
+        the latest complete month + commission) / entry), in bp, NaN terms ignored."""
+        assert self.gold_cells is not None and self.gold_spread is not None
+        cells = self.gold_cells[self.gold_cells["broker"] == broker]
+        c = pd.DataFrame({"session": sess, "tf": rows["tf"].astype(str).to_numpy()}).merge(
+            cells[["session", "tf", "rt_bp", "ecr_ub95_usd"]], on=["session", "tf"], how="left")
+        entry = rows["entry"].to_numpy(float)
+        ecr = c["ecr_ub95_usd"].to_numpy(float) / entry * 1e4
+        sp = np.full(len(rows), np.nan)
+        dec = pd.to_datetime(rows["decision_utc"], utc=True).to_numpy()
+        for s_name, g in self.gold_spread.groupby("session"):
+            m = sess == s_name
+            if not m.any():
+                continue
+            av = pd.to_datetime(g["available_utc"], utc=True).to_numpy()
+            i = np.searchsorted(av, dec[m], side="right") - 1
+            v = g["ub95_usd"].to_numpy(float)
+            sp[m] = np.where(i >= 0, v[np.clip(i, 0, None)], np.nan)
+        spread_bp = (sp + self.commission_rt[broker]) / entry * 1e4
+        return np.asarray(np.nanmax(np.vstack([c["rt_bp"].to_numpy(float), ecr, spread_bp]), axis=0))
 
     def swap_rate(self, rows: pd.DataFrame) -> np.ndarray:
         """|swap per night| as a fraction of price for the row's instrument, decision month and side (a received swap
