@@ -289,6 +289,14 @@ def cell(instrument: str, tf: str, *, labels: Path, features: Path, weights: Pat
     return rec
 
 
+def cost_ref(path: Path) -> dict[str, Any] | None:
+    """The training cost table (scripts/research/sr_v3_cost_table.py) the trainer pins: version, files, quality."""
+    if not path.exists():
+        return None
+    m = json.loads(path.read_text())
+    return {"path": str(path), "cost_version": m["cost_version"], "files": m["files"], "pass": m["quality"]["pass"]}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instruments", default=",".join(MEMBERS))
@@ -328,7 +336,7 @@ def main() -> int:
                written_utc=str(pd.Timestamp.now(tz="UTC")),
                unit_versions={body: {u: data_version(a.labels, a.tiers, mem, tfs) for u, tfs in UNITS.items()}
                               for body, mem in (("gold", ["XAUUSD"]), ("pooled", list(MEMBERS)))},
-               ready_instruments=built)
+               ready_instruments=built, costs=cost_ref(a.out / "costs" / "cost_table.json"))
     mp.write_text(json.dumps(man, indent=1, default=str))
     return 0
 
