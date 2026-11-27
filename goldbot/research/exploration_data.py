@@ -131,6 +131,22 @@ BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
+# A label replayed while one of its broker's refit cost cells was stale (older than daily_review.CELL_MAX_AGE at the
+# slot) carries this in its cost_model_version: the cell was set aside, the label is costed on the table/prior only.
+STALE_CELLS_TAG = "+cells-stale:"
+
+
+def cost_cells_stale(version: object) -> bool:
+    """True when a label's cost_model_version records a stale refit cell set aside (`STALE_CELLS_TAG`)."""
+    return isinstance(version, str) and STALE_CELLS_TAG in version
+
+
+def drop_stale_cost_labels(obs: pd.DataFrame) -> pd.DataFrame:
+    """`obs` without the labels costed while a refit cell was stale: for reads that pool labels ACROSS brokers, where
+    a stale host (vantage-demo, replay-only) would otherwise mix in labels on a cost basis nobody measures any more."""
+    if obs.empty or "cost_model_version" not in obs.columns:
+        return obs
+    return obs[~obs["cost_model_version"].map(cost_cells_stale)].reset_index(drop=True)
 
 # versioned replay (EVAL-2 prereg-2026-11-09-eval2.md section 5): r1 is the row's own label_sim_r (the 2 x $0.15
 # prior), r2 the side table `exploration_replay` (measured legs, no credit, stop overshoot). Never overwritten

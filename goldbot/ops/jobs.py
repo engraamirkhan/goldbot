@@ -216,6 +216,7 @@ from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.exploration_data import (
     GOLD,
     REPLAY_V2,
+    STALE_CELLS_TAG,
     CostOfDay,
     ReplayCosts,
     ReplayCostsV2,
@@ -497,14 +498,21 @@ def exploration_costs(ctx: JobContext, slot: pd.Timestamp, broker: str) -> Repla
 
 def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: ReplayCosts) -> ReplayCosts:
     """The daily review's refit slippage cells (research/daily_review.py), point in time: charged only when dearer
-    than the slippage above, so a refit can raise a broker's replay cost and never lower it."""
+    than the slippage above, so a refit can raise a broker's replay cost and never lower it. A cell older than
+    `daily_review.CELL_MAX_AGE` at `slot` is stale: it never raises the cost, and the version records
+    `+cells-stale:<newest stale day>` (`exploration_data.cost_cells_stale`) so cross-broker reads can leave it out."""
     from goldbot.research.daily_review import replay_cells
     cells = replay_cells(state_dir, broker, slot)
-    if cells is None or cells[0] <= costs.slippage_usd:
+    if cells is None:
         return costs
-    slip, day, effective = cells
-    return costs.model_copy(update={"slippage_usd": slip, "version": f"{costs.version}+cells:{day}",
-                                    "effective_utc": max(costs.effective_utc, effective)})
+    out = costs
+    fresh, effective = cells.slippage_usd, cells.effective_utc
+    if fresh is not None and effective is not None and fresh > costs.slippage_usd:
+        out = out.model_copy(update={"slippage_usd": fresh, "version": f"{out.version}+cells:{cells.day}",
+                                     "effective_utc": max(out.effective_utc, effective)})
+    if cells.stale_day is not None:
+        out = out.model_copy(update={"version": f"{out.version}{STALE_CELLS_TAG}{cells.stale_day}"})
+    return out
 
 
 def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:

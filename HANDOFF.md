@@ -11,6 +11,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - `model_influence` names the active/shadow models shadow scoring refuses, judged by the scorer's own
     `provenance_problem` (now public), e.g. "0 served: 1 rows refused (no provenance, trained before migration 45)".
     No provenance backfill.
+- 2026-11-27 refit cost cells (aux.db `exploration_cost_cells`) expire: a cell fitted more than 14 days before the
+  label's slot (`daily_review.CELL_MAX_AGE`; exactly 14 d is still fresh) no longer raises the r1 replay cost.
+  - The label falls back to the broker's nightly measured table or the settings prior; `cost_model_version` records
+    `+cells-stale:<newest stale day>` (no migration). Vantage (replay-only since PR #505, newest cells 11-06/07) is
+    the case this fixes. As-of read unchanged (`fitted_ns <= slot`).
+  - The one cross-broker label read, the autodisc discovery priors (`read_demo_obs`), drops stale-flagged labels
+    (`exploration_data.drop_stale_cost_labels`). Per-broker learners are unchanged. Labels written before this
+    change carry no flag and are not relabelled.
 - 2026-11-26 ADR 0085 A4 records the D-1 served tiers file `tiers_served_r11-v2.1.csv` (sha256 ff653ea7…, rule blob
   c6f283d7), using the quant's text R-b on #472 verbatim.
   - `dense_labels.RECORDED_TIERS_SHA256` now holds it, which unseals learn-window label reads only.
