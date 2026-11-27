@@ -248,6 +248,9 @@ class AlreadyRead(PermissionError):
 READ_ONCE_FAMILIES: dict[str, frozenset[Window]] = {
     # H-101, prereg-2026-11-25-model-zoo-fusion.md: Stage L (learn labels), Stage C, Stage T
     "model_zoo_fusion": frozenset({Window.LEARN, Window.CONFIRM, Window.TEST_OLD}),
+    # sr-v3, prereg-2026-11-26-sr-v3.md (quant H3 on #488): each unit's learn-label read (Stage L) is read once,
+    # booked by the trainer before its first label read; one family per unit (= sr_v3.UNITS, pinned by a test)
+    **{f"sr-v3:{u}": frozenset({Window.LEARN}) for u in ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d+1w")},
 }
 READS_LEDGER = "window_reads.jsonl"     # beside the research registry (state/), never committed
 

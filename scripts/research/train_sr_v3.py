@@ -58,15 +58,36 @@ def refuse_before_x6() -> None:
                          "are on main: " + "; ".join(gaps))
 
 
-def _store(a: argparse.Namespace) -> T.StoreData:
+def _costs(a: argparse.Namespace) -> T.CostTable | None:
+    return T.CostTable.from_manifest(a.cost_manifest) if a.cost_manifest else None
+
+
+def _key(unit: str, a: argparse.Namespace) -> str:
+    """This run's read-once key for `unit` (the same in phase 1 and phase 3)."""
+    c = _costs(a)
+    return T.run_key(unit, [m for m in a.members.split(",") if m],
+                     cost_version=c.version if c else T.W2_COST_VERSION)
+
+
+def _store(a: argparse.Namespace, unit: str | None = None) -> T.StoreData:
     return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
-                       ledger=Path(a.ledger), rho=Path(a.rho),
-                       costs=T.CostTable.from_manifest(a.cost_manifest) if a.cost_manifest else None)
+                       ledger=Path(a.ledger), rho=Path(a.rho), costs=_costs(a), unit=unit,
+                       read_key=_key(unit, a) if unit else None)
+
+
+def require_trial(trial_id: int | None) -> None:
+    """--read on a judged unit names a trial booked in the research registry (quant H3 on #488)."""
+    if trial_id is None:
+        return
+    from goldbot.research.catalogue.run import default_registry
+    from goldbot.research.registry import TrialRegistry
+    if TrialRegistry(default_registry()).row(trial_id) is None:
+        raise SystemExit(f"refused: trial {trial_id} is not booked in {default_registry()}")
 
 
 def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     tfs = V.UNITS[unit]
-    store = _store(a)
+    store = _store(a, unit)
     members = [m for m in a.members.split(",") if m]
     events = {}
     for inst in members:
@@ -88,6 +109,8 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if extra:                    # quant M1 on #488: a served block column's longer lookback widens the unit's gap
         from goldbot.research import dense_labels as D
         plan.extra_lookback_s = max(D.input_lookback(t, extra).total_seconds() for t in plan.tfs)
+    # quant H3 on #488: the unit's learn read is booked in the read-once ledger before its first label read
+    T.book_learn_read(Path(a.ledger), unit, _key(unit, a))
     col = T.collect(store, plan, seed=T.SEEDS[0])
     save_collected(col, out)
     (out / "plan.json").write_text(json.dumps(plan.__dict__, indent=1, default=str))
@@ -159,13 +182,15 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if not (out / "collected.json").exists():
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
-    store, plan = _store(a), _plan(out)
-    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read)   # type: ignore[arg-type]
+    store, plan = _store(a, unit), _plan(out)
+    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read,     # type: ignore[arg-type]
+                     trial_id=a.trial_id)
     hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
     tiers = Path(a.tiers)
     mans = T.record_unit(res, plan, seeds=T.SEEDS, data_version=store.version(plan.members, plan.tfs, (0,)),
                          source={"kind": "store", "labels": str(a.labels), "features": str(a.features),
-                                 "tiers_file": tiers.name},
+                                 "tiers_file": tiers.name, "unit": unit, "read_key": _key(unit, a),
+                                 "cost_manifest": a.cost_manifest},
                          data_root=tiers.parent, data_files=[tiers.name], hb_plans=hb_plans,
                          root=Path(a.out) / "manifests")
     # quant H5 on #488: the manifests are recorded BEFORE the unit's outputs are written, and the report names them,
@@ -193,6 +218,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", default=str(T.OUT))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage0-only", action="store_true")
+    ap.add_argument("--trial-id", type=int, default=None,
+                    help="the booked research-registry trial a judged unit's --read runs under (quant H3)")
     ap.add_argument("--read", action="store_true",
                     help="compute the read statistics (refused unless the label read is gate_eligible at ub95)")
     return ap
@@ -201,6 +228,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     a = parser().parse_args()
     refuse_before_x6()
+    require_trial(a.trial_id)
     units = [u for u in a.units.split(",") if u]
     bad = [u for u in units if u not in V.UNITS]
     if bad:

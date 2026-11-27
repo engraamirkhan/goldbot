@@ -213,7 +213,9 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
         raise D.SealedStore("sealed")
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", sealed)
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers)
+    T.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
+                        read_key="run-a")
     monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     with pytest.raises(D.SealedStore):
         store.frame("XAUUSD", "4h", 2013)
@@ -224,12 +226,19 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
 
 
 # ---------------------------------------------------------------------------------------------- the unit fit
+TRIAL = 9_999                     # a booked registry trial id (the fixtures' read; never a real registry row)
+
+
 @pytest.fixture(scope="module")
 def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
+    """A full read of a judged unit, with the zoo-v2 card taken as signed (so G-cw, HB and AVG are read too)."""
     data, plan = _data(), _plan()
     col = T.collect(data, plan, seed=T.SEEDS[0])
     hb = T.hb_from_plans(data, [plan], seed=T.SEEDS[0])
-    return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(T, "ZOO_V2_CARD", "fixture: zoo-v2 signed")
+        return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True,
+                                      trial_id=TRIAL)
 
 
 def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple) -> None:
@@ -391,10 +400,12 @@ def test_read_statistic_mode_refuses_unless_the_label_read_is_gate_eligible() ->
     blocked = T.FrameData(data.frames, gate={"gate_eligible": False, "gate_block": ["cost_version w2-point"]},
                           cost_version="fixture-ub95")
     with pytest.raises(T.ReadRefused, match="w2-point"):
-        T.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+        T.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
     unknown = T.FrameData(data.frames, cost_version="fixture-ub95")
     with pytest.raises(T.ReadRefused, match="gate"):
-        T.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+        T.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
 
 
 def test_gate_status_and_mode_are_written_into_every_manifest(tmp_path: Path) -> None:
@@ -419,7 +430,9 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
     empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
     monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
     monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
-    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    T.book_learn_read(tmp_path / "l.jsonl", "4h", "run-a")
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl", unit="4h",
+                        read_key="run-a")
     monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
     store.frame("XAUUSD", "4h", 2013)
@@ -479,14 +492,14 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     data, plan = _data(readable=False), _plan()
     store = _FixtureStore(data.frames)
     s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
-    monkeypatch.setattr(cli, "_store", lambda a: store)
+    monkeypatch.setattr(cli, "_store", lambda a, unit=None: store)
     monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
     monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
     tiers = tmp_path / "tiers.csv"
     tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
     a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
                            tiers=str(tiers), rho=str(RHO_FILE), ledger=str(tmp_path / "l.jsonl"), out=str(tmp_path / "o"),
-                           stage0_only=False, read=False, cost_manifest=None)
+                           stage0_only=False, read=False, cost_manifest=None, trial_id=None)
     cli.phase1("4h", a)                                                                   # type: ignore[attr-defined]
     col = T.collect(data, plan, seed=T.SEEDS[0])
     saved = json.loads((tmp_path / "o" / "4h" / "collected.json").read_text())
@@ -502,6 +515,8 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     for mid in report["manifests"].values():
         m = RM.load(mid, root)
         assert m.train_end == col.train_end and m.label_end_max == col.label_end_max
+    rows = [r for r in T.WN.read_ledger(tmp_path / "l.jsonl") if r.get("family") == "sr-v3:4h"]
+    assert len(rows) == 1 and rows[0]["window"] == "learn", "phase 1 books the unit's learn read once (quant H3)"
 
 
 def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -628,7 +643,8 @@ def test_read_mode_refuses_w2_point_costs_even_on_a_gate_eligible_read() -> None
     data, plan = _data(readable=False), _plan()
     w2 = T.FrameData(data.frames, gate=ELIGIBLE)
     with pytest.raises(T.ReadRefused, match="w2-point"):
-        T.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+        T.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
 
 
 def test_the_store_reports_its_cost_table_version(tmp_path: Path) -> None:
@@ -694,7 +710,7 @@ def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) 
     assert not np.allclose(o["net_read"], o["net"]), "the fixture's realised leg differs from cost(x)"
     mean = float(o["net_read"].mean())
     assert r["baselines"]["B1_take_all"] == pytest.approx(mean - max(0.0, mean))
-    lr = T.learner_read(o, "L-cw")
+    lr = T.learner_read(o, "L-cw", trial_id=TRIAL, judged=True)
     assert lr["mean_net"] == pytest.approx(mean)
     k = o["k_L-cw"].to_numpy(float)
     assert lr["s_2x_cost"] == pytest.approx(float((o["net2"] * k).mean() - max(0.0, float(o["net2"].mean()))))
@@ -735,7 +751,7 @@ def test_year_y_oof_scores_and_fold_priors_ignore_every_label_at_or_after_the_cu
     data, plan = _data(readable=False), _plan()
     cut_dec = T.year_start(Y)
     cut_hor = cut_dec - T.gap("4h")
-    bumped = {}
+    bumped: dict[tuple[str, str, int], pd.DataFrame] = {}
     for k, f in data.frames.items():
         hit = ((pd.to_datetime(f["decision_utc"], utc=True) >= cut_dec)
                | (pd.to_datetime(f["horizon_end_utc"], utc=True) >= cut_hor)).to_numpy()
@@ -763,3 +779,76 @@ def test_year_y_oof_scores_and_fold_priors_ignore_every_label_at_or_after_the_cu
     assert pa == pb
     assert not np.allclose(T.FrameData(bumped).frame("XAUUSD", "4h", Y)["gross"],
                            data.frame("XAUUSD", "4h", Y)["gross"]), "the perturbation reached year Y's labels"
+
+
+# ---------------------------------------------------------------------------------------------- H3: read once
+def test_every_sr_v3_unit_is_a_read_once_family_of_learn() -> None:
+    for unit in V.UNITS:
+        assert T.WN.READ_ONCE_FAMILIES[f"sr-v3:{unit}"] == frozenset({T.WN.Window.LEARN}), unit
+    assert {f for f in T.WN.READ_ONCE_FAMILIES if f.startswith("sr-v3:")} == {f"sr-v3:{u}" for u in V.UNITS}
+
+
+def test_a_unit_books_its_learn_read_once_per_run_key(tmp_path: Path) -> None:
+    """Quant H3 on #488: record_read_once per unit before the first label read. The same run (key) continues
+    without a second row (phase 3 after phase 1, or the read after the fit of the same frozen run); any other run of
+    the unit raises AlreadyRead; units are independent."""
+    led = tmp_path / "window_reads.jsonl"
+    T.book_learn_read(led, "4h", "run-a")
+    T.book_learn_read(led, "4h", "run-a")
+    rows = T.WN.read_ledger(led)
+    assert len(rows) == 1 and rows[0]["family"] == "sr-v3:4h" and rows[0]["key"] == "run-a"
+    with pytest.raises(T.WN.AlreadyRead):
+        T.book_learn_read(led, "4h", "run-b")
+    T.book_learn_read(led, "1h", "run-b")
+    assert len(T.WN.read_ledger(led)) == 2
+
+
+def test_the_store_refuses_a_label_read_its_unit_has_not_booked(monkeypatch: pytest.MonkeyPatch,
+                                                              tmp_path: Path) -> None:
+    def boom(*a: object, **k: object) -> None:
+        raise AssertionError("a label was read before the unit's learn read was booked")
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(D, "load_labels", boom)
+    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    led = tmp_path / "l.jsonl"
+    for kw in ({}, {"unit": "4h", "read_key": "run-a"}):
+        with pytest.raises(T.ReadNotBooked):
+            T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, **kw).frame(  # type: ignore[arg-type]
+                "XAUUSD", "4h", 2013)
+    T.book_learn_read(led, "4h", "run-b")
+    with pytest.raises(T.ReadNotBooked):            # another run's booking is not this run's
+        T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=led, unit="4h",
+                    read_key="run-a").frame("XAUUSD", "4h", 2013)
+
+
+def test_a_judged_unit_reads_only_under_a_booked_trial_id() -> None:
+    data, plan = _data(), _plan()
+    assert plan.stage0["judged"]
+    with pytest.raises(T.ReadRefused, match="trial"):
+        T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+    with pytest.raises(T.ReadRefused, match="trial"):
+        T.learner_read(pd.DataFrame(), "L-cw", trial_id=None, judged=True)
+    with pytest.raises(T.ReadRefused, match="trial"):
+        T.paired_d(pd.DataFrame(), "L-cw", "B8", trial_id=None, judged=True)
+
+
+def test_gcw_hb_and_avg_keep_sealed_scores_only_until_the_zoo_v2_card_is_signed(tmp_path: Path) -> None:
+    data, plan = _data(), _plan()
+    assert T.ZOO_V2_CARD is None
+    res = T.fit_unit(data, plan, hb_by_fold=T.hb_from_plans(data, [plan], seed=T.SEEDS[0]), seeds=T.SEEDS,
+                     read=True, trial_id=TRIAL, harness_rows=20_000)
+    r = res.report
+    assert set(r["learners"]) == {"L-cw"} and set(r["read_learners"]) == {"L-cw", "B8"}
+    assert set(r["withheld"]) == {"G-cw", "HB", "AVG"}
+    assert all("G-cw" not in k and "HB" not in k and "AVG" not in k for k in r["paired_d"])
+    assert "d_vs_gcw" not in r["learners"]["L-cw"]
+    assert set(r["seed_stability"]) <= {"L-cw", "HB", "B8"}
+    h = r["harness"]
+    assert set(h["canaries"]) == set(h["shuffle"]) == set(h["parameter_shift"]) == {"L-cw"} and "seed_s" not in h
+    assert {"v_G-cw", "v_HB", "v_AVG"} <= set(res.oof.columns), "their OOF scores are still written (sealed)"
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    for name in ("G-cw", "HB", "AVG"):
+        assert "s" not in mans[name].results and not mans[name].quality, name
+    assert "s" in mans["L-cw"].results

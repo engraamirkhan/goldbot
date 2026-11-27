@@ -66,6 +66,10 @@ MANIFEST_KEY = "sr-v3:v0"
 SEEDS: tuple[int, ...] = tuple(MQ.seed_list(MANIFEST_KEY))
 CANARY_DELTAS: tuple[float, ...] = (0.03, 0.05, 0.10)
 SEED_SUBSAMPLE = 0.9                                # each G-cw seed fits this seed-hash share of its training rows
+# quant H3 on #488: G-cw, HB and AVG belong to zoo-v2, which books its own K; until its card is signed they write
+# sealed OOF scores only, never S or D. Set to the signed card's path and sha when it is.
+ZOO_V2_CARD: str | None = None
+ZOO_V2_LEARNERS: tuple[str, ...] = ("G-cw", "HB", "AVG")
 
 
 def one_thread() -> Any:
@@ -78,6 +82,10 @@ def one_thread() -> Any:
 class ReadRefused(PermissionError):
     """A read statistic (S, kept mean, S at 2x cost, D, a net-based verdict) was asked for on a label read that is not
     a gate read (`gate_eligible` not True) or without the ub95 cost of record."""
+
+
+class ReadNotBooked(PermissionError):
+    """A label read of a unit whose learn read this run has not booked in the read-once ledger (quant H3 on #488)."""
 
 
 class SequencingRefused(PermissionError):
@@ -676,8 +684,21 @@ def _day_boot(d_by_day: np.ndarray, *, seed: int = V.SEED_BOOT, boot: int = 2_00
     return float(d_by_day.mean()), float(np.quantile(draws, 0.05)), float(np.quantile(draws, 0.95))
 
 
-def learner_read(o: pd.DataFrame, name: str) -> dict[str, Any]:
-    """The descriptive obj-v1 read of one learner on OOF rows (no bootstrap beyond the per-day D)."""
+def _require_trial(trial_id: int | None, judged: bool, what: str) -> None:
+    if judged and trial_id is None:
+        raise ReadRefused(f"refused {what}: a judged unit is read only under a booked registry trial id (quant H3)")
+
+
+def read_learners() -> tuple[str, ...]:
+    """The learners a read may report S and D for: L-cw and its B8 baseline; G-cw, HB and AVG only once the zoo-v2
+    card is signed (`ZOO_V2_CARD`)."""
+    return ("L-cw", "B8", *(ZOO_V2_LEARNERS if ZOO_V2_CARD else ()))
+
+
+def learner_read(o: pd.DataFrame, name: str, *, trial_id: int | None, judged: bool) -> dict[str, Any]:
+    """The descriptive obj-v1 read of one learner on OOF rows (no bootstrap beyond the per-day D). A judged unit is
+    read only under a booked registry trial id (quant H3 on #488)."""
+    _require_trial(trial_id, judged, f"the read of {name}")
     k = o[f"k_{name}"].to_numpy(bool)
     if not len(o):
         return {"n": 0}
@@ -693,9 +714,10 @@ def learner_read(o: pd.DataFrame, name: str) -> dict[str, Any]:
             "n_eff": O.kish_n_eff(o["w"].to_numpy(float))}
 
 
-def paired_d(o: pd.DataFrame, a: str, b: str) -> dict[str, float]:
+def paired_d(o: pd.DataFrame, a: str, b: str, *, trial_id: int | None, judged: bool) -> dict[str, float]:
     """SYNTH R3: Δ net R per OOS session day, −(Σ dropped net)/days, as Σ net·(keep_a − keep_b) / days, with a
-    day-block 90 % band. Reported, never judged."""
+    day-block 90 % band. Reported, never judged; a judged unit only under a booked trial id (quant H3)."""
+    _require_trial(trial_id, judged, f"D {a} vs {b}")
     ok = o[f"v_{a}"].notna() & o[f"v_{b}"].notna()
     x = o[ok]
     if not len(x):
@@ -887,11 +909,19 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
     # ADR 0106 "stays profitable when parameters are shifted slightly": model_quality's +-10 % / +-20 % grid, one
     # parameter at a time, net mean after cost on the last fold (HB here is its own rung: λ0 and λ_c play λ, λ_a)
     rk = rows_key(te)
-    out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw"), rows=rk).model_dump(mode="json"),
-                              "HB": MQ.param_shift(lin, ev_lin("HB"), rows=rk).model_dump(mode="json"),
-                              "G-cw": MQ.param_shift(gb, ev_g, rows=rk).model_dump(mode="json")}
+    shifts = {"L-cw": lambda: MQ.param_shift(lin, ev_lin("L-cw"), rows=rk),
+              "HB": lambda: MQ.param_shift(lin, ev_lin("HB"), rows=rk), "G-cw": lambda: MQ.param_shift(gb, ev_g, rows=rk)}
+    out["parameter_shift"] = {n: shifts[n]().model_dump(mode="json") for n in learners}
+    if "G-cw" not in learners:
+        return _curve(out, tr, te, plan, pri, col, seeds)
     out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < SEED_SUBSAMPLE].reset_index(drop=True),
                                                 te, plan, pri, col.impute, seed=sd)) for sd in seeds]}
+    return _curve(out, tr, te, plan, pri, col, seeds)
+
+
+def _curve(out: dict[str, Any], tr: pd.DataFrame, te: pd.DataFrame, plan: UnitPlan, pri: DC.CostPriors,
+           col: Collected, seeds: Sequence[int]) -> dict[str, Any]:
+    """The L-cw learning curve and the half-split sign agreement (the harness's L-cw tail)."""
     curve = []
     order = np.argsort(_ns(tr["decision_utc"]), kind="stable")
     for n in (*[c for c in CURVE_SIZES if c < len(tr)], len(tr)):
@@ -971,7 +1001,7 @@ def read_refusal(data: UnitData) -> str | None:
 
 def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
              seeds: Sequence[int] = SEEDS, col: Collected | None = None, harness_rows: int = 200_000,
-             with_harness: bool = True, read: bool = False) -> UnitResult:
+             with_harness: bool = True, read: bool = False, trial_id: int | None = None) -> UnitResult:
     """Walk-forward fit, OOF scoring, v0 artifacts and the report for one unit (see the module docstring). The run is
     recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here. Fits on one BLAS/OpenMP thread, as
     `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit and so the artifact sha.
@@ -980,13 +1010,15 @@ def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArt
     cost, D or any other read statistic is computed or written. `read=True` adds the descriptive read and raises
     `ReadRefused` unless the label read is gate_eligible and costed at the ub95 cost of record (`read_refusal`)."""
     with one_thread():
+        if read:
+            _require_trial(trial_id, bool(plan.stage0.get("judged")), f"the read of unit {plan.unit}")
         return _fit_unit(data, plan, hb_by_fold=hb_by_fold, seeds=seeds, col=col, harness_rows=harness_rows,
-                         with_harness=with_harness, read=read)
+                         with_harness=with_harness, read=read, trial_id=trial_id)
 
 
 def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
               seeds: Sequence[int], col: Collected | None, harness_rows: int, with_harness: bool,
-              read: bool) -> UnitResult:
+              read: bool, trial_id: int | None) -> UnitResult:
     col = col or collect(data, plan, seed=seeds[0])
     dense_by_year: dict[int, L.DenseArtifact] = {}
     oof_parts: list[pd.DataFrame] = []
@@ -1033,8 +1065,8 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     gate = data.gate_status()
     if read and (why := read_refusal(data)):
         raise ReadRefused(f"refused the read statistics of unit {plan.unit}: {why}. Fit-only (the default) still runs")
-    report = (unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows, with_harness=with_harness)
-              if read else fit_report(oof, plan, col))
+    report = (unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows, with_harness=with_harness,
+                          trial_id=trial_id) if read else fit_report(oof, plan, col))
     report["mode"] = "read" if read else "fit-only"
     report["gate_eligible"], report["gate_block"] = gate["gate_eligible"], gate["gate_block"]
     report["cost_version"] = data.cost_version()
@@ -1063,8 +1095,13 @@ def fit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected) -> dict[str, A
 
 
 def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModels, *, seeds: Sequence[int],
-                harness_rows: int, with_harness: bool = True) -> dict[str, Any]:
-    rep: dict[str, Any] = {"unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
+                harness_rows: int, with_harness: bool = True, trial_id: int | None = None) -> dict[str, Any]:
+    allowed = read_learners()
+    judged = bool(plan.stage0.get("judged"))
+    tid: dict[str, Any] = {"trial_id": trial_id, "judged": judged}
+    rep: dict[str, Any] = {"trial_id": trial_id, "read_learners": list(allowed), "zoo_v2_card": ZOO_V2_CARD,
+                           "withheld": [b for b in BUILT if b not in allowed],
+                           "unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
                            "level": plan.stage0.get("level"), "judged": plan.stage0.get("judged"),
                            "served_lcw": list(plan.lcw_columns), "first_oof": plan.first_oof,
                            "rows_learn": col.n_rows, "tree_sample_pi": col.pi, "learners": {},
@@ -1078,27 +1115,31 @@ def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModel
                          "min_per_fold_60": bool(min(gate10.values()) >= V.MIN_PER_FOLD)}
     mean_net = float(oof["net_read"].mean())
     rep["baselines"] = {"B0_abstain": -max(0.0, mean_net), "B1_take_all": mean_net - max(0.0, mean_net),
-                        "B8_intercept_only": learner_read(oof, "B8"), "buy_and_hold": buy_and_hold(oof)}
+                        "B8_intercept_only": learner_read(oof, "B8", **tid), "buy_and_hold": buy_and_hold(oof)}
     for name in BUILT:
-        if f"k_{name}" not in oof:
+        if f"k_{name}" not in oof or name not in allowed:
             continue
         kind = L.LEARNERS[name].kind or "gross"
         o = oof[oof[f"v_{name}"].notna()]
-        entry = {"read": learner_read(o, name), "twin_s_expectation": twin_expectation(o, name) if len(o) else None,
+        entry = {"read": learner_read(o, name, **tid), "twin_s_expectation": twin_expectation(o, name) if len(o) else None,
                  "calibration": calibration(o, name, kind), "rank": rank_diagnostics(o, name, kind)}
-        if name != "G-cw":
-            entry["d_vs_gcw"] = paired_d(oof, name, "G-cw")
+        if name != "G-cw" and "G-cw" in allowed:
+            entry["d_vs_gcw"] = paired_d(oof, name, "G-cw", **tid)
         rep["learners"][name] = entry
-    rep["paired_d"] = {f"{a} vs {b}": paired_d(oof, a, b) for i, a in enumerate(BUILT) for b in BUILT[i + 1:]
+    rd = [b for b in BUILT if b in allowed]
+    rep["paired_d"] = {f"{a} vs {b}": paired_d(oof, a, b, **tid) for i, a in enumerate(rd) for b in rd[i + 1:]
                        if f"k_{a}" in oof and f"k_{b}" in oof}
-    rep["seed_stability"] = {**{k: dict(SEED_NOT_APPLICABLE) for k in CLOSED_FORM if k in BUILT},
-                             **{k: v.model_dump(mode="json") for k, v in seed_verdicts(oof, seeds).items()}}
+    rep["seed_stability"] = {**{k: dict(SEED_NOT_APPLICABLE) for k in CLOSED_FORM if k in BUILT and k in allowed},
+                             **{k: v.model_dump(mode="json") for k, v in seed_verdicts(oof, seeds).items()
+                                if k in allowed}}
     gold = {i: {"shrunk": v0.lcw.levels.get(i), "unshrunk": v0.lcw.levels_unshrunk.get(i)} for i in v0.lcw.levels}
     rep["levels"] = gold or "gold body: no instrument level (unit intercept only)"
     yr = pd.DatetimeIndex(pd.to_datetime(oof["decision_utc"], utc=True)).year
     late = oof[np.isin(yr, [2015, 2016, 2017])]
     rep["v0_keep_share_2015_17"] = float(late["k_L-cw"].mean()) if len(late) else None   # H1 breaker reference (OOF)
-    rep["harness"] = harness(col, plan, seeds=seeds, max_rows=harness_rows) if with_harness else {"skipped": "builder"}
+    hl = tuple(n for n in ("L-cw", "HB", "G-cw") if n in allowed)
+    rep["harness"] = (harness(col, plan, seeds=seeds, max_rows=harness_rows, learners=hl) if with_harness
+                      else {"skipped": "builder"})
     rep["not_in_this_report"] = ["Stage L gates (evaluator)", "B2-B6 baselines (5.2, evaluator)",
                                  "arm-fire subset S (no arm candidates in dense rows)", "block dS table (no X block "
                                  "built)", "offset bias, staleness (live)", "£/day at 0.01 lot (needs the lot map)"]
@@ -1286,7 +1327,9 @@ def build_artifact(spec: Any) -> bytes:
     else:
         st = cfg["source"]
         data = StoreData(labels=Path(st["labels"]), features=Path(st["features"]),
-                         tiers_path=Path(spec.data_files[st["tiers_file"]]))
+                         tiers_path=Path(spec.data_files[st["tiers_file"]]), unit=st.get("unit"),
+                         read_key=st.get("read_key"),
+                         costs=CostTable.from_manifest(st["cost_manifest"]) if st.get("cost_manifest") else None)
     plan = plan_of(cfg["plan"])
     seeds = tuple(int(s) for s in spec.seeds)
     hb_plans = [plan_of(p) for p in cfg["hb_plans"]]
@@ -1306,7 +1349,8 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
     paired D against G-cw stays diagnostic."""
     from goldbot.research import run_manifest as RM
     read = res.report.get("mode") == "read"
-    verdicts = seed_verdicts(res.oof, seeds) if read else {}       # net-based: a read statistic (quant H2)
+    allowed = set(res.report.get("read_learners") or ()) if read else set()
+    verdicts = {k: v for k, v in seed_verdicts(res.oof, seeds).items() if k in allowed} if read else {}   # H2, H3
     shift = ((res.report.get("harness") or {}).get("parameter_shift") or {}) if read else {}
     status = {k: res.report.get(k) for k in ("mode", "gate_eligible", "gate_block", "cost_version",
                                               "oof_scores_sha256")}
@@ -1328,11 +1372,47 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
                               served="seed0", seeds=seeds, unit=plan.unit, fold_keys=folds, train_end=end,
                               scaler_fit_end=end, label_end_max=label_end, data_files=shas, builder=BUILDER,
                               results={**((res.report.get("learners", {}).get(name) or {}).get("read", {})
-                                          if read else {}), **status}, quality=q,
+                                          if name in allowed else {}), **status}, quality=q,
                               spec_id=V.SPEC_VERSION, root=root, repo=repo)
     return out
 
 # ---------------------------------------------------------------------------------------------- the stores
+def learn_family(unit: str) -> str:
+    """The read-once family of one sr-v3 unit's learn-label read (windows.READ_ONCE_FAMILIES)."""
+    return f"sr-v3:{unit}"
+
+
+def book_learn_read(ledger: Path | str, unit: str, run_key: str) -> None:
+    """Quant H3 on #488: record the unit's learn read (`windows.record_read_once`) BEFORE its first label read. The
+    same run key continues without a new row (phase 3 after phase 1; the read after the fit of the same frozen run:
+    same code, data and plan, so the same rows and fits); another run key of the unit raises `AlreadyRead`."""
+    fam = learn_family(unit)
+    if any(r.get("family") == fam and r.get("window") == WN.Window.LEARN.value and r.get("key") == run_key
+           for r in WN.read_ledger(ledger)):
+        return
+    WN.record_read_once(ledger, fam, WN.Window.LEARN, ref={"procedure": V.SPEC_VERSION, "unit": unit,
+                                                          "manifest_key": MANIFEST_KEY}, resume_key=run_key)
+
+
+def require_booked(ledger: Path | str, unit: str | None, run_key: str | None) -> None:
+    """Refuse a label read unless this run (`run_key`) booked its unit's learn read in `ledger`."""
+    fam = learn_family(unit) if unit else None
+    if fam is None or run_key is None or not any(
+            r.get("family") == fam and r.get("window") == WN.Window.LEARN.value and r.get("key") == run_key
+            for r in WN.read_ledger(ledger)):
+        raise ReadNotBooked(f"refused the label read: unit {unit!r} run {run_key!r} has no learn booking in {ledger} "
+                            "(book_learn_read before the first label read; quant H3 on #488)")
+
+
+def run_key(unit: str, members: Sequence[str], *, cost_version: str = W2_COST_VERSION) -> str:
+    """The run's identity for its read-once booking: manifest key, unit, members, label spec and code hashes, the
+    trainer's code files and the cost version (the same in phase 1 and phase 3 of one run)."""
+    from goldbot.research import dense_labels as D
+    blob = {"manifest_key": MANIFEST_KEY, "unit": unit, "members": sorted(members), "spec": D.spec_hash(),
+            "code": D.code_hash(), "trainer": code_version()["files"], "costs": cost_version}
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
+
+
 def default_ledger() -> Path:
     """`windows.READS_LEDGER` beside the research registry (`catalogue.run.default_registry`, GOLDBOT_REGISTRY or the
     main checkout's state/): the one ledger every sr-v3 label read and booking is written to."""
@@ -1354,6 +1434,8 @@ class StoreData:
     weights: Path | None = None
     rho: Path | None = None                              # the D-12 rho file Stage 0 read (in the data version, H5)
     costs: CostTable | None = None                       # the per-cell cost of record (H1); None = w2-point
+    unit: str | None = None                              # the unit and run whose learn read is booked (H3)
+    read_key: str | None = None
     # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
     # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
     ledger: Path = field(default_factory=lambda: default_ledger())
@@ -1420,6 +1502,7 @@ class StoreData:
     def _learn_frame(self, instrument: str, tf: str, phases: Sequence[int]) -> pd.DataFrame:
         from goldbot.research import dense_labels as D
         refuse_unsequenced(f"the label read {instrument} {tf}")
+        require_booked(self.ledger, self.unit, self.read_key)
         from goldbot.research import feature_store as F
         from goldbot.research.self_retrain import design
         ks = {(y, int(p)): k for y in V.LEARN_YEARS for p in phases
