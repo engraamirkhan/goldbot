@@ -479,7 +479,7 @@ def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_en
     data, plan = _data(readable=False), _plan()
     store = _FixtureStore(data.frames)
     s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
-    monkeypatch.setattr(cli, "_store", lambda a: store)                                   # type: ignore[attr-defined]
+    monkeypatch.setattr(cli, "_store", lambda a: store)
     monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
     monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
     tiers = tmp_path / "tiers.csv"
