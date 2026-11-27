@@ -77,9 +77,9 @@ def test_slip_x_is_the_charged_ecr_cells_slippage() -> None:
     ecr = yaml.safe_load((ROOT / "config" / "engine_costs" / f"{rec.ecr_version}.yaml").read_text())
     for c in rec.gold_cells:
         accts = [a for a, b in ecr["brokers"].items() if b == c.broker]
-        cand = [ecr["cells"][a][c.session][t] for a in accts for t in (c.tf, "all")
-                if t in ecr["cells"].get(a, {}).get(c.session, {})
-                and np.isclose(ecr["cells"][a][c.session][t]["charged_usd"], c.ecr_ub95_usd, atol=1e-6)]
+        t = "all" if c.basis.startswith("ecr-session-all") else c.tf      # the cell the builder charged
+        cand = [x for a in accts if (x := ecr["cells"].get(a, {}).get(c.session, {}).get(t)) is not None
+                and x["n"] >= rec.ecr_min_fills and np.isclose(x["charged_usd"], c.ecr_ub95_usd, atol=1e-6)]
         assert cand, f"{c}: no ECR cell charges {c.ecr_ub95_usd}"
         want = max(0.0, cand[0]["charged_usd"] - cand[0]["spread_usd"] - cand[0]["commission_usd"])
         assert c.slip_x_usd == pytest.approx(want, abs=1e-6)

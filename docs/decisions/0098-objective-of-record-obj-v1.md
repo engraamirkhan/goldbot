@@ -89,8 +89,11 @@ the table in section 2 and ruling D14). The 2x cost stress row must keep S ≥ 0
 **R-H recording (sr-v3 card D-3, W2-2 / A9; microstructure-researcher; quant countersigns on the PR).** A label read
 is costed at the ub95 cost of record only under a version recorded here, whose record file
 `config/research/srv3_cost_record/<version>.yaml` pins every table file's sha256 and every gold cell, and only for
-instruments whose class is measured (`goldbot/research/srv3_cost_record.py`; a prior keeps the D-3 block).
-- Recorded 2026-11-27: srv3-cost-bb199294fe509df0, content sha256 bb199294fe509df0514ef8ccfbc89499ef6f9004eba5d9fc4eaac3eca82c27db (ECR ecr-2026-11-20.2, charge rule ub95; measured: XAUUSD; prior: FX10, XAGUSD). Frozen label-blind, before any sr-v3 label value was read under it.
+instruments whose class is measured (`goldbot/research/srv3_cost_record.py`; a prior keeps the D-3 block, and gold
+1m/5m stay blocked until the D-15 decision-to-fill wait cost is pinned). The cost version a unit is first read under
+is its version of record. A read of the same unit under another cost version is a new trial (K+1), and the first read
+stands. A holdout read needs a new version.
+- Recorded 2026-11-27: srv3-cost-2b3628372a9b3bfa, content sha256 2b3628372a9b3bfa10e84b8b63bbcc04dac152d198883430654b4bd509dfa684 (ECR ecr-2026-11-20.2, charge rule ub95, era term with slip_x per quant F4 on #515; measured: XAUUSD; prior: FX10, XAGUSD; wait-charged tfs: none). Frozen label-blind, before any sr-v3 label value was read under it. It supersedes the unread draft srv3-cost-bb199294 (era term without slippage), which was never recorded.
 
 **R-I. The filter's implementation: cost-offset form first.**
 - **Primary (pre-registered):** the offset form. The learner predicts E[gross R | x] (clipped at ±10 R; uniqueness
