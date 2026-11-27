@@ -55,6 +55,7 @@ import re
 import sqlite3
 import sys
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -447,11 +448,13 @@ def write_cell(db: Database, *, broker: str, session: str, day: str, slippage_us
 
 
 def _cells(conn: sqlite3.Connection, broker: str, as_of: pd.Timestamp) -> dict[str, tuple[float, str, int, int]]:
-    """session -> (slippage, day, fitted_ns, through_ns) of the latest fit effective at `as_of`."""
+    """session -> (slippage, day, fitted_ns, through_ns) of the latest fit effective at `as_of`: fitted at or before
+    `as_of` on fills through `as_of` at the latest (quant #507: a cell resting on fills after the slot is never read)."""
     out: dict[str, tuple[float, str, int, int]] = {}
+    at = int(pd.Timestamp(as_of).value)
     for session, slip, day, fitted, through in conn.execute(
             "SELECT session, slippage_usd, day, fitted_ns, through_ns FROM exploration_cost_cells "
-            "WHERE broker = ? AND fitted_ns <= ? ORDER BY day", (broker, int(pd.Timestamp(as_of).value))):
+            "WHERE broker = ? AND fitted_ns <= ? AND through_ns <= ? ORDER BY day", (broker, at, at)):
         out[str(session)] = (float(slip), str(day), int(fitted), int(through))
     return out
 
@@ -462,9 +465,33 @@ def cost_cells(db: Database, broker: str, as_of: pd.Timestamp) -> dict[str, floa
         return {s: v[0] for s, v in _cells(conn, broker, as_of).items()}
 
 
-def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp) -> tuple[float, str, pd.Timestamp] | None:
-    """For the label replay (jobs.exploration_costs): (the dearest refit cell of `broker` in effect at `as_of`, the
-    newest fit day, when it took effect); None without any, without aux.db or before migration 18. Read only."""
+# research-director 2026-11-27: a refit cell older than this at the label's slot is stale, aged on the fills it rests
+# on (slot - through_ns; quant #507: a late fit of old fills is still old). A stale cell still charges (it is the
+# broker's last measurement; a host that stopped filling, e.g. vantage-demo replay-only since PR #505, has not shown
+# cheaper slippage) but the label records `+cells-stale:<day>` when it sets the charge. Exactly 14 days is still
+# fresh. 14 d is a convention (about two refit cycles at the target fill rate), not a measured stability horizon.
+CELL_MAX_AGE = pd.Timedelta(days=14)
+
+
+@dataclass(frozen=True)
+class ReplayCells:
+    """The refit cells of a broker in effect at a slot: the dearest FRESH one (None when every cell is stale), the
+    newest fresh fit day and when it took effect; the newest stale fit day (still charged when dearest), the dearest
+    stale value and when the newest stale fit took effect (None when no cell was stale)."""
+    slippage_usd: float | None
+    day: str | None
+    effective_utc: pd.Timestamp | None
+    stale_day: str | None
+    stale_slippage_usd: float | None = None
+    stale_effective_utc: pd.Timestamp | None = None
+
+
+def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
+                 max_age: pd.Timedelta = CELL_MAX_AGE) -> ReplayCells | None:
+    """For the label replay (jobs.exploration_costs): the refit cells of `broker` in effect at `as_of` (fitted_ns <=
+    as_of and through_ns <= as_of, the latest per session; a cell resting on fills after the slot is never read), split
+    into fresh (as_of - through_ns <= `max_age`) and stale; None without any, without aux.db or before migration 18.
+    Read only."""
     p = db_path(state_dir, "aux")
     if not p.exists():
         return None
@@ -478,8 +505,16 @@ def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp) -> tup
         return None
     if not cells:
         return None
-    return (max(v[0] for v in cells.values()), max(v[1] for v in cells.values()),
-            pd.Timestamp(max(v[2] for v in cells.values()), unit="ns", tz="UTC"))
+    oldest_ok = int(pd.Timestamp(as_of).value) - int(max_age.value)
+    fresh = [v for v in cells.values() if v[3] >= oldest_ok]          # slot - through_ns <= max_age
+    stale = [v for v in cells.values() if v[3] < oldest_ok]
+    return ReplayCells(
+        slippage_usd=max(v[0] for v in fresh) if fresh else None,
+        day=max(v[1] for v in fresh) if fresh else None,
+        effective_utc=pd.Timestamp(max(v[2] for v in fresh), unit="ns", tz="UTC") if fresh else None,
+        stale_day=max(v[1] for v in stale) if stale else None,
+        stale_slippage_usd=max(v[0] for v in stale) if stale else None,
+        stale_effective_utc=pd.Timestamp(max(v[2] for v in stale), unit="ns", tz="UTC") if stale else None)
 
 
 def last_fits(conn: sqlite3.Connection, broker: str) -> dict[str, tuple[float, str, int, int]]:

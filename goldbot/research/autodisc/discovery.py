@@ -555,14 +555,15 @@ def registry_used(path: Path) -> Callable[[str], int]:
 # ------------------------------------------------------------------ inputs
 def read_demo_obs(settings: Settings, state_dir: Path, slot: pd.Timestamp, *, write: bool) -> pd.DataFrame:
     """Gold exploration candidates labelled by `slot`, net of the void evidence (the learner's own read); empty when
-    aux.db does not exist. A dry run opens it without migrating."""
+    aux.db does not exist. A dry run opens it without migrating. This read pools brokers, so a label costed while a
+    refit cell was stale (`exploration_data.drop_stale_cost_labels`, research-director 2026-11-27) is left out."""
     from goldbot.db.connection import Database, db_path
-    from goldbot.research.exploration_data import GOLD, read_obs
+    from goldbot.research import exploration_data as ex
     if not db_path(state_dir, "aux").exists():
         return pd.DataFrame()
     try:
-        return read_obs(Database.open(state_dir, "aux", migrate=write), as_of=slot, evidence="posterior",
-                        instrument=GOLD)
+        return ex.drop_stale_cost_labels(ex.read_obs(Database.open(state_dir, "aux", migrate=write), as_of=slot,
+                                                     evidence="posterior", instrument=ex.GOLD))
     except Exception as exc:                 # noqa: BLE001 - no priors is a valid night (uniform grammar)
         log.warning("discovery: demo labels unreadable (%s): no priors from them tonight", type(exc).__name__)
         return pd.DataFrame()
