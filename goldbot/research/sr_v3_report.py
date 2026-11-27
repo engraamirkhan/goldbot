@@ -500,7 +500,9 @@ def report_md(r: Mapping[str, Any]) -> str:
              f"Level {r.get('level')} (judged: {r.get('judged')}); members {', '.join(r.get('members', []))}; "
              f"first OOF {r.get('first_oof')}; L-cw served columns: {served}.", "",
              f"Mode: {r.get('mode')}; gate_eligible {r.get('gate_eligible')} "
-             f"({'; '.join(r.get('gate_block') or []) or 'no block'}); cost version {r.get('cost_version')}; sealed OOF "
+             f"({'; '.join(r.get('gate_block') or []) or 'no block'}); cost version {r.get('cost_version')} (table "
+             f"{r.get('cost_table_version')}); gate read {r.get('gate_read')}"
+             f"{' (' + str(r.get('gate_read_block')) + ')' if r.get('gate_read_block') else ''}; sealed OOF "
              f"scores sha256 {r.get('oof_scores_sha256')}.", ""]
     if r.get("mode") != "read":
         lines += ["Fit-only: artifacts and sealed OOF scores only. No read statistic is computed until the label "
@@ -626,6 +628,7 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
     verdicts = {k: v for k, v in seed_verdicts(res.oof, seeds).items() if k in allowed} if read else {}   # H2, H3
     shift = ((res.report.get("harness") or {}).get("parameter_shift") or {}) if read else {}
     status = {k: res.report.get(k) for k in ("mode", "gate_eligible", "gate_block", "cost_version",
+                                              "cost_table_version", "gate_read", "gate_read_block",
                                               "oof_scores_sha256")}
     shas = {f: RM.file_sha256(Path(data_root) / f) for f in data_files}
     if not res.report.get("train_end") or not res.report.get("label_end_max"):

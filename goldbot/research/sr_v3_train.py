@@ -743,7 +743,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     report = fit_report(oof, plan, col)
     report["mode"] = "fit-only"
     report["gate_eligible"], report["gate_block"] = gate["gate_eligible"], gate["gate_block"]
-    report["cost_version"] = data.cost_version()
+    report.update(cost_status(data, plan))
     report["oof_scores_sha256"] = scores_sha(oof)
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
@@ -753,6 +753,20 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     report["label_end_max"] = col.label_end_max.isoformat() if col.label_end_max is not None else None
     return UnitResult(report=report, artifacts=arts, oof=sealed_scores(oof), full=oof, v0=v0, col=col)
 
+
+
+PRIOR_COST_VERSION = "prior"
+POOLED_PRIOR_BLOCK = ("pooled body: FX and other non-gold costs are priors (spread + commission, W2 floor) with no "
+                      "measured anchor; a descriptive read only, never a gate read (quant re-verify on #488)")
+
+
+def cost_status(data: UnitData, plan: UnitPlan) -> dict[str, Any]:
+    """The run's cost version and whether its read may be a gate read. Any body with a non-gold member is costed at
+    priors: cost_version "prior", never a gate read, until FX has a measured cost anchor (quant re-verify on #488)."""
+    table = data.cost_version()
+    pooled = any(m != V.GOLD for m in plan.members)
+    return {"cost_version": PRIOR_COST_VERSION if pooled else table, "cost_table_version": table,
+            "gate_read": not pooled, "gate_read_block": POOLED_PRIOR_BLOCK if pooled else None}
 
 
 def fit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected) -> dict[str, Any]:

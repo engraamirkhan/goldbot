@@ -943,3 +943,21 @@ def test_every_read_states_s_at_the_worse_broker_cost(fitted: tuple) -> None:
     assert r["cost_statement"] == R.WORSE_BROKER_STATEMENT == "S at the worse-broker cost"
     assert "S at the worse-broker cost" in R.report_md(r)
     assert all(e["read"]["cost_statement"] == R.WORSE_BROKER_STATEMENT for e in r["learners"].values())
+
+
+# ---------------------------------------------------------------------------------------------- pooled costs
+def test_a_pooled_body_read_carries_prior_costs_and_is_never_a_gate_read(fitted: tuple, tmp_path: Path) -> None:
+    """Quant re-verify on #488: FX costs are priors (no measured anchor), so any pooled-body read carries
+    cost_version=prior and is refused as a gate read; a gold-only body keeps its table version."""
+    data, plan, res = fitted
+    r = res.report
+    assert r["cost_version"] == "prior" and r["cost_table_version"] == "fixture-ub95"
+    assert r["gate_read"] is False and "FX" in r["gate_read_block"]
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    assert all(m.results["cost_version"] == "prior" and m.results["gate_read"] is False for m in mans.values())
+    gold = _data(("XAUUSD",))
+    g = R.fit_unit(gold, _plan(members=("XAUUSD",)), hb_by_fold=None, seeds=T.SEEDS[:1], read=True, trial_id=TRIAL,
+                   with_harness=False).report
+    assert g["cost_version"] == "fixture-ub95" and g["gate_read"] is True
