@@ -47,7 +47,8 @@ read.
    (PR #494, ADR 0109) per v0 artifact, under manifest key `sr-v3:v0`: the fit seeds are `seed_list("sr-v3:v0")`
    (5 seeds, fixed before the first fit, quant Q1 on #494), the v0 artifact is seed index 0 (`served="seed0"`), with
    the unit, the folds, `train_end` (last decision) and `label_end_max` (last label end). Quality verdicts:
-   - seed_stability over the 5 seeds on the OOF rows (L-cw and HB are closed forms and are marked seed-invariant);
+   - seed_stability over the 5 seeds on the OOF rows for G-cw and AVG, each seed fitting its own 90 % seed-hash
+     subsample (quant M4 on #488); L-cw, HB and B8 are closed forms and get no verdict ("not applicable" in the report);
    - param_shift on the ±10 % / ±20 % grid, on the last fold's sample (a full-OOF grid would refit every fold 12
      times per learner), so its rows_key differs from seed_stability's;
    - no beats_baseline: it books a registry trial (K +1), so it is read at promotion and never by the trainer. The
@@ -67,7 +68,7 @@ read.
 ## Consequences
 - The first real run needs A4 recorded (#482), X6 merged (#484), the dl-v1 and fs-v1 stores built under the current
   code hash for every member and tf (2h has no rule yet), and the quant's sign-off on decision 3.
-- Seeds affect only stochastic parts. Below the 2M-row cap, G-cw has no random component, and the report says so
-  ("seed_invariant") instead of claiming stability.
+- Seeds are resamples: every G-cw seed fits its own 90 % seed-hash subsample, also below the 2M-row cap, so seed
+  stability measures something. The closed forms get no seed verdict rather than a pass by construction.
 - B2-B6, the block ΔS table, the arm-fire subset and the Stage L gates stay with the evaluator. The report lists them
   as not included.

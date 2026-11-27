@@ -248,9 +248,11 @@ def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple)
 
 def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitted: tuple) -> None:
     r = fitted[2].report
-    for name in ("L-cw", "G-cw", "HB", "AVG"):
+    for name in ("G-cw", "AVG"):
         assert len(r["seed_stability"][name]["detail"]["seeds"]) == len(T.SEEDS) >= 5
-    assert r["seed_stability"]["L-cw"]["detail"]["seed_invariant"]
+    for name in ("L-cw", "HB"):        # quant M4 on #488: closed forms have no seed: not applicable, never "passed"
+        assert r["seed_stability"][name]["passed"] is None
+        assert "not applicable" in r["seed_stability"][name]["detail"]
     h = r["harness"]
     assert set(h["canaries"]) == {"L-cw", "HB", "G-cw"} and len(h["canaries"]["L-cw"]) == 3
     assert all(set(c) == {"delta", "s_model", "s_oracle", "s_null", "recovered"} for c in h["canaries"]["L-cw"])
@@ -519,3 +521,27 @@ def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.Monk
     rho.write_text('{"x": 1}')
     v2 = store.version(["XAUUSD"], ["4h"], (0,))
     assert len({v0, v1, v2}) == 3, "a changed weights file or rho file changes the data version"
+
+
+# ---------------------------------------------------------------------------------------------- M4: seeds differ
+def test_gcw_seeds_fit_different_resamples_even_below_the_tree_row_cap() -> None:
+    """Quant M4 on #488: below MAX_TREE_ROWS (pi = 1) every seed fitted the same rows, so the 5 "seeds" were one fit
+    and seed stability passed by construction. Each seed now fits its own 90 % seed-hash subsample."""
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    assert col.pi == 1.0
+    fm = T.fit_fold(2015, col, plan, hb=None, seeds=T.SEEDS[:3], dense_by_year={})
+    te = data.frame("XAUUSD", "4h", 2015)
+    X = T._with_dense(te, fm.dense, T.cost_of(te, fm.priors))[list(T.gcw_columns())].to_numpy(float)
+    vals = [a.value(X) for a in fm.gcw.values()]
+    assert not np.allclose(vals[0], vals[1]) and not np.allclose(vals[1], vals[2]), "each seed is its own resample"
+
+
+def test_closed_form_learners_record_no_seed_stability_verdict(fitted: tuple, tmp_path: Path) -> None:
+    data, plan, res = fitted
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    for name in ("L-cw", "HB", "B8"):
+        assert "seed_stability" not in {q.check for q in mans[name].quality}
+    assert "seed_stability" in {q.check for q in mans["G-cw"].quality}

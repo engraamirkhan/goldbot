@@ -65,6 +65,7 @@ MAX_TREE_ROWS = 2_000_000
 MANIFEST_KEY = "sr-v3:v0"
 SEEDS: tuple[int, ...] = tuple(MQ.seed_list(MANIFEST_KEY))
 CANARY_DELTAS: tuple[float, ...] = (0.03, 0.05, 0.10)
+SEED_SUBSAMPLE = 0.9                                # each G-cw seed fits this seed-hash share of its training rows
 
 
 def one_thread() -> Any:
@@ -486,7 +487,9 @@ def fit_fold(Y: int, col: Collected, plan: UnitPlan, *, hb: L.HbArtifact | None,
         tr = s[m].reset_index(drop=True)
         tr = _forward_dense(tr, dense_by_year, pri)
         for sd in seeds:
-            sub = tr if col.pi >= 1.0 else tr[_hash_u(tr, sd) < 0.9].reset_index(drop=True)   # seed: the resample
+            # the seed is the resample: always its own 90 % seed-hash subsample (quant M4 on #488; below the tree cap
+            # every seed used to fit the same rows with no random component, so "5 seeds" were one fit)
+            sub = tr[_hash_u(tr, sd) < SEED_SUBSAMPLE].reset_index(drop=True)
             gcw[sd] = L.fit_gcw(_sample_td(sub, gcw_columns(), pri, plan), seed=sd)
     return FoldModels(year=Y, priors=pri, lcw=lcw, b8=b8, hb=hb, dense=dense, gcw=gcw)
 
@@ -760,7 +763,7 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
     out["parameter_shift"] = {"L-cw": MQ.param_shift(lin, ev_lin("L-cw"), rows=rk).model_dump(mode="json"),
                               "HB": MQ.param_shift(lin, ev_lin("HB"), rows=rk).model_dump(mode="json"),
                               "G-cw": MQ.param_shift(gb, ev_g, rows=rk).model_dump(mode="json")}
-    out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < 0.9].reset_index(drop=True), te, plan,
+    out["seed_s"] = {"G-cw": [_s(te, _fit_score("G-cw", tr[_hash_u(tr, sd) < SEED_SUBSAMPLE].reset_index(drop=True), te, plan,
                                                 pri, col.impute, seed=sd), pri) for sd in seeds]}
     curve = []
     order = np.argsort(_ns(tr["decision_utc"]), kind="stable")
@@ -954,7 +957,8 @@ def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModel
         rep["learners"][name] = entry
     rep["paired_d"] = {f"{a} vs {b}": paired_d(oof, a, b) for i, a in enumerate(BUILT) for b in BUILT[i + 1:]
                        if f"k_{a}" in oof and f"k_{b}" in oof}
-    rep["seed_stability"] = {k: v.model_dump(mode="json") for k, v in seed_verdicts(oof, seeds).items()}
+    rep["seed_stability"] = {**{k: dict(SEED_NOT_APPLICABLE) for k in CLOSED_FORM if k in BUILT},
+                             **{k: v.model_dump(mode="json") for k, v in seed_verdicts(oof, seeds).items()}}
     gold = {i: {"shrunk": v0.lcw.levels.get(i), "unshrunk": v0.lcw.levels_unshrunk.get(i)} for i in v0.lcw.levels}
     rep["levels"] = gold or "gold body: no instrument level (unit intercept only)"
     yr = pd.DatetimeIndex(pd.to_datetime(oof["decision_utc"], utc=True)).year
@@ -1052,24 +1056,29 @@ def rows_key(f: pd.DataFrame) -> str:
     return MQ.rows_key(list(keys))
 
 
+CLOSED_FORM = ("L-cw", "HB", "B8")
+SEED_NOT_APPLICABLE = {"passed": None, "detail": "not applicable: a closed form, every seed fits the same bytes (quant "
+                                                 "M4 on #488: no seed-stability verdict is recorded for it)"}
+
+
 def seed_verdicts(oof: pd.DataFrame, seeds: Sequence[int]) -> dict[str, Any]:
-    """ADR 0106 "results stable across at least 5 random seeds" (model_quality.seed_stability): per learner, the mean
-    net R per OOF row for each seed. L-cw and HB are closed forms: every seed gives the same edge, and the verdict
-    records that (detail.seed_invariant)."""
+    """ADR 0106 "results stable across at least 5 random seeds" (model_quality.seed_stability): per learner with a
+    random component (G-cw, AVG over each G-cw seed), the mean net R per OOF row for each seed, each seed its own
+    90 % resample. The closed forms (L-cw, HB, B8) get no verdict: a seed cannot move them, so a "pass" would be
+    true by construction (the report writes `SEED_NOT_APPLICABLE`)."""
     out: dict[str, Any] = {}
     if not len(oof):
         return out
     for name in BUILT:
+        if name in CLOSED_FORM:
+            continue
         kind = L.LEARNERS[name].kind or "gross"
         cols = {sd: f"v_{name}@{sd}" for sd in seeds if f"v_{name}@{sd}" in oof}
-        if name in ("L-cw", "HB"):
-            cols = dict.fromkeys(seeds, f"v_{name}")
         if len(cols) != len(seeds):
             continue
         edges = {sd: float(row_edge(oof, kind, c).mean()) for sd, c in cols.items()}
         v = MQ.seed_stability(edges, rows=rows_key(oof))
-        out[name] = v.model_copy(update={"detail": {**v.detail, "seed_invariant": bool(np.ptp(list(edges.values()))
-                                                                                       == 0)}})
+        out[name] = v
     return out
 
 
