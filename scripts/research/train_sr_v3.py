@@ -2,14 +2,21 @@
 (goldbot/research/sr_v3_train.py; card docs/research/prereg-2026-11-26-sr-v3.md).
 
     python scripts/research/train_sr_v3.py --stage0-only            # label-blind ladder and body choice per unit
-    python scripts/research/train_sr_v3.py --units 1m,5m,15m --workers 4
+    python scripts/research/train_sr_v3.py --units 1m,5m,15m --workers 4       # fit-only (the default)
+    python scripts/research/train_sr_v3.py --units 4h --read                    # + read statistics (refused unless
+                                                                                #   the read is gate_eligible at ub95)
 
 Phases: (1) per unit, in parallel: Stage 0 from the outcome-blind skeleton and weights, then one streamed pass over
 learn 2010-17 (moments, priors, the thinned tree sample); (2) HB, one solve per fold over every unit's (tf, class)
 cells; (3) per unit, in parallel: the fold fits, OOF scoring, v0 artifacts, the report and one run manifest per
 artifact (research/run_manifest.py; rebuild with scripts/research/rebuild_model.py). Outputs go to
 --out (default ~/tmp/sr-v3, outside the repo: market-derived, never committed, ADR 0048): <unit>/stage0.json,
-report.md, report.json, oof.parquet, manifests/ and one JSON artifact per learner; index.json and index.md.
+report.md, report.json, oof_scores.parquet (sealed: scores only), manifests/ and one JSON artifact per learner;
+oof.parquet only under --read; index.json.
+
+Fit-only is the default (quant H2 on #488): artifacts and hash-sealed OOF scores, no S, kept mean, S at 2x cost, D or
+other read statistic, in the files or on stdout. `--read` raises unless every label load was gate_eligible and the
+rows are costed at the ub95 cost of record.
 
 Refusals, by design:
 - labels are read only through dense_labels.load_labels on the learn window: a sealed store (ADR 0085 A4 not recorded,
@@ -145,7 +152,7 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
     store, plan = _store(a), _plan(out)
-    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out))   # type: ignore[arg-type]
+    res = T.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read)   # type: ignore[arg-type]
     T.write_unit(res, Path(a.out))
     hb_plans = [_plan(Path(a.out) / u) for u in a.units.split(",") if (Path(a.out) / u / "plan.json").exists()]
     tiers = Path(a.tiers)
@@ -155,8 +162,8 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
                          data_root=tiers.parent, data_files=[tiers.name], hb_plans=hb_plans,
                          root=Path(a.out) / "manifests")
     res.report["manifests"] = {k: m.manifest_id for k, m in mans.items()}
-    return {"unit": unit, "status": "fit", "artifacts": res.report.get("artifacts"),
-            "s": {k: v.get("read", {}).get("s") for k, v in res.report.get("learners", {}).items()}}
+    return {"unit": unit, "status": "fit", "mode": res.report["mode"], "gate_eligible": res.report["gate_eligible"],
+            "artifacts": res.report.get("artifacts")}           # never a read statistic on stdout (quant H3)
 
 
 def main() -> int:
@@ -172,6 +179,8 @@ def main() -> int:
     ap.add_argument("--out", default=str(T.OUT))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage0-only", action="store_true")
+    ap.add_argument("--read", action="store_true",
+                    help="compute the read statistics (refused unless the label read is gate_eligible at ub95)")
     a = ap.parse_args()
     refuse_before_x6()
     units = [u for u in a.units.split(",") if u]

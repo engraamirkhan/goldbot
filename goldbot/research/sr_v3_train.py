@@ -74,6 +74,11 @@ def one_thread() -> Any:
     return threadpool_limits(limits=1)
 
 
+class ReadRefused(PermissionError):
+    """A read statistic (S, kept mean, S at 2x cost, D, a net-based verdict) was asked for on a label read that is not
+    a gate read (`gate_eligible` not True) or without the ub95 cost of record."""
+
+
 class SequencingRefused(PermissionError):
     """An sr-v3 label value or Stage 0 statistic was asked for before the quant sequencing holds."""
 
@@ -122,18 +127,35 @@ BUILT = ("L-cw", "G-cw", "HB", "AVG")
 
 
 # ---------------------------------------------------------------------------------------------- data access
+W2_COST_VERSION = "w2-point"           # the rows' own W2 round trip: never a read (ADR 0085 A4, quant H1 on #488)
+NOT_READ: dict[str, Any] = {"gate_eligible": False,
+                            "gate_block": ["no label read through load_labels: no gate status"]}
+
+
 class UnitData(Protocol):
     """A unit's rows, one (year, instrument) frame of `ROW_COLS` at a time (labels already read under the gate)."""
     def frame(self, instrument: str, tf: str, year: int, *, phases: Sequence[int]) -> pd.DataFrame: ...
     def manifest(self) -> dict[str, Any]: ...
     def version(self, members: Sequence[str], tfs: Sequence[str], phases: Sequence[int]) -> str: ...
+    def gate_status(self) -> dict[str, Any]: ...
+    def cost_version(self) -> str: ...
 
 
-@dataclass
 class FrameData:
-    """In-memory frames (tests, and a caller who already holds rows). Keyed (instrument, tf, year)."""
-    frames: Mapping[tuple[str, str, int], pd.DataFrame]
-    version_name: str = "in-memory"
+    """In-memory frames (tests, and a caller who already holds rows). Keyed (instrument, tf, year). They carry no
+    load_labels gate status and W2 point costs unless the caller says otherwise: fit-only by default."""
+
+    def __init__(self, frames: Mapping[tuple[str, str, int], pd.DataFrame], version_name: str = "in-memory", *,
+                 gate: Mapping[str, Any] | None = None, cost_version: str = W2_COST_VERSION) -> None:
+        self.frames, self.version_name = frames, version_name
+        self.gate, self.costs = dict(gate or NOT_READ), cost_version
+
+    def gate_status(self) -> dict[str, Any]:
+        return {"gate_eligible": self.gate.get("gate_eligible") is True,
+                "gate_block": list(self.gate.get("gate_block") or [])}
+
+    def cost_version(self) -> str:
+        return self.costs
 
     def frame(self, instrument: str, tf: str, year: int, *, phases: Sequence[int] = (0,)) -> pd.DataFrame:
         f = self.frames.get((instrument, tf, year))
@@ -780,22 +802,60 @@ def settings() -> dict[str, Any]:
 class UnitResult:
     report: dict[str, Any]
     artifacts: dict[str, str]                      # name -> JSON
-    oof: pd.DataFrame
+    oof: pd.DataFrame                              # fit-only: `sealed_scores` (no label column); read: every column
+
+
+# the OOF columns a fit-only run keeps: row keys, the decision-time cost(x), each learner's value and keep
+SCORE_KEYS: tuple[str, ...] = ("instrument", "tf", "decision_utc", "side", "horizon_end_utc", "day", "year", "cost")
+
+
+def sealed_scores(oof: pd.DataFrame) -> pd.DataFrame:
+    """Quant H2 on #488: the OOF scores without any label column (gross, net, prices), so nothing read from them is
+    a read statistic. Their sha (`scores_sha`) goes into the report and every manifest before any read exists."""
+    if not len(oof):
+        return pd.DataFrame(columns=list(SCORE_KEYS))
+    cols = [c for c in SCORE_KEYS if c in oof] + sorted(str(c) for c in oof.columns if str(c).startswith(("v_", "k_")))
+    return oof[cols].reset_index(drop=True)
+
+
+def scores_sha(scores: pd.DataFrame) -> str:
+    """sha256 of the sealed scores' content (column names and values in order; independent of the parquet writer)."""
+    s = sealed_scores(scores)
+    h = hashlib.sha256(json.dumps(list(s.columns)).encode())
+    if len(s):
+        h.update(pd.util.hash_pandas_object(s, index=False).to_numpy().tobytes())
+    return h.hexdigest()
+
+
+def read_refusal(data: UnitData) -> str | None:
+    """Why a read statistic may not be computed on `data`, or None. ADR 0085 A4 (quant A4 on #482): "Any gate or
+    evaluator read refuses `gate_eligible` False"; quant H1 on #488: a read charges the ub95 cost of record."""
+    g = data.gate_status()
+    if g.get("gate_eligible") is not True:
+        return "the label read is not gate_eligible: " + ("; ".join(g.get("gate_block") or []) or "no gate status")
+    if data.cost_version() == W2_COST_VERSION:
+        return "rows are costed at the W2 point (w2-point), not the ub95 cost of record per cell"
+    return None
 
 
 def fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
              seeds: Sequence[int] = SEEDS, col: Collected | None = None, harness_rows: int = 200_000,
-             with_harness: bool = True) -> UnitResult:
+             with_harness: bool = True, read: bool = False) -> UnitResult:
     """Walk-forward fit, OOF scoring, v0 artifacts and the report for one unit (see the module docstring). The run is
     recorded by `record_unit` (research/run_manifest.py, ADR 0109), not here. Fits on one BLAS/OpenMP thread, as
-    `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit and so the artifact sha."""
+    `run_manifest.build` rebuilds: a multi-threaded reduction can change the last bit and so the artifact sha.
+
+    Fit-only (the default, quant H2 on #488): artifacts, sealed OOF scores and their sha; NO S, kept mean, S at 2x
+    cost, D or any other read statistic is computed or written. `read=True` adds the descriptive read and raises
+    `ReadRefused` unless the label read is gate_eligible and costed at the ub95 cost of record (`read_refusal`)."""
     with one_thread():
         return _fit_unit(data, plan, hb_by_fold=hb_by_fold, seeds=seeds, col=col, harness_rows=harness_rows,
-                         with_harness=with_harness)
+                         with_harness=with_harness, read=read)
 
 
 def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbArtifact] | None,
-              seeds: Sequence[int], col: Collected | None, harness_rows: int, with_harness: bool) -> UnitResult:
+              seeds: Sequence[int], col: Collected | None, harness_rows: int, with_harness: bool,
+              read: bool) -> UnitResult:
     col = col or collect(data, plan, seed=seeds[0])
     dense_by_year: dict[int, L.DenseArtifact] = {}
     oof_parts: list[pd.DataFrame] = []
@@ -835,12 +895,34 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
                                              if v0.gcw else "", "HB": L.artifact_sha(v0.hb) if v0.hb else ""})
         if av0 is not None:
             arts["AVG"] = L.artifact_json(av0)
-    report = unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows, with_harness=with_harness)
+    gate = data.gate_status()
+    if read and (why := read_refusal(data)):
+        raise ReadRefused(f"refused the read statistics of unit {plan.unit}: {why}. Fit-only (the default) still runs")
+    report = (unit_report(oof, plan, col, v0, seeds=seeds, harness_rows=harness_rows, with_harness=with_harness)
+              if read else fit_report(oof, plan, col))
+    report["mode"] = "read" if read else "fit-only"
+    report["gate_eligible"], report["gate_block"] = gate["gate_eligible"], gate["gate_block"]
+    report["cost_version"] = data.cost_version()
+    report["oof_scores_sha256"] = scores_sha(oof)
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
     report["train_end"] = str(col.train_end)
     report["label_end_max"] = str(col.label_end_max)
-    return UnitResult(report=report, artifacts=arts, oof=oof)
+    return UnitResult(report=report, artifacts=arts, oof=oof if read else sealed_scores(oof))
+
+
+def fit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected) -> dict[str, Any]:
+    """The fit-only report: what was fitted on which rows, never how well (no label value enters it)."""
+    rep: dict[str, Any] = {"unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
+                           "level": plan.stage0.get("level"), "judged": plan.stage0.get("judged"),
+                           "served_lcw": list(plan.lcw_columns), "first_oof": plan.first_oof,
+                           "rows_learn": col.n_rows, "tree_sample_pi": col.pi,
+                           "oof_rows": int(len(oof)), "oof_rows_per_year": {int(str(k)): int(v) for k, v in
+                                                                            oof.groupby("year").size().items()}
+                           if len(oof) else {},
+                           "note": "fit-only (quant H2 on #488): artifacts and sealed OOF scores; no read statistic "
+                                   "until the label read is gate_eligible and costed at ub95"}
+    return rep
 
 
 def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModels, *, seeds: Sequence[int],
@@ -892,7 +974,8 @@ def write_unit(res: UnitResult, out: Path) -> Path:
         (d / f"{name}.json").write_text(text)
     (d / "report.json").write_text(json.dumps(res.report, indent=1, sort_keys=True, default=_json))
     (d / "report.md").write_text(report_md(res.report))
-    if len(res.oof):
+    sealed_scores(res.oof).to_parquet(d / "oof_scores.parquet", index=False)
+    if res.report.get("mode") == "read" and len(res.oof):
         res.oof.to_parquet(d / "oof.parquet", index=False)
     return d
 
@@ -920,7 +1003,16 @@ def report_md(r: Mapping[str, Any]) -> str:
     lines = [f"# sr-v3 training report: unit {r['unit']}", "",
              f"Level {r.get('level')} (judged: {r.get('judged')}); members {', '.join(r.get('members', []))}; "
              f"first OOF {r.get('first_oof')}; L-cw served columns: {served}.", "",
-             "Descriptive, never a selector. Stage L gates are the evaluator's read. G-cw is the gradient-boosted "
+             f"Mode: {r.get('mode')}; gate_eligible {r.get('gate_eligible')} "
+             f"({'; '.join(r.get('gate_block') or []) or 'no block'}); cost version {r.get('cost_version')}; sealed OOF "
+             f"scores sha256 {r.get('oof_scores_sha256')}.", ""]
+    if r.get("mode") != "read":
+        lines += ["Fit-only: artifacts and sealed OOF scores only. No read statistic is computed until the label "
+                  "read is gate_eligible and costed at the ub95 cost of record (quant H2 on #488).", "",
+                  "| artifact | sha256 |", "|---|---|"]
+        lines += [f"| {k} | {v} |" for k, v in (r.get("artifacts") or {}).items()]
+        return "\n".join([*lines, ""])
+    lines += ["Descriptive, never a selector. Stage L gates are the evaluator's read. G-cw is the gradient-boosted "
              "baseline every learner must beat out of sample after costs (ADR 0106).", "",
              "| learner | rows | keep share | kept mean net | S | S at 2x cost | net R / day | D/day vs G-cw (90 %) |",
              "|---|---|---|---|---|---|---|---|"]
@@ -1069,8 +1161,11 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
     and is read at promotion, never by the trainer (the trial budget is not the trainer's to spend); the report's
     paired D against G-cw stays diagnostic."""
     from goldbot.research import run_manifest as RM
-    verdicts = seed_verdicts(res.oof, seeds)
-    shift = (res.report.get("harness") or {}).get("parameter_shift") or {}
+    read = res.report.get("mode") == "read"
+    verdicts = seed_verdicts(res.oof, seeds) if read else {}       # net-based: a read statistic (quant H2)
+    shift = ((res.report.get("harness") or {}).get("parameter_shift") or {}) if read else {}
+    status = {k: res.report.get(k) for k in ("mode", "gate_eligible", "gate_block", "cost_version",
+                                              "oof_scores_sha256")}
     shas = {f: RM.file_sha256(Path(data_root) / f) for f in data_files}
     learn_end = WN.SPANS[WN.Window.LEARN][1]
     end = pd.Timestamp(res.report.get("train_end") or learn_end)
@@ -1086,7 +1181,8 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
                               settings=run_settings(plan, name, source, hb_plans), manifest_key=MANIFEST_KEY,
                               served="seed0", seeds=seeds, unit=plan.unit, fold_keys=folds, train_end=end,
                               scaler_fit_end=end, label_end_max=label_end, data_files=shas, builder=BUILDER,
-                              results=(res.report.get("learners", {}).get(name) or {}).get("read", {}), quality=q,
+                              results={**((res.report.get("learners", {}).get(name) or {}).get("read", {})
+                                          if read else {}), **status}, quality=q,
                               spec_id=V.SPEC_VERSION, root=root, repo=repo)
     return out
 
@@ -1181,7 +1277,9 @@ class StoreData:
                               phases=list(phases), purpose="train", expect_keys={k: v[1] for k, v in ks.items()})
         self.used.setdefault("labels", {})[f"{instrument}:{tf}"] = {
             "keys": meta["keys"], "tiers_sha256": meta["tiers_sha256"], "rows": meta["rows"],
-            "dropped_tier": meta.get("dropped_tier"), "fs_keys": fmeta["keys"]}
+            "dropped_tier": meta.get("dropped_tier"), "fs_keys": fmeta["keys"],
+            # quant A4 on #482: load_labels' gate status of this read, kept for the report and every manifest
+            "gate_eligible": meta.get("gate_eligible") is True, "gate_block": list(meta.get("gate_block") or [])}
         t2 = lab[lab["template"] == V.JUDGED_HEAD]
         t0 = lab[lab["template"] == "T0"][["phase", "decision_utc", "side", "gross_r_raw"]].rename(
             columns={"gross_r_raw": "t0_gross"})
@@ -1189,6 +1287,8 @@ class StoreData:
         rows = rows.merge(feats.drop(columns=[c for c in ("instrument", "tf", "source", "bid_only", "group_id",
                                                            "available_utc", "window_from_utc", "tier")
                                               if c in feats.columns]), on=["phase", "decision_utc"], how="inner")
+        if not len(rows):
+            return pd.DataFrame(columns=list(ROW_COLS))
         rows = rows.merge(self._weights(instrument, tf)[["phase", "decision_utc", "w"]], on=["phase", "decision_utc"],
                           how="inner")
         if not len(rows):
@@ -1205,6 +1305,19 @@ class StoreData:
                             "cost_rt_bp": rows["cost_rt_bp"].to_numpy(float)})
         out = pd.concat([out, parts.reset_index(drop=True), X[[c for c in V.P30 if c != "side"]].reset_index(drop=True)], axis=1)
         return out[list(ROW_COLS)]
+
+    def gate_status(self) -> dict[str, Any]:
+        """Eligible only when every label load so far was gate_eligible (quant A4 on #482); before any load, not."""
+        loads = self.used.get("labels") or {}
+        if not loads:
+            return {"gate_eligible": False, "gate_block": list(NOT_READ["gate_block"])}
+        block = sorted({f"{k}: {b}" for k, v in loads.items() for b in v.get("gate_block") or []}
+                       | {f"{k}: no gate status" for k, v in loads.items() if v.get("gate_eligible") is not True
+                          and not v.get("gate_block")})
+        return {"gate_eligible": not block, "gate_block": block}
+
+    def cost_version(self) -> str:
+        return W2_COST_VERSION
 
     def version(self, members: Sequence[str], tfs: Sequence[str], phases: Sequence[int]) -> str:
         """The data identity a rebuild needs: label spec and code hashes, tiers sha, every partition key used."""

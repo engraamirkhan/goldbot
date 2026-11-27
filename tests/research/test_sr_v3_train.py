@@ -49,8 +49,16 @@ def _frame(inst: str, year: int, *, tf: str = "4h", seed: int = 0, signal: float
     return f[list(T.ROW_COLS)]
 
 
-def _data(insts: tuple[str, ...] = ("XAUUSD", "EURUSD"), **kw: object) -> T.FrameData:
-    return T.FrameData({(i, "4h", y): _frame(i, y, **kw) for i in insts for y in V.LEARN_YEARS})  # type: ignore[arg-type]
+ELIGIBLE = {"gate_eligible": True, "gate_block": []}
+
+
+def _data(insts: tuple[str, ...] = ("XAUUSD", "EURUSD"), *, readable: bool = True, **kw: object) -> T.FrameData:
+    """Fixture frames. `readable`: a gate-eligible read with a ub95 cost version (read-statistic mode allowed);
+    otherwise FrameData's defaults (no gate status, W2 point costs): fit-only."""
+    frames = {(i, "4h", y): _frame(i, y, **kw) for i in insts for y in V.LEARN_YEARS}  # type: ignore[arg-type]
+    if not readable:
+        return T.FrameData(frames)
+    return T.FrameData(frames, gate=ELIGIBLE, cost_version="fixture-ub95")
 
 
 def _plan(cols: tuple[str, ...] = V.CORE_6, members: tuple[str, ...] = ("XAUUSD", "EURUSD")) -> T.UnitPlan:
@@ -221,7 +229,7 @@ def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
     data, plan = _data(), _plan()
     col = T.collect(data, plan, seed=T.SEEDS[0])
     hb = T.hb_from_plans(data, [plan], seed=T.SEEDS[0])
-    return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000)
+    return data, plan, T.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True)
 
 
 def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple) -> None:
@@ -352,3 +360,69 @@ def test_the_cli_refuses_to_run_until_the_sequencing_holds(monkeypatch: pytest.M
         mod.refuse_before_x6()
     _sequenced(monkeypatch)
     mod.refuse_before_x6()                              # every precondition on main: no refusal
+
+
+# ---------------------------------------------------------------------------------------------- H2: fit-only
+READ_KEYS = ("learners", "paired_d", "baselines", "seed_stability", "harness", "levels", "v0_keep_share_2015_17")
+
+
+def test_fit_only_is_the_default_and_writes_artifacts_and_sealed_scores_but_no_read_statistic(tmp_path: Path) -> None:
+    data, plan = _data(readable=False), _plan()
+    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:2])
+    r = res.report
+    assert r["mode"] == "fit-only"
+    assert not [k for k in READ_KEYS if k in r], "fit-only computes no S, kept mean, S@2x, D or other read statistic"
+    assert {"L-cw", "B8", "G-cw", "D-40"} <= set(res.artifacts)
+    assert not {"gross", "net", "net2", "t0_gross", "entry", "base_dist"} & set(res.oof.columns), "scores only"
+    assert {"v_L-cw", "k_L-cw", "v_G-cw", "cost", "decision_utc", "instrument"} <= set(res.oof.columns)
+    assert r["oof_scores_sha256"] == T.scores_sha(res.oof)
+    assert r["gate_eligible"] is False and r["gate_block"]
+    d = T.write_unit(res, tmp_path)
+    assert not (d / "oof.parquet").exists() and (d / "oof_scores.parquet").exists()
+    assert T.scores_sha(pd.read_parquet(d / "oof_scores.parquet")) == r["oof_scores_sha256"]
+    for text in ((d / "report.json").read_text(), (d / "report.md").read_text()):
+        assert '"s"' not in text and "kept mean" not in text and "D/day" not in text
+
+
+def test_read_statistic_mode_refuses_unless_the_label_read_is_gate_eligible() -> None:
+    data, plan = _data(readable=False), _plan()
+    blocked = T.FrameData(data.frames, gate={"gate_eligible": False, "gate_block": ["cost_version w2-point"]},
+                          cost_version="fixture-ub95")
+    with pytest.raises(T.ReadRefused, match="w2-point"):
+        T.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+    unknown = T.FrameData(data.frames, cost_version="fixture-ub95")
+    with pytest.raises(T.ReadRefused, match="gate"):
+        T.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+
+
+def test_gate_status_and_mode_are_written_into_every_manifest(tmp_path: Path) -> None:
+    data, plan = _data(readable=False), _plan()
+    res = T.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS)
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = T.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[], root=tmp_path / "m")
+    assert set(mans) == set(res.artifacts)
+    for m in mans.values():
+        assert m.results["mode"] == "fit-only" and m.results["gate_eligible"] is False and m.results["gate_block"]
+        assert m.results["oof_scores_sha256"] == res.report["oof_scores_sha256"]
+        assert "s" not in m.results and not m.quality, "no read statistic and no net-based verdict in fit-only"
+
+
+def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from goldbot.research import feature_store as F
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    meta = {"keys": {}, "tiers_sha256": "t", "rows": 0, "gate_eligible": False,
+            "gate_block": ["h_ref = H: the exit templates' h_ref is not frozen (D-4)"]}
+    empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
+    monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
+    monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    monkeypatch.setattr(T.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
+    store.frame("XAUUSD", "4h", 2013)
+    g = store.gate_status()
+    assert g["gate_eligible"] is False and "h_ref" in g["gate_block"][0]
+    monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, {**meta, "gate_eligible": True, "gate_block": []}))
+    store.frame("EURUSD", "4h", 2013)
+    assert store.gate_status()["gate_eligible"] is False, "one blocked load blocks the unit"
