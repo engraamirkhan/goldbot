@@ -699,3 +699,28 @@ def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) 
     k = o["k_L-cw"].to_numpy(float)
     assert lr["s_2x_cost"] == pytest.approx(float((o["net2"] * k).mean() - max(0.0, float(o["net2"].mean()))))
     assert np.array_equal(o["k_L-cw"], o["v_L-cw"] - o["cost"] > 0), "keep is ĝ − cost(x) > 0, never realised"
+
+
+# ---------------------------------------------------------------------------------------------- M3: N6 by block
+def test_the_shuffle_permutes_gross_only_within_instrument_session_day_blocks() -> None:
+    """Quant M3 on #488 (card 5.1 N6): "gross labels permuted in (instrument, day) blocks"."""
+    f = pd.concat([_frame(i, 2013).head(300) for i in ("XAUUSD", "EURUSD")], ignore_index=True)
+    perm = T.block_permutation(f, seed=V.SEED_B2)
+    key = f["instrument"].astype(str).to_numpy() + "|" + np.asarray(T.session_date(f["decision_utc"]).astype(str))
+    assert (key[perm] == key).all(), "every row draws its gross from its own instrument x session day"
+    assert sorted(perm.tolist()) == list(range(len(f))) and (perm != np.arange(len(f))).any()
+    assert np.array_equal(perm, T.block_permutation(f, seed=V.SEED_B2)), "seeded"
+
+
+def test_the_shuffle_check_passes_per_instrument_tf_session_cell(fitted: tuple) -> None:
+    """Quant M3 on #488: the N6 rule of diagnostics.shuffled_keep_check (false keep <= 5 % or fewer than MIN_KEPT
+    kept) per (instrument x tf, session) cell, not pooled."""
+    from goldbot.research import diagnostics as G
+    sh = fitted[2].report["harness"]["shuffle"]
+    for name, v in sh.items():
+        cells = v["cells"]
+        assert cells and all(c.count(":") == 1 and "|" in c for c in cells), name
+        assert {c.split("|")[0] for c in cells} == {"XAUUSD:4h", "EURUSD:4h"}
+        assert {c.split("|")[1] for c in cells} <= {"asia", "london", "newyork"}
+        want = all(c["false_keep_share"] <= G.MAX_FALSE_KEEP or c["kept"] < V.MIN_KEPT for c in cells.values())
+        assert v["passed"] is want, name

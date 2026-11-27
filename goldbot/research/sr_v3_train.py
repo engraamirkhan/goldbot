@@ -790,11 +790,31 @@ def _s(te: pd.DataFrame, k: np.ndarray, gross: np.ndarray | None = None) -> floa
     return O.s_statistic(net_read(te, gross=gross), k.astype(float))
 
 
+def block_permutation(f: pd.DataFrame, *, seed: int) -> np.ndarray:
+    """N6's shuffle (card 5.1, quant M3 on #488): a seeded permutation of the rows WITHIN each (instrument, session
+    day) block, so a shuffled label keeps its instrument and day and only its position inside the day is random."""
+    key = f["instrument"].astype(str).to_numpy() + "|" + np.asarray(session_date(f["decision_utc"]).astype(str))
+    rand = np.random.default_rng(seed).random(len(f))
+    by_key = np.argsort(key, kind="stable")
+    by_key_random = np.lexsort((rand, key))
+    perm = np.empty(len(f), dtype=np.int64)
+    perm[by_key] = by_key_random
+    return perm
+
+
+def n6_cells(f: pd.DataFrame) -> np.ndarray:
+    """The N6 check's cells: instrument:tf|session of the decision (card 5.1 "within 5 pp per (cell, session)")."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    dec = pd.DatetimeIndex(pd.to_datetime(f["decision_utc"], utc=True))
+    sess = np.asarray(DEFAULT_SESSIONS.session_label(dec)).astype(str) if len(dec) else np.array([], str)
+    return (f["instrument"].astype(str) + ":" + f["tf"].astype(str)).to_numpy() + "|" + sess
+
+
 def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: Sequence[str] = ("L-cw", "HB", "G-cw"),
             max_rows: int = 200_000) -> dict[str, Any]:
     """On the last OOF fold of the thinned sample (capped at `max_rows`, deterministic): oracle canaries at +0.03 /
-    +0.05 / +0.10 R (a planted fair-coin column), the N6 shuffle (gross R permuted, OOF AUC within 0.5 ± 4·SE and the
-    keep near the intercept-only keep), the parameter shift (each named setting x 0.8 / x 1.25, report only), seed
+    +0.05 / +0.10 R (a planted fair-coin column), the N6 shuffle (gross R permuted within (instrument, session day)
+    blocks; the false-keep rule per (instrument x tf, session) cell; OOF AUC within 0.5 ± 4·SE, diagnostic), the parameter shift (each named setting x 0.8 / x 1.25, report only), seed
     stability and the learning curve (L-cw). Descriptive: nothing here selects."""
     Y = plan.oof_years[-1]
     s = col.sample
@@ -827,7 +847,8 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
                          "recovered": bool(so > sn and (sm - sn) >= 0.5 * (so - sn))})
         can[name] = rows
     out["canaries"] = can
-    perm = np.random.default_rng(V.SEED_B2).permutation(len(tr))
+    perm = block_permutation(tr, seed=V.SEED_B2)
+    cells = n6_cells(te)
     sh: dict[str, Any] = {}
     for name in learners:
         k = _fit_score(name, tr.assign(gross=tr["gross"].to_numpy(float)[perm]), te, plan, pri, col.impute,
@@ -838,9 +859,13 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
         npos, nneg = int(y.sum()), int((~y).sum())
         auc = G.within_arm_auc(k.astype(float), y, te["instrument"].astype(str).to_numpy())
         se = float(np.sqrt((npos + nneg + 1) / (12.0 * max(1, npos) * max(1, nneg))))
+        per_cell = {str(c): {"false_keep_share": float((k[m] & ~k0[m]).mean()), "kept": int(k[m].sum()),
+                             "rows": int(m.sum())} for c in np.unique(cells) for m in [cells == c]}
         sh[name] = {"false_keep_share": float((k & ~k0).mean()), "auc": auc, "band": [0.5 - 4 * se, 0.5 + 4 * se],
-                    "auc_in_band": bool(abs(auc - 0.5) <= 4 * se) if np.isfinite(auc) else True,
-                    "passed": bool(float((k & ~k0).mean()) <= G.MAX_FALSE_KEEP or int(k.sum()) < V.MIN_KEPT)}
+                    "auc_in_band": bool(abs(auc - 0.5) <= 4 * se) if np.isfinite(auc) else True, "cells": per_cell,
+                    # diagnostics.shuffled_keep_check's rule (N6), per (instrument x tf, session) cell (quant M3)
+                    "passed": all(c["false_keep_share"] <= G.MAX_FALSE_KEEP or c["kept"] < V.MIN_KEPT
+                                  for c in per_cell.values())}
     out["shuffle"] = sh
 
     def net_mean(k: np.ndarray) -> float:
