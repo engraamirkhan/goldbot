@@ -192,7 +192,7 @@ def exit_freeze_hash(spec: LabelSpec = SPEC) -> str:
 # xt-v1. A gate read needs rows stamped with it and a spec that hashes to it (`gate_status`); the card records the
 # same value, so the freeze changes only with a card amendment and a new id. `EXIT_FREEZE` (the record) is computed
 # lazily on first access (module `__getattr__`), as is the behaviour sha.
-EXIT_FREEZE_SHA256 = "559739c72fc720a2d27035c14011dc7dc9a12e62da3121496bd16b270478979c"
+EXIT_FREEZE_SHA256 = "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826"
 
 RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
     "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",   # tiers_served_r11-v2.1.csv (D-1, #467)
@@ -422,14 +422,26 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     phase = int(rows["phase"].iloc[0]) if len(rows) else 0
     holdout_guard.refuse(rows, what="dl-v1 rows", col="decision_utc")
     bars = decision_bars(m, tf, phase, spec) if bars is None else bars
+    out = _label_core(m, rows, tf, bars, spec)
+    out["exit_freeze_sha"] = exit_freeze_hash(spec)          # provenance: the exit geometry the row was built under
+    return _typed(out[list(COLUMNS)])
+
+
+def _base_distance(atr: np.ndarray, floor: np.ndarray, tf: str, spec: LabelSpec) -> np.ndarray:
+    """d0 (card 2.1, W2-2): ATR14 x sqrt(H / h_ref), THEN the floor; fmax: a NaN floor (warm-up) leaves the ATR leg.
+    xt-v1 has h_ref = H, so the factor is exactly 1."""
+    return np.fmax(atr * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf])), floor)
+
+
+def _label_core(m: Minutes, rows: pd.DataFrame, tf: str, bars: pd.DataFrame, spec: LabelSpec) -> pd.DataFrame:
+    """`label_rows` without the guards and the `exit_freeze_sha` stamp (the behaviour sha measures it, so it cannot
+    call `exit_freeze_hash`): every column of `COLUMNS` but the stamp."""
     dec = _ns(rows["decision_utc"])
     bi = np.searchsorted(bars["close_ns"].to_numpy(), dec, side="right") - 1
     atr = np.where(bi >= 0, bars["atr"].to_numpy()[np.clip(bi, 0, None)], np.nan)
     eh = entry_and_horizon(m, rows, tf, bars["close_ns"].to_numpy(), spec)
     floor = m.floor_at(dec)
-    # W2-2: ATR14 x sqrt(H / h_ref), then the floor (card 2.1); xt-v1 has h_ref = H, so the factor is exactly 1
-    atr = atr * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf]))
-    d0 = np.fmax(atr, floor)                                     # fmax: a NaN floor (warm-up) leaves the ATR
+    d0 = _base_distance(atr, floor, tf, spec)
     ok = eh["ok"] & np.isfinite(d0) & (d0 > 0) & np.isfinite(atr)
     e, z = eh["e"], eh["z"]
     idx = np.flatnonzero(ok)
@@ -470,8 +482,7 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     out["cost_rt_bp"] = DC.RT_BP
     out["cost_version"] = "w2-point"
     out["spec_id"] = spec.spec_id
-    out["exit_freeze_sha"] = exit_freeze_hash(spec)          # provenance: the exit geometry the row was built under
-    return _typed(out[list(COLUMNS)])
+    return out
 
 
 def _typed(df: pd.DataFrame) -> pd.DataFrame:
@@ -1088,6 +1099,18 @@ def _behaviour_sha(key: str) -> str:
             rows = pd.DataFrame({"decision_utc": _to_utc(close)})
             eh = entry_and_horizon(mp, rows, tf, close, spec)
             out[f"eh:{tf}"] = [_r(eh[k]) for k in ("e", "z", "end", "ok")]
+        # d0 composition (quant re-verify B on #514): base_dist, risk_usd and gross_r_raw of T2 and T6, both sides, from
+        # `_label_core` at 15m, under the spec and under an h_ref probe (16 x H: factor 1/4) where the floor binds
+        bars = decision_bars(mp, "15m", 0, spec)
+        dec = _to_utc(bars["close_ns"].to_numpy())
+        rows = pd.DataFrame({"instrument": "SYN", "tf": "15m", "phase": 0, "group_id": 0, "decision_utc": dec,
+                             "available_utc": dec, "window_from_utc": dec, "source": "synthetic", "bid_only": False})
+        probe = spec.model_copy(update={"h_ref": {**spec.h_ref, "15m": 16 * spec.h_by_tf["15m"]}})
+        for name, sp in (("spec", spec), ("probe", probe)):
+            lab = _label_core(mp, rows, "15m", bars, sp)
+            lab = lab[lab["template"].isin(["T2", "T6"])]
+            out[f"core:{name}"] = [_r(lab[k].to_numpy()) for k in ("side", "base_dist", "risk_usd", "gross_r_raw")]
+            out[f"core:{name}:templates"] = lab["template"].astype(str).tolist()
         return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
     except Exception as exc:  # any failure is a non-frozen geometry, never an exception inside a gate check
         return f"unmeasurable:{type(exc).__name__}"

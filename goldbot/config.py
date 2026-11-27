@@ -715,6 +715,18 @@ def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
     return {c: max(RHO_FLOOR_LE_60M, v) for c, v in best.items()}
 
 
+def xt_v1_rho_refusal(d: dict[str, object], path: object) -> str | None:
+    """Why a rho measurement (its parsed JSON `d`) is not a Stage 0, gate or power read: it does not record the xt-v1
+    exit freeze (`exit_freeze_sha` != `dense_labels.EXIT_FREEZE_SHA256`; quant ruling on PR #514, D-12-xt). None when
+    it does. Callers go through `data_sufficiency.require_power_read_rho`, the one entry point."""
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
+    if d.get("exit_freeze_sha") == EXIT_FREEZE_SHA256:
+        return None
+    return (f"rho measurement {path!s} has exit_freeze_sha {d.get('exit_freeze_sha')!r}, not the xt-v1 freeze "
+            f"{EXIT_FREEZE_SHA256[:12]}: its rho bindings are fit-only, not a Stage 0, gate or power read, until "
+            "D-12-xt re-runs them at xt-v1 geometry (quant ruling on #514)")
+
+
 def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | None, *,
                           gate_read: bool = False) -> None:
     """ValueError unless `path` names the pinned D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25,
@@ -782,12 +794,8 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
         raise ValueError(f"rho_day_measurement bindings differ from the cells file (file, recomputed): {off}")
     if value < max(vals.values()) - 1e-12:
         raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals.values())} ({path})")
-    if gate_read:
-        from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
-        if d.get("exit_freeze_sha") != EXIT_FREEZE_SHA256:
-            raise ValueError(f"rho_day_measurement {path!r} has exit_freeze_sha {d.get('exit_freeze_sha')!r}, not the "
-                             f"xt-v1 freeze {EXIT_FREEZE_SHA256[:12]}: its rho bindings are not a gate or power read "
-                             "until D-12-xt re-runs them at xt-v1 geometry (quant ruling on #514)")
+    if gate_read and (why := xt_v1_rho_refusal(d, path)) is not None:
+        raise ValueError(why)
 
 
 class PowerFirstSettings(_Section):
@@ -836,13 +844,6 @@ class PowerFirstSettings(_Section):
         if self.rho_day_le_60m < RHO_DAY_PRIOR:
             check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256)
         return self
-
-    def require_gate_read_rho(self) -> None:
-        """For a gate or power read: a measured rho_day_le_60m stands only on a file measured under the xt-v1 exits
-        (quant ruling on #514, D-12-xt). The 0.25 prior reads no file and passes."""
-        if self.rho_day_le_60m < RHO_DAY_PRIOR:
-            check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256,
-                                  gate_read=True)
 
     def rho_day_for(self, hold_days: float) -> float:
         """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value."""

@@ -15,7 +15,7 @@ from goldbot.research import dense_labels as D
 
 ROOT = Path(__file__).resolve().parents[2]
 CARD = ROOT / "docs" / "research" / "prereg-2026-11-26-sr-v3.md"
-XT_V1_SHA256 = "559739c72fc720a2d27035c14011dc7dc9a12e62da3121496bd16b270478979c"
+XT_V1_SHA256 = "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826"
 
 
 def _lab(cost_version: str = "ecr-ub95", sha: str | None = None) -> pd.DataFrame:

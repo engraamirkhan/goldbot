@@ -63,6 +63,13 @@ def render(cfg: dict[str, Any], certs: list[D.Certificate]) -> str:
     for unit, u in cfg["units"].items():
         lines.append(f"- `{unit}` ({D.unit_method(unit, u)}): {u['label']}; learn {u['windows']['learn']}, judge "
                      f"{u['windows']['judge']}.")
+    pre = D.pre_xt_v1_rho(cfg)
+    if pre:
+        lines += ["", "## ρ_u,inst under the exit freeze (D-12-xt, quant ruling on #514)", "",
+                  "These units and pooled bodies divide by a ρ_u,inst file that does not record the xt-v1 exit freeze. "
+                  "Their pooled n_eff stands for learn-window fit-only reads; a Stage 0, power or gate read refuses it "
+                  "(`data_sufficiency.require_power_read_rho`) until D-12-xt re-runs the grid at xt-v1 geometry.", ""]
+        lines += [f"- `{body}`: {D.PRE_XT_V1_FLAG}" for body in pre]
     return "\n".join(lines) + "\n"
 
 
