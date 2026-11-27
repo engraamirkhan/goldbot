@@ -464,9 +464,10 @@ def cost_cells(db: Database, broker: str, as_of: pd.Timestamp) -> dict[str, floa
 
 
 # research-director 2026-11-27: a refit cell older than this at the label's slot is stale, aged on the fills it rests
-# on (slot - through_ns; quant #507: a late fit of old fills is still old). It no
-# longer raises the replay cost (a host that stopped filling, e.g. vantage-demo replay-only since PR #505, would
-# otherwise charge an 11-06 cell forever) and the label records `+cells-stale:<day>`. Exactly 14 days is still fresh.
+# on (slot - through_ns; quant #507: a late fit of old fills is still old). A stale cell still charges (it is the
+# broker's last measurement; a host that stopped filling, e.g. vantage-demo replay-only since PR #505, has not shown
+# cheaper slippage) but the label records `+cells-stale:<day>` when it sets the charge. Exactly 14 days is still
+# fresh. 14 d is a convention (about two refit cycles at the target fill rate), not a measured stability horizon.
 CELL_MAX_AGE = pd.Timedelta(days=14)
 
 
@@ -501,8 +502,11 @@ def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
     if not cells:
         return None
     oldest_ok = int(pd.Timestamp(as_of).value) - int(max_age.value)
-    fresh = [v for v in cells.values() if v[3] >= oldest_ok]          # slot - through_ns <= max_age
-    stale = [v for v in cells.values() if v[3] < oldest_ok]
+    now_ns = int(pd.Timestamp(as_of).value)
+    # fresh: slot - through_ns <= max_age, judged only on fills up to the slot (a same-day refit can move through_ns
+    # past an earlier slot; quant #507 item 2)
+    fresh = [v for v in cells.values() if oldest_ok <= v[3] <= now_ns]
+    stale = [v for v in cells.values() if not oldest_ok <= v[3] <= now_ns]
     return ReplayCells(
         slippage_usd=max(v[0] for v in fresh) if fresh else None,
         day=max(v[1] for v in fresh) if fresh else None,

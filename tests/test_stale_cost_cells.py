@@ -35,10 +35,10 @@ def test_a_fresh_cell_still_raises_the_replay_cost(tmp_path):
     assert c.version == "settings-priors:vantage+cells:2026-11-06" and "stale" not in c.version
 
 
-def test_a_stale_cell_is_flagged_and_the_prior_is_used(tmp_path):
+def test_a_stale_cell_keeps_charging_its_last_measurement_and_is_flagged(tmp_path):
     _seed(tmp_path)
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
-    assert c.slippage_usd == pytest.approx(0.15)                        # the prior, not the 11-06 cell
+    assert c.slippage_usd == pytest.approx(0.60)       # the 11-06 cell still charges: never credited (quant #507)
     assert c.version == "settings-priors:vantage+cells-stale:2026-11-06"
     assert c.effective_utc == BASE.effective_utc
     assert ex.cost_cells_stale(c.version)
@@ -50,7 +50,7 @@ def test_the_boundary_is_14_days_inclusive_fresh(tmp_path):
     at = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=14), BASE)
     past = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=14, microseconds=1), BASE)
     assert at.slippage_usd == pytest.approx(0.60) and "+cells:" in at.version
-    assert past.slippage_usd == pytest.approx(0.15) and "+cells-stale:" in past.version
+    assert past.slippage_usd == pytest.approx(0.60) and "+cells-stale:" in past.version and "+cells:" not in past.version
 
 
 def test_as_of_unchanged_a_cell_fitted_after_the_slot_is_never_read(tmp_path):
@@ -59,11 +59,11 @@ def test_as_of_unchanged_a_cell_fitted_after_the_slot_is_never_read(tmp_path):
     assert c == BASE
 
 
-def test_a_fresh_session_cell_applies_while_a_stale_one_is_set_aside_and_flagged(tmp_path):
+def test_a_dearer_stale_session_cell_is_not_replaced_by_a_fresh_cell_of_another_session(tmp_path):
     _seed(tmp_path, slip=0.90, session="london")                               # dear, but stale at the slot
     _seed(tmp_path, slip=0.40, session="newyork", day="2026-11-20", fitted=FIT + pd.Timedelta(days=14))
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
-    assert c.slippage_usd == pytest.approx(0.40)                               # never the stale 0.90
+    assert c.slippage_usd == pytest.approx(0.90)                     # london's last measurement is not replaced
     assert "+cells:2026-11-20" in c.version and "+cells-stale:2026-11-06" in c.version
 
 
@@ -81,7 +81,7 @@ def test_a_stale_cell_dearer_than_the_table_and_the_fresh_cells_is_tagged(tmp_pa
     _seed(tmp_path, slip=0.80, session="london")                               # stale
     _seed(tmp_path, slip=0.50, session="asia", day="2026-11-25", fitted=FIT + pd.Timedelta(days=18))
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
-    assert c.slippage_usd == pytest.approx(0.50)
+    assert c.slippage_usd == pytest.approx(0.80)                     # the dearer stale measurement still charges
     assert c.version == "settings-priors:vantage+cells:2026-11-25+cells-stale:2026-11-06"
 
 
@@ -90,7 +90,7 @@ def test_a_late_backfilled_cell_on_old_fills_is_stale(tmp_path):
     dr.write_cell(db, broker="vantage", session="london", day="2026-11-06", slippage_usd=0.60, fills=200,
                   through=FIT - pd.Timedelta(days=1), now=FIT + pd.Timedelta(days=17))
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
-    assert c.slippage_usd == pytest.approx(0.15) and "+cells-stale:2026-11-06" in c.version
+    assert c.slippage_usd == pytest.approx(0.60) and "+cells-stale:2026-11-06" in c.version
 
 
 def test_replay_cells_reports_stale_cells_separately(tmp_path):
@@ -117,3 +117,20 @@ def test_stale_flagged_labels_are_left_out_of_the_cross_broker_discovery_read(tm
     out = discovery.read_demo_obs(None, tmp_path, FIT, write=False)  # type: ignore[arg-type]
     assert list(out["candidate_id"]) == ["a", "c", "d"]
     assert seen.get("broker") is None                                   # the read is cross-broker
+
+
+def test_a_cheaper_stale_cell_never_lowers_a_fresh_charge_and_is_not_tagged(tmp_path):
+    _seed(tmp_path, slip=0.20, session="london")                               # stale and cheaper
+    _seed(tmp_path, slip=0.40, session="newyork", day="2026-11-20", fitted=FIT + pd.Timedelta(days=14))
+    c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
+    assert c.slippage_usd == pytest.approx(0.40)
+    assert "+cells:2026-11-20" in c.version and "+cells-stale:" not in c.version
+
+
+def test_freshness_is_judged_only_on_fills_up_to_the_slot(tmp_path):
+    db = Database.open(tmp_path, "aux")                     # fitted before the slot on fills that run past it
+    dr.write_cell(db, broker="vantage", session="london", day="2026-11-06", slippage_usd=0.60, fills=200,
+                  through=FIT + pd.Timedelta(days=1), now=FIT)
+    c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(hours=12), BASE)
+    assert c.slippage_usd == pytest.approx(0.60)            # still charged, never credited
+    assert "+cells-stale:2026-11-06" in c.version and "+cells:" not in c.version

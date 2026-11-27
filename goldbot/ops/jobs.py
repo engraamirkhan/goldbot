@@ -499,9 +499,10 @@ def exploration_costs(ctx: JobContext, slot: pd.Timestamp, broker: str) -> Repla
 def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: ReplayCosts) -> ReplayCosts:
     """The daily review's refit slippage cells (research/daily_review.py), point in time: charged only when dearer
     than the slippage above, so a refit can raise a broker's replay cost and never lower it. A cell older than
-    `daily_review.CELL_MAX_AGE` at `slot` (slot - through_ns) is stale: it never raises the cost. Only when a stale
-    cell would have raised the cost actually charged does the version record `+cells-stale:<newest stale day>`
-    (`exploration_data.cost_cells_stale`), so cross-broker reads can leave that label out (quant #507)."""
+    `daily_review.CELL_MAX_AGE` at `slot` (slot - through_ns) is stale but is still the broker's last measurement, so
+    it keeps charging (quant #507: a host that stopped filling has not shown cheaper slippage; H-60 "never credited").
+    When a stale cell is what sets the charge the version records `+cells-stale:<newest stale day>`
+    (`exploration_data.cost_cells_stale`), so reads can tell a measured-fresh cost from a carried-forward one."""
     from goldbot.research.daily_review import replay_cells
     cells = replay_cells(state_dir, broker, slot)
     if cells is None:
@@ -513,7 +514,8 @@ def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: R
                                      "effective_utc": max(out.effective_utc, effective)})
     if (cells.stale_day is not None and cells.stale_slippage_usd is not None
             and cells.stale_slippage_usd > out.slippage_usd):
-        out = out.model_copy(update={"version": f"{out.version}{STALE_CELLS_TAG}{cells.stale_day}"})
+        out = out.model_copy(update={"slippage_usd": cells.stale_slippage_usd,
+                                     "version": f"{out.version}{STALE_CELLS_TAG}{cells.stale_day}"})
     return out
 
 
