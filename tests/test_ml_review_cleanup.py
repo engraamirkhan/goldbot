@@ -172,6 +172,7 @@ def test_the_saturday_job_trains_no_new_challenger_once_the_specialist_retrain_i
     def no_fit(*a: Any, **k: Any) -> None:
         raise AssertionError("a retired retrain must not walk forward")
     monkeypatch.setattr(jobs, "_walk_forward", no_fit)
+    monkeypatch.setattr(jobs, "_walk_forward_seeds", no_fit)
     ctx = _retrain_ctx(tmp_path, enabled=False)
     out = jobs.saturday_retrain(ctx, pd.Timestamp("2026-11-14 06:00", tz="UTC"))
     assert out["tsmom-1h"]["retrain"].startswith("skipped: specialist retrain retired")
@@ -181,6 +182,78 @@ def test_the_saturday_job_trains_no_new_challenger_once_the_specialist_retrain_i
 def test_the_saturday_job_still_walks_forward_when_the_retrain_is_switched_back_on(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_decide_challengers", lambda ctx, agent, slot: [])
     calls: list[Any] = []
-    monkeypatch.setattr(jobs, "_walk_forward", lambda ctx, spec, slot, months: calls.append(spec))
+    monkeypatch.setattr(jobs, "_walk_forward_seeds", lambda ctx, spec, slot, months, seeds: calls.append(spec))
     out = jobs.saturday_retrain(_retrain_ctx(tmp_path, enabled=True), pd.Timestamp("2026-11-14 06:00", tz="UTC"))
     assert len(calls) == 1 and out["tsmom-1h"]["retrain"] == "no model: not enough bars or candidates"
+
+
+# ---------------------------------------------------------------------------------------------- PR #494 safety HIGH-1
+def _seeded_results(edges: list[float]) -> list[Any]:
+    """One ResearchResult per seed: four OOF rows, all taken, each seed's net R per row equal to its edge."""
+    from goldbot.research.model import MetaLabelModel
+    from goldbot.research.pipeline import ResearchResult
+    ts = pd.date_range("2026-09-01", periods=4, freq="1D", tz="UTC")
+    out = []
+    for e in edges:
+        oof = pd.DataFrame({"ts_utc": ts, "ts_exit": ts + pd.Timedelta(hours=6), "p_raw": 0.6, "p": 0.6,
+                            "taken": True, "ret": e * 0.01, "risk": 0.01})
+        out.append(ResearchResult(agent_id="tsmom-1h", n_candidates=4, n_folds=2, oof=oof, importance=None,
+                                  feature_version="fv", model=MetaLabelModel(feature_names=["x"], feature_version="fv"),
+                                  metrics={"fold_test_sizes": [2, 2], "walkforward": {"train_months": 12},
+                                           "extra_cost_usd": 0.1}))
+    return out
+
+
+def _registry_retrain_ctx(tmp_path: Path, monkeypatch: Any, edges: list[float]) -> Any:
+    from goldbot.research import run_manifest as rm
+    from goldbot.research.model_registry import ModelRegistry
+    from tests.test_run_manifest import git_repo
+    monkeypatch.setattr(rm, "ROOT", git_repo(tmp_path / "repo"))       # a clean checkout: the trainer's code state
+    monkeypatch.setattr(jobs, "_decide_challengers", lambda ctx, agent, slot: [])
+    bars = pd.DataFrame({"ts_utc": pd.date_range("2026-09-01", periods=8, freq="1D", tz="UTC"), "close": 1.0})
+    seen: list[list[int]] = []
+
+    def seeded(ctx: Any, spec: Any, end: Any, months: int, seeds: list[int]) -> tuple[list[Any], pd.DataFrame]:
+        seen.append(list(seeds))
+        return _seeded_results(edges), bars
+    monkeypatch.setattr(jobs, "_walk_forward_seeds", seeded)
+    ctx = _retrain_ctx(tmp_path, enabled=True)
+    ctx.models = ModelRegistry(tmp_path / "models")
+    ctx.seen = seen
+    return ctx
+
+
+SAT_AFTER_CUTOFF = pd.Timestamp("2026-11-28 06:00", tz="UTC")
+
+
+def test_a_saturday_retrain_challenger_carries_a_run_manifest_and_is_servable(tmp_path, monkeypatch):
+    """PR #494 safety HIGH-1: from MANIFEST_REQUIRED_FROM a fitted challenger without a manifest is refused, so the
+    retrain records one (seeds = seed_list(key), seed 0 served, a seed_stability verdict on the OOF rows)."""
+    from goldbot.research import model_quality as mq
+    assert SAT_AFTER_CUTOFF >= mq.MANIFEST_REQUIRED_FROM
+    ctx = _registry_retrain_ctx(tmp_path, monkeypatch, [0.2, 0.1, 0.3, 0.15, 0.25])
+    out = jobs.saturday_retrain(ctx, SAT_AFTER_CUTOFF)["tsmom-1h"]["retrain"]
+    entry = ctx.models.get(out["challenger"])
+    assert entry.manifest_id == out["manifest"] and entry.model_family == "C"
+    assert ctx.models.serving_refusal(entry) is None
+    assert set(ctx.models.shadow_models()) == {entry.version}       # it shadow-trades
+    key = f"saturday_retrain|tsmom-1h|{SAT_AFTER_CUTOFF.isoformat()}"
+    assert ctx.seen == [mq.seed_list(key)]
+
+
+def test_a_saturday_retrain_whose_seeds_disagree_registers_no_challenger_and_says_why(tmp_path, monkeypatch):
+    """A challenger the serving rule refuses would block every later retrain ("a challenger is still in shadow")
+    without ever shadow-trading; the retrain reports the refusal instead and tries again next week."""
+    ctx = _registry_retrain_ctx(tmp_path, monkeypatch, [0.2, 0.1, -0.3, 0.15, 0.25])
+    out = jobs.saturday_retrain(ctx, SAT_AFTER_CUTOFF)["tsmom-1h"]["retrain"]
+    assert out.startswith("no challenger: the serving rule refuses it") and "seed_stability failed" in out
+    assert ctx.models.entries == []
+
+
+def test_a_saturday_retrain_that_cannot_record_its_manifest_says_so(tmp_path, monkeypatch):
+    from goldbot.research import run_manifest as rm
+    ctx = _registry_retrain_ctx(tmp_path, monkeypatch, [0.2, 0.1, 0.3, 0.15, 0.25])
+    monkeypatch.setattr(rm, "ROOT", tmp_path / "not-a-checkout")
+    out = jobs.saturday_retrain(ctx, SAT_AFTER_CUTOFF)["tsmom-1h"]["retrain"]
+    assert out.startswith("no challenger: the run manifest could not be recorded")
+    assert ctx.models.entries == []

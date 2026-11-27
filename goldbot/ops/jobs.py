@@ -143,9 +143,11 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import itertools
 import json
 import logging
+import pickle
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -183,6 +185,7 @@ from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Scheduler, schedule_of
 from goldbot.research import cpcv_gate
+from goldbot.research import run_manifest as rm
 from goldbot.research.cusum import (
     WATCH_MAX_WEEKS,
     WATCH_MIN_TRADES,
@@ -229,13 +232,22 @@ from goldbot.research.exploration_data import (
     synthetic_stop_fills,
     void_non_gold_labels,
 )
-from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
+from goldbot.research.model import DEFAULT_PARAMS, RecalibratedCalibrator, fit_recalibration
+from goldbot.research.model_quality import (
+    BASELINE_FAMILY,
+    rows_key,
+    seed_list,
+    seed_stability,
+    servable_reasons,
+)
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
     DEFAULT_FEATURE_NAMES,
     MACRO_FEATURE_NAMES,
     ResearchResult,
     build_decision_frame,
+    evaluate,
+    prepare,
     run_specialist,
 )
 from goldbot.research.population import Population
@@ -805,10 +817,9 @@ def live_cost_source(ctx: JobContext) -> str:
     return research_costs(ctx.settings, found[0] if found is not None else None)[2]
 
 
-def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
-                  holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
-    """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
-    passes none, because a model that will trade must learn from the latest data."""
+def _wf_inputs(ctx: JobContext, spec: Specialist, end: pd.Timestamp,
+               months: int) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], float] | None:
+    """The decision bars, their context bars and the window's length in years, or None when the store has no bars."""
     start = end - pd.DateOffset(months=months)
     dec = _bars(ctx, spec.timeframe, start, end)
     if dec.empty:
@@ -816,13 +827,43 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
     context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, end) for tf in context_tfs(spec.timeframe)}
     years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
-    # learn against what the broker actually charges: the live cost table's slippage and commission
-    res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
-                         holdout=holdout, swap=live_swap(ctx))
+    return dec, context, years
+
+
+def _wf_metrics(ctx: JobContext, res: ResearchResult, years: float) -> ResearchResult:
     res.metrics["cost_source"] = live_cost_source(ctx)        # with the swap in metrics: the row's cost treatment
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res
+
+
+def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
+                  holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
+    """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
+    passes none, because a model that will trade must learn from the latest data."""
+    got = _wf_inputs(ctx, spec, end, months)
+    if got is None:
+        return None
+    dec, context, years = got
+    # learn against what the broker actually charges: the live cost table's slippage and commission
+    res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
+                         holdout=holdout, swap=live_swap(ctx))
+    return _wf_metrics(ctx, res, years)
+
+
+def _walk_forward_seeds(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int,
+                        seeds: Sequence[int]) -> tuple[list[ResearchResult], pd.DataFrame] | None:
+    """The Saturday retrain's walk-forward, once per seed (LightGBM `random_state`; bagging and feature fraction
+    draw from it) on one set of features and labels: the results in `seeds` order and the decision bars read.
+    model_quality (quant Q1): "Every seed fitted is recorded, and `seed_stability` covers all of them"."""
+    got = _wf_inputs(ctx, spec, end, months)
+    if got is None:
+        return None
+    dec, context, years = got
+    extra = live_extra_cost_usd(ctx)
+    prep = prepare(spec, dec, context, extra_cost_usd=extra, swap=live_swap(ctx))
+    return [_wf_metrics(ctx, evaluate(prep, extra_cost_usd=extra, model_params={"random_state": int(s)}), years)
+            for s in seeds], dec
 
 
 def backtest_stats(res: ResearchResult) -> PerfStats | None:
@@ -879,8 +920,9 @@ RETRAIN_RETIRED = ("skipped: specialist retrain retired (ML review 2026-11-13: s
 def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Bar sync, founders, the challengers in shadow judged (`_decide_challengers`), then a new walk-forward
     challenger per agent only while settings research.specialist_retrain is on (retired 2026-11-13: "Retire the
-    models and their weekly retrain. R-07 already applies; keep the code"). Recalibration, drift and decay watchers
-    are separate jobs and keep running."""
+    models and their weekly retrain. R-07 already applies; keep the code"). Each refit fits seed_list(key) seeds and
+    records its run manifest before it is registered (`_register_retrain`, ADR 0109). Recalibration, drift and decay
+    watchers are separate jobs and keep running."""
     out: dict[str, Any] = {}
     if ctx.sync_bars is not None:
         try:
@@ -910,19 +952,73 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             continue
         wf = ctx.settings.walkforward[spec.timeframe]
         # rolling train window plus enough test history for out-of-fold backtest stats
-        res = _walk_forward(ctx, spec, slot, wf.train_months + 4 * wf.test_months)
-        if res is None or res.model is None:
+        months = wf.train_months + 4 * wf.test_months
+        key = f"saturday_retrain|{m.agent_id}|{slot.isoformat()}"
+        fit = _walk_forward_seeds(ctx, spec, slot, months, seed_list(key))
+        if fit is None or not fit[0] or fit[0][0].model is None:
             agent["retrain"] = "no model: not enough bars or candidates"
         else:
-            bt = backtest_stats(res)
-            e = ctx.models.add_challenger(res.model, family=m.family, agent_id=m.agent_id,
-                                          backtest=bt.model_dump() if bt else {}, now=slot,
-                                          notes=[f"walk-forward {res.n_folds} folds, {res.n_candidates} candidates"])
-            # the challenger shadow-trades from now on; it becomes this agent's champion only through the gates
-            agent["retrain"] = {"challenger": e.version, "backtest": e.backtest}
+            agent["retrain"] = _register_retrain(ctx, m.agent_id, m.family, spec.timeframe, slot, key, months, *fit)
         out[m.agent_id] = agent
     ctx.population.save(ctx.state_dir / "agents.json")
     return out
+
+
+def _net_edge(res: ResearchResult) -> float:
+    """Mean net R per scored OOF row, 0 where the model does not trade (model_quality's edge definition)."""
+    rows = res.oof[res.oof["p_raw"].notna()]
+    if rows.empty:
+        return float("nan")
+    risk = rows["risk"].to_numpy(dtype=float)
+    r = np.where(risk > 0, rows["ret"].to_numpy(dtype=float) / np.where(risk > 0, risk, 1.0), 0.0)
+    return float(np.mean(np.where(rows["taken"].to_numpy(dtype=bool), r, 0.0)))
+
+
+def _register_retrain(ctx: JobContext, agent_id: str, family: str, timeframe: str, slot: pd.Timestamp, key: str,
+                      months: int, results: list[ResearchResult], dec: pd.DataFrame) -> dict[str, Any] | str:
+    """Record the run manifest of one Saturday refit and register seed 0's model as a challenger with it (ADR 0109:
+    "A fitted registry model created at or after MANIFEST_REQUIRED_FROM serves only with a run manifest"; PR #494
+    safety HIGH-1). Seeds are `seed_list(key)`, served is seed index 0, declared here before any result is read; the
+    seed_stability verdict reads every seed on the learn-window walk-forward OOF rows. Nothing is registered when the
+    manifest cannot be recorded or the serving rule refuses it: a refused challenger would never shadow-trade yet
+    would block every later retrain of the agent. The returned string says why, in the job's record."""
+    seeds = seed_list(key)
+    res = results[0]
+    assert res.model is not None
+    rows = res.oof[res.oof["p_raw"].notna()]
+    verdict = seed_stability({s: _net_edge(r) for s, r in zip(seeds, results)},
+                             rows=rows_key(pd.DatetimeIndex(pd.to_datetime(rows["ts_utc"], utc=True))))
+    bt = backtest_stats(res)
+    labels = res.oof
+    train_end = pd.Timestamp(pd.to_datetime(labels["ts_utc"], utc=True).max())
+    settings = json.loads(json.dumps({
+        "agent_id": agent_id, "family": family, "timeframe": timeframe, "months": months,
+        "walkforward": res.metrics.get("walkforward"), "params": {**DEFAULT_PARAMS},
+        "extra_cost_usd": res.metrics.get("extra_cost_usd"), "cost_source": res.metrics.get("cost_source"),
+        "swap": res.metrics.get("swap")}, default=str))
+    bars_sha = hashlib.sha256(pd.util.hash_pandas_object(dec, index=False).to_numpy().tobytes()).hexdigest()
+    try:
+        man = rm.record(model=f"saturday_retrain:{family}:{timeframe}", family=BASELINE_FAMILY,
+                        artifact=pickle.dumps(res.model), data_version=f"store:bars_{timeframe}:{bars_sha}",
+                        settings=settings, manifest_key=key, served="seed0", seeds=seeds, train_end=train_end,
+                        scaler_fit_end=train_end,
+                        label_end_max=pd.Timestamp(pd.to_datetime(labels["ts_exit"], utc=True).max()),
+                        unit=agent_id, fold_keys=[f"{k}:{n}" for k, n in
+                                                  enumerate(res.metrics.get("fold_test_sizes", []))],
+                        results={"backtest": bt.model_dump() if bt else {}}, quality=[verdict], schedule="weekly",
+                        root=ctx.models.manifests, repo=rm.ROOT, now=slot)
+    except (rm.ManifestError, ValueError) as exc:
+        log.error("saturday_retrain: %s: run manifest not recorded: %s", agent_id, exc)
+        return f"no challenger: the run manifest could not be recorded ({exc})"
+    why = servable_reasons(man, lookup=lambda i: rm.load(i, ctx.models.manifests))
+    if why:
+        log.warning("saturday_retrain: %s: refit refused for serving: %s", agent_id, "; ".join(why))
+        return f"no challenger: the serving rule refuses it ({'; '.join(why)}); manifest {man.manifest_id}"
+    e = ctx.models.add_challenger(res.model, family=family, agent_id=agent_id, backtest=bt.model_dump() if bt else {},
+                                  now=slot, manifest=man,
+                                  notes=[f"walk-forward {res.n_folds} folds, {res.n_candidates} candidates"])
+    # the challenger shadow-trades from now on; it becomes this agent's champion only through the gates
+    return {"challenger": e.version, "backtest": e.backtest, "manifest": man.manifest_id}
 
 
 # ---------------------------------------------------------------------------------------------- model watch
