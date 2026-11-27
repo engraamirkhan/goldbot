@@ -10,7 +10,7 @@ The label (`LabelSpec`, id dl-v1; a change is a new spec id and re-keys the cach
   spread it is the mid move exactly; the spread is charged once in cost(x), never in the label.
 - Base distance d0 = ATR14 (Wilder, mid, the tf's decision bars, known at the decision bar's close) x sqrt(H / h_ref)
   (the W2-2 formula), floored at 1.5 x the median 1m true range of the 1,440 minutes up to the decision
-  ("session-median TR"). D-4 froze h_ref = H per tf (record xt-v1, `EXIT_FREEZE`): the factor is exactly 1, so k is
+  ("session-median TR"). D-4 froze h_ref = H per tf (record xt-v1, `exit_freeze()`): the factor is exactly 1, so k is
   the ATR14_tf multiple the card's table states.
 - Templates: stop / target / trail in units of d0; R = the template's own initial stop distance (T0 has none: R = d0).
   A stop order (initial, break-even or trailed) is `barrier_hit` "stop" (`stop_moved` marks a moved one); a gapped
@@ -190,8 +190,8 @@ def exit_freeze_hash(spec: LabelSpec = SPEC) -> str:
 
 # D-4, 2026-11-27 (card rev 10 amendment, re-hashed with the mechanics after the quant review of #514): the sha256 of
 # xt-v1. A gate read needs rows stamped with it and a spec that hashes to it (`gate_status`); the card records the
-# same value, so the freeze changes only with a card amendment and a new id. `EXIT_FREEZE` (the record) is computed
-# lazily on first access (module `__getattr__`), as is the behaviour sha.
+# same value, so the freeze changes only with a card amendment and a new id. The record is `exit_freeze()`, computed
+# on call (the behaviour sha is cached); no module `__getattr__`, so mypy keeps checking every attribute (LOW-2, #514).
 EXIT_FREEZE_SHA256 = "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826"
 
 RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
@@ -756,7 +756,18 @@ VALUE_KEYS = ("decision_utc", "side", "template")       # alignment columns repe
 def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: str, year: int, phase: int,
                     parts: Mapping[str, Any], spec: LabelSpec = SPEC) -> str:
     """Atomic: `<key>.skeleton.parquet` (the outcome-blind `SKELETON` columns), `<key>.values.parquet` (the label
-    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`."""
+    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`.
+    The manifest's `exit_freeze_sha` is the rows' own stamp, never measured again here (code review LOW-1 on #516: a
+    one-off failure in `label_rows` would otherwise sit under a good manifest stamp and `partition_exists` would skip
+    the partition forever). The rows must carry exactly one stamp, else ValueError; an empty partition has no row to
+    stamp and records the spec's hash."""
+    if "exit_freeze_sha" not in labels.columns:
+        raise ValueError("write_partition: the rows carry no exit_freeze_sha stamp (build them with label_rows)")
+    stamps = labels["exit_freeze_sha"].astype(str).unique()
+    if len(stamps) > 1:
+        raise ValueError(f"write_partition: the rows carry {len(stamps)} exit_freeze_sha stamps; one partition is built "
+                         "under one exit geometry")
+    stamp = str(stamps[0]) if len(stamps) else exit_freeze_hash(spec)
     key = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)
     d = _part_dir(cache, spec, instrument, tf, year, phase)
     d.mkdir(parents=True, exist_ok=True)
@@ -767,7 +778,7 @@ def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: s
         labels[cols].to_parquet(tmp, index=False, compression="zstd")
         os.replace(tmp, p)
     man = {**parts, "key": key, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
-           "exit_freeze_sha": exit_freeze_hash(spec),
+           "exit_freeze_sha": stamp,
            "instrument": instrument, "tf": tf, "year": year, "phase": phase, "rows": len(labels),
            "bars": int(labels["decision_utc"].nunique()) if len(labels) else 0,
            "sealed": True, "built_utc": str(pd.Timestamp.now(tz="UTC"))}
@@ -779,9 +790,18 @@ def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: s
 
 def partition_exists(cache: Path, instrument: str, tf: str, year: int, phase: int, parts: Mapping[str, Any],
                      spec: LabelSpec = SPEC) -> bool:
+    """Built: all three files exist AND the manifest records the xt-v1 stamp. `label_key` does not carry the stamp,
+    so a partition built while the exit mechanics were not measurable (or not xt-v1) is rebuilt, never skipped
+    (code review LOW-1 on #514)."""
     stem = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)[:24]
     d = _part_dir(cache, spec, instrument, tf, year, phase)
-    return all((d / f"{stem}{x}").exists() for x in (".skeleton.parquet", ".values.parquet", ".json"))
+    if not all((d / f"{stem}{x}").exists() for x in (".skeleton.parquet", ".values.parquet", ".json")):
+        return False
+    try:
+        man = json.loads((d / f"{stem}.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(man, dict) and man.get("exit_freeze_sha") == EXIT_FREEZE_SHA256
 
 
 def readable(tiers: F.Tiers | None) -> bool:
@@ -1067,59 +1087,58 @@ def _r(x: Any) -> list[Any]:
 
 
 def _behaviour_of(spec: LabelSpec) -> str:
+    """The behaviour sha of the spec's mechanics, or "unmeasurable:<error>" when they cannot run: never the frozen
+    value. The failure is caught HERE, outside the cache (code review LOW-1 on #514): a transient error is not
+    remembered for the process; the next call measures again."""
     key = {k: v for k, v in _raw_geometry(spec).items() if k not in ("h_ref", "clip_r")}
-    return _behaviour_sha(json.dumps(key, sort_keys=True, default=str))
+    try:
+        return _behaviour_sha(json.dumps(key, sort_keys=True, default=str))
+    except Exception as exc:  # any failure is a non-frozen geometry, never an exception inside a gate check
+        log.warning("xt-v1 behaviour not measurable: %s: %s", type(exc).__name__, exc)
+        return f"unmeasurable:{type(exc).__name__}"
 
 
 @lru_cache(maxsize=8)
 def _behaviour_sha(key: str) -> str:
     """sha256 of the exit mechanics' outputs on a fixed synthetic set (quant 1 on #514): `first_passage` for every
     template on both sides' quotes (`_quotes`) over `_FP_BLOCKS`; `decision_bars` (close, ATR) and `floor_at` at 15m
-    and 1d; `entry_and_horizon` at 15m (across the weekend gaps) and 1d (the grid time exit). A spec that cannot run
-    is "unmeasurable", never the frozen value. Cached per geometry; `_behaviour_sha.cache_clear()` re-measures."""
-    try:
-        raw = json.loads(key)
-        spec = SPEC.model_copy(update={**raw, "templates": tuple(Template(**t) for t in raw["templates"]),
-                                       "sides": tuple(raw["sides"])})
-        out: dict[str, Any] = {}
-        mf = Minutes(_behaviour_frame([r for b in _FP_BLOCKS for r in b], "2015-03-04 10:00"), spec)
-        starts = np.cumsum([0, *[len(b) for b in _FP_BLOCKS[:-1]]]).astype(np.int64)
-        ends = starts + np.array([len(b) - 1 for b in _FP_BLOCKS], dtype=np.int64)
-        for side in spec.sides:
-            o, h, lo, c = _quotes(mf, side)
-            for tpl in spec.templates:
-                fp = first_passage(o, h, lo, c, starts, ends, np.ones(len(starts)), tpl)
-                out[f"fp:{side}:{tpl.name}"] = [_r(fp[k]) for k in ("gross", "hit", "exit", "moved")]
-        mp = Minutes(_path_frame(), spec)
-        for tf in ("15m", "1d"):
-            bars = decision_bars(mp, tf, 0, spec)
-            close = bars["close_ns"].to_numpy()
-            out[f"bars:{tf}"] = [_r(close), _r(bars["atr"].to_numpy())]
-            out[f"floor:{tf}"] = _r(mp.floor_at(close))
-            rows = pd.DataFrame({"decision_utc": _to_utc(close)})
-            eh = entry_and_horizon(mp, rows, tf, close, spec)
-            out[f"eh:{tf}"] = [_r(eh[k]) for k in ("e", "z", "end", "ok")]
-        # d0 composition (quant re-verify B on #514): base_dist, risk_usd and gross_r_raw of T2 and T6, both sides, from
-        # `_label_core` at 15m, under the spec and under an h_ref probe (16 x H: factor 1/4) where the floor binds
-        bars = decision_bars(mp, "15m", 0, spec)
-        dec = _to_utc(bars["close_ns"].to_numpy())
-        rows = pd.DataFrame({"instrument": "SYN", "tf": "15m", "phase": 0, "group_id": 0, "decision_utc": dec,
-                             "available_utc": dec, "window_from_utc": dec, "source": "synthetic", "bid_only": False})
-        probe = spec.model_copy(update={"h_ref": {**spec.h_ref, "15m": 16 * spec.h_by_tf["15m"]}})
-        for name, sp in (("spec", spec), ("probe", probe)):
-            lab = _label_core(mp, rows, "15m", bars, sp)
-            lab = lab[lab["template"].isin(["T2", "T6"])]
-            out[f"core:{name}"] = [_r(lab[k].to_numpy()) for k in ("side", "base_dist", "risk_usd", "gross_r_raw")]
-            out[f"core:{name}:templates"] = lab["template"].astype(str).tolist()
-        return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
-    except Exception as exc:  # any failure is a non-frozen geometry, never an exception inside a gate check
-        return f"unmeasurable:{type(exc).__name__}"
-
-
-def __getattr__(name: str) -> Any:
-    if name == "EXIT_FREEZE":
-        return exit_freeze(SPEC)
-    raise AttributeError(name)
+    and 1d; `entry_and_horizon` at 15m (across the weekend gaps) and 1d (the grid time exit). Raises when the
+    mechanics cannot run (`_behaviour_of` turns that into "unmeasurable", uncached). Only successes are cached, per
+    geometry; `_behaviour_sha.cache_clear()` re-measures."""
+    raw = json.loads(key)
+    spec = SPEC.model_copy(update={**raw, "templates": tuple(Template(**t) for t in raw["templates"]),
+                                   "sides": tuple(raw["sides"])})
+    out: dict[str, Any] = {}
+    mf = Minutes(_behaviour_frame([r for b in _FP_BLOCKS for r in b], "2015-03-04 10:00"), spec)
+    starts = np.cumsum([0, *[len(b) for b in _FP_BLOCKS[:-1]]]).astype(np.int64)
+    ends = starts + np.array([len(b) - 1 for b in _FP_BLOCKS], dtype=np.int64)
+    for side in spec.sides:
+        o, h, lo, c = _quotes(mf, side)
+        for tpl in spec.templates:
+            fp = first_passage(o, h, lo, c, starts, ends, np.ones(len(starts)), tpl)
+            out[f"fp:{side}:{tpl.name}"] = [_r(fp[k]) for k in ("gross", "hit", "exit", "moved")]
+    mp = Minutes(_path_frame(), spec)
+    for tf in ("15m", "1d"):
+        bars = decision_bars(mp, tf, 0, spec)
+        close = bars["close_ns"].to_numpy()
+        out[f"bars:{tf}"] = [_r(close), _r(bars["atr"].to_numpy())]
+        out[f"floor:{tf}"] = _r(mp.floor_at(close))
+        rows = pd.DataFrame({"decision_utc": _to_utc(close)})
+        eh = entry_and_horizon(mp, rows, tf, close, spec)
+        out[f"eh:{tf}"] = [_r(eh[k]) for k in ("e", "z", "end", "ok")]
+    # d0 composition (quant re-verify B on #514): base_dist, risk_usd and gross_r_raw of T2 and T6, both sides, from
+    # `_label_core` at 15m, under the spec and under an h_ref probe (16 x H: factor 1/4) where the floor binds
+    bars = decision_bars(mp, "15m", 0, spec)
+    dec = _to_utc(bars["close_ns"].to_numpy())
+    rows = pd.DataFrame({"instrument": "SYN", "tf": "15m", "phase": 0, "group_id": 0, "decision_utc": dec,
+                         "available_utc": dec, "window_from_utc": dec, "source": "synthetic", "bid_only": False})
+    probe = spec.model_copy(update={"h_ref": {**spec.h_ref, "15m": 16 * spec.h_by_tf["15m"]}})
+    for name, sp in (("spec", spec), ("probe", probe)):
+        lab = _label_core(mp, rows, "15m", bars, sp)
+        lab = lab[lab["template"].isin(["T2", "T6"])]
+        out[f"core:{name}"] = [_r(lab[k].to_numpy()) for k in ("side", "base_dist", "risk_usd", "gross_r_raw")]
+        out[f"core:{name}:templates"] = lab["template"].astype(str).tolist()
+    return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
 
 
 def require_gate_eligible(meta: Mapping[str, Any]) -> None:
