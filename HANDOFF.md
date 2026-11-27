@@ -19,6 +19,30 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - `model_influence` names the active/shadow models shadow scoring refuses, judged by the scorer's own
     `provenance_problem` (now public), e.g. "0 served: 1 rows refused (no provenance, trained before migration 45)".
     No provenance backfill.
+- 2026-11-27 sr-v3 trainer (PR #488): the quant review's 11 findings are fixed, one commit each. The trainer now runs
+  fit-only by default; reads are gated.
+  - Fit-only (H2): writes artifacts and `oof_scores.parquet` (no label column; its sha is in the report and every
+    manifest) and no S, kept mean, S at 2x cost, D or net-based verdict. `--read` needs every load_labels read
+    gate_eligible, the ub95 cost table, and `--trial-id <booked registry trial>` for a judged unit (H3).
+  - Read-once (H3, N1): only `--read` books the unit's learn read, at the start of phase 3, in the ledger beside the
+    research registry (H4) as family `sr-v3:<unit>`, keyed on the frozen fit-only run (artifact shas, sealed OOF
+    scores sha, label spec hash); it needs that fit-only run, refuses a refit that does not reproduce it, and a
+    second `--read` raises AlreadyRead. Fit-only runs never book (consumption rows only), so refits after a spec or
+    code change never burn the read. G-cw, HB and AVG stay sealed (scores only) until the zoo-v2 card is signed
+    (`sr_v3_report.ZOO_V2_CARD`).
+  - Costs (H1, M2): `--cost-manifest` (default ~/tmp/sr-v3-trainsets/manifest.json) charges max(W2, ecr ub95) per
+    instrument x session x tf at the worse broker, plus the instrument's own swap; a row with no cell is refused.
+    Reads use the realised net_read (RT_ub95 + overshoot on stops + nights held x swap); keeps use cost(x). Every
+    read states "S at the worse-broker cost" (serving charges the account's own broker). A pooled body (any non-gold
+    member) carries cost_version=prior and is never a gate read until FX has a measured cost anchor.
+  - Gap (quant ruling 1, clarification of card R-B, K 0): per unit max(1 d, max H over the unit's tfs): 1 d for
+    1m-1h, 5 d for 4h, 20 d for 1d+1w; the M1 input-lookback term was withdrawn.
+  - Also: collected.json keeps train_end/label_end_max; manifests are recorded before outputs (H5); each G-cw seed
+    is its own 90 % resample (M4); N6 shifts whole days circularly by >= 20 trading days and passes per
+    (instrument x tf, session) cell (M3); an
+    end-to-end truncation test (M5).
+  - Modules (LOW): `sr_v3_train` (guarded fit path), `sr_v3_store` (stores and refusals), `sr_v3_report` (read,
+    run record, `build_artifact`).
 - 2026-11-27 sr-v3 Stage 0 "NOT STARTED (data)" resolved label-blind (research-director):
   `docs/research/prereg-amendment-2026-11-27-sr-v3-stage0-usability.md` (rev 9, K 0, quant signs).
   - Cause: the trainer masked every row by P30's 129-day lookback (d1 context / atr_ratio_14_100); the card (2.3) and
@@ -190,6 +214,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     | EURUSD 2010-17 | P30 | 5,644 | 4,247 | 3,214 | 2,191 | 1,734 | 422 | 35 | 0 |
 
     Gold 2003-09 is unchanged.
+- **sr-v3 history trainer is built. It has not run on real labels.** The pipeline is Stage 0 (label-blind Riley
+  ladder, level and served orders, tie rule, λ_a), then walk-forward fits of L-cw, G-cw (GBT baseline), HB and AVG
+  with the D-40 dense prior, then a training report and one run manifest (ADR 0109) per v0 artifact.
+  - CLI: `scripts/research/train_sr_v3.py`. Modules: `goldbot/research/sr_v3.py`, `learners.py`, `sr_v3_train.py` and
+    `sr_v3_serve.py`. Decisions are in ADR 0108.
+  - Quant sequencing (binding): the store refuses every label read and Stage 0 statistic
+    (`sr_v3_store.sequencing_gaps`, `SequencingRefused`) until #482 (A4), #484 (X6), card rev 8 (`rv_ratio` at core-12
+    position 4) and `price_action_x6.X6_MERGED_UTC` are all on main; the CLI stops before any phase on the same check.
+  - Core-12 follows card rev 8: `rv_ratio` replaces `atr_ratio_14_100` at position 4 (charged at ρ_x = 1 until the
+    D-12a file measures it).
 - 2026-11-26 sr-v3 card rev 8 (quant ruling, label-blind, before any sr-v3 label read): `rv_ratio` replaces
   `atr_ratio_14_100` at core-12 position 4, at every tf; `atr_ratio_14_100` stays in P30. K 0.
   - Code: `dense_labels.CORE12`, so `COLUMN_SETS` core-6 and core-12. The trainer's `sr_v3.CORE_12` follows in PR #488.
