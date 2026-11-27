@@ -14,12 +14,14 @@ units:
     method: dense-skeleton          # one method per cell, learn and judge (quant A3 on PR #482)
     # learn: D-5 measured supply (ADR 0085 A4 recorded the served tiers sha 2026-11-26): T2 n_eff after tier survival
     # for the core-12 level-order prefix (L2, >= the 10-input block), from `measured.learn_T2_core12`. 2h is null: no
-    # bar rule (TF-2h), not measurable (quant A2). Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736,
+    # bar rule (TF-2h), not measurable (quant A2). Card rev 8 (rv_ratio at core-12 position 4) re-ran it once on the
+    # same skeleton (with R-a, re-counted at the main merge 2026-11-27): was [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+    # with atr_ratio_14_100. Was the D-1 card-method count [5212, 3872, 2883, 1909, 1473, 736,
     # 295, 175, 88].
     # judge: the same measured skeleton T2 n_eff (core-12, tiers ff653ea7) on the confirm window 2018-01..2025-09
     # (quant A3: C-1 governs label values, not skeleton counts). null until that count lands; never the card-method
     # day count, which would mix methods in one cell (was [527, 392, 292, 193, 149, 74, 30, 15, 7]).
-    learn: [5226, 3846, 2707, 1643, 1067, null, 123, 0, 0]
+    learn: [5233, 3913, 2854, 1852, 1331, null, 209, 0, 0]
     judge: null
     items: [D-1, D-3, D-4, D-5gold]
     # D-5 measured (dl-v1, ADR 0104 4 per the quant re-verify of 2026-11-26): card 2.2 n_eff on measured uniqueness,
@@ -32,14 +34,15 @@ units:
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      learn_T2_core6: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
-      # R-a re-count 2026-11-26 (PR #492, same r5 events and weights, outcome-blind): +0 at every tf and column set;
-      # 2h is the TF-2h count (pre-R-a code), unchanged by R-a for the same binding column
-      learn_T2_core6_Ra: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
-      learn_T2_core12: [5226, 3846, 2707, 1643, 1067, 426, 123, 0, 0]
+      # Re-counted 2026-11-27 on the merged code (card rev 8 rv_ratio at core-12 position 4 + rule R-a #492 + TF-2h
+      # #485), same r5 / TF-2h events and u_tf weights, outcome-blind. rv_ratio is close-only, so R-a admits its B
+      # lookback months: core-6 and core-12 now differ (core-12 adds strict-lookback columns). P30/untiered unchanged.
+      learn_T2_core6: [5233, 3914, 2857, 1859, 1343, 610, 217, 0, 0]
+      learn_T2_core6_Ra: [5233, 3914, 2857, 1859, 1343, 610, 217, 0, 0]
+      learn_T2_core12: [5233, 3913, 2854, 1852, 1331, 599, 209, 0, 0]
       learn_T2_P30: [2151, 1617, 1222, 831, 660, 357, 123, 0, 0]
       learn_untiered: [7338, 5523, 4179, 2851, 2271, 1239, 604, 298, 208]
-      test_old_T2_core6: [157, 104, 56, 13, 0, 0, 0, 0, 0]
+      test_old_T2_core6: [159, 114, 77, 44, 21, 8, 0, 0, 0]
       test_old_T2_P30: [0, 0, 0, 0, 0, null, 0, 0, 0]
       learn_bars: [2819388, 566896, 189064, 94557, 47294, null, 12812, 2487, 417]
       test_old_bars: [1939236, 451032, 156059, 78799, 39438, null, 10477, 1965, 228]
@@ -54,11 +57,12 @@ units:
     items: [D-3, D-4, D-5fx]
     # D-5 measured (dl-v1, ADR 0104 4): EURUSD alone, same method, tiers and column sets as gold. Bid-only: barrier
     # labels need N7 before a judged read.
+    # core-6 / core-12 rows re-run once under card rev 8 (rv_ratio at position 4) and R-a on the same skeleton (2026-11-27).
     measured:
       spec: dl-v1
       tiers_sha256: ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b
-      EURUSD_learn_T2_core6: [6996, 5238, 3907, 2607, 1968, 992, 422, 35, 0]
-      EURUSD_learn_T2_core12: [6996, 5238, 3907, 2607, 1968, 992, 422, 35, 0]
+      EURUSD_learn_T2_core6: [6998, 5265, 3975, 2699, 2114, 1135, 528, 150, 0]
+      EURUSD_learn_T2_core12: [6998, 5265, 3974, 2693, 2107, 1127, 521, 144, 0]
       EURUSD_learn_T2_P30: [5644, 4247, 3214, 2191, 1734, 949, 422, 35, 0]
       EURUSD_learn_bars: [2936462, 596385, 198883, 99450, 49732, null, 12853, 2496, 417]
   metals_crosses_b:

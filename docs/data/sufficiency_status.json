@@ -6,7 +6,7 @@
    "cell": "gold/1m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5233,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -62,11 +62,11 @@
    "cell": "gold/5m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3913,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 8,
+   "max_inputs": 9,
    "gaps": [
     {
      "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
@@ -101,8 +101,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 3,846 < 4,300 for a 10-input block (max 8 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,692) and the per-cell input cap to the card",
+     "gap": "learn n_eff 3,913 < 4,300 for a 10-input block (max 9 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,826) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -126,7 +126,7 @@
    "cell": "gold/15m",
    "verdict": "SHORT",
    "projected": "SHORT",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2854,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -165,8 +165,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "learn n_eff 2,707 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,414) and the per-cell input cap to the card",
+     "gap": "learn n_eff 2,854 < 4,300 for a 10-input block (max 6 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,708) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-16",
      "blocks": true,
@@ -190,7 +190,71 @@
    "cell": "gold/30m",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1852,
+   "n_eff_judge": null,
+   "need_train": 4300,
+   "need_judge": 1109,
+   "max_inputs": 4,
+   "gaps": [
+    {
+     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
+     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
+     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
+     "due": "2026-12-02 (plan); read date set by graded n_eff",
+     "blocks": true,
+     "item": "D-1"
+    },
+    {
+     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
+     "plan": "W2-2 / A9 implementation",
+     "owner": "implementer + microstructure-researcher",
+     "due": "2026-12-04",
+     "blocks": true,
+     "item": "D-3"
+    },
+    {
+     "gap": "exit templates T0-T7 not frozen",
+     "plan": "freeze W3-1 / RL-1 templates",
+     "owner": "exits-researcher",
+     "due": "2026-12-02",
+     "blocks": true,
+     "item": "D-4"
+    },
+    {
+     "gap": "no dense labels: gold n_eff is projected, not measured",
+     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
+     "owner": "data-engineer + implementer",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "D-5gold"
+    },
+    {
+     "gap": "no pooling reaches 4,300 (bound 3,704 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (4) or no model at this tf (rule-only)",
+     "owner": "data-engineer + ml-researcher",
+     "due": "2026-12-11",
+     "blocks": true,
+     "item": "INFEASIBLE"
+    }
+   ],
+   "requirement": {
+    "cell": "gold/30m",
+    "unit": "gold",
+    "tf": "30m",
+    "objective": "obj-v1",
+    "inputs": 10,
+    "keep_share": 0.33,
+    "tiers": "r11-v2.1",
+    "label_templates": "T0-T7 (D-4)",
+    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
+   },
+   "method": "dense-skeleton"
+  },
+  {
+   "cell": "gold/1h",
+   "verdict": "SHORT",
+   "projected": "INFEASIBLE",
+   "n_eff_learn": 1331,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -229,72 +293,8 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 3,286 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 2,662 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
-     "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
-     "blocks": true,
-     "item": "INFEASIBLE"
-    }
-   ],
-   "requirement": {
-    "cell": "gold/30m",
-    "unit": "gold",
-    "tf": "30m",
-    "objective": "obj-v1",
-    "inputs": 10,
-    "keep_share": 0.33,
-    "tiers": "r11-v2.1",
-    "label_templates": "T0-T7 (D-4)",
-    "source": "sr-v3 card rev 2 (PR #460) 2.2 / 5.1"
-   },
-   "method": "dense-skeleton"
-  },
-  {
-   "cell": "gold/1h",
-   "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 1067,
-   "n_eff_judge": null,
-   "need_train": 4300,
-   "need_judge": 1109,
-   "max_inputs": 2,
-   "gaps": [
-    {
-     "gap": "Dukascopy gold 2019-2025-09 has no usable grade: C under r11-v2.1 (fix check 0/78 on independent-A months), r11-v2.2 VOID (tol 39 bp > 15 bp), and no second independent 1m source admitted (Forexite refused 2026-11-26: price field undocumented; ADR 0105); 2003-08 C (no independent minute reference)",
-     "plan": "fallback (ii), pre-registered in ADR 0105: gold confirm on a forward window from 2026-10-01, Dukascopy graded monthly under r11-v2.1 against the traded broker's MT5 minutes under admission (a)-(c); one read at the first month-end where graded n_eff >= the judge requirement; the holdout is never confirm",
-     "owner": "data-engineer (monthly grade, broker M1 capture) + quant-reviewer",
-     "due": "2026-12-02 (plan); read date set by graded n_eff",
-     "blocks": true,
-     "item": "D-1"
-    },
-    {
-     "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
-     "plan": "W2-2 / A9 implementation",
-     "owner": "implementer + microstructure-researcher",
-     "due": "2026-12-04",
-     "blocks": true,
-     "item": "D-3"
-    },
-    {
-     "gap": "exit templates T0-T7 not frozen",
-     "plan": "freeze W3-1 / RL-1 templates",
-     "owner": "exits-researcher",
-     "due": "2026-12-02",
-     "blocks": true,
-     "item": "D-4"
-    },
-    {
-     "gap": "no dense labels: gold n_eff is projected, not measured",
-     "plan": "dense label factory over fs-v1, gold 9 tfs, phase rows at 1/P, provenance, loaders refuse F/P/holdout/phase != 0 Contract (quant C5, C6): every label starts at its row's decision_utc (entry = the first tradable 1m minute strictly after it, side-aware price); a 1d row's close-to-close label runs feature-day close to feature-day close (13:30 NY), never raw/daily 21:00 UTC bars; fs-v1 1d/1w rows do not describe the deployed 1d/1w arms until those decide on the same bar (or an arm-anchored grid is a new spec id); folds purge every training row whose [window_from_utc, label_end_utc] overlaps a test row's [decision_utc, label_end_utc] plus one label horizon of embargo (feature_store.purge), group_id counts n_eff only; labels persist LABEL_COST_COLS and take cost from decision_cost (#461), never r_mid - r. Tests: entry_utc > decision_utc for every row; a phase-5 copy of test rows in train is purged.",
-     "owner": "data-engineer + implementer",
-     "due": "2026-12-11",
-     "blocks": true,
-     "item": "D-5gold"
-    },
-    {
-     "gap": "no pooling reaches 4,300 (bound 2,134 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
@@ -382,7 +382,7 @@
    "cell": "gold/4h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 123,
+   "n_eff_learn": 209,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -421,7 +421,7 @@
      "item": "D-5gold"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 246 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 418 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -2679,7 +2679,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/1m",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5233,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
@@ -2700,11 +2700,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/5m",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3914,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 454,
+   "short_learn": 386,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2721,11 +2721,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/15m",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2857,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1593,
+   "short_learn": 1443,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2742,11 +2742,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "gold/30m",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1859,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 2657,
+   "short_learn": 2441,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2758,16 +2758,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "zoo-v2",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3233,
+   "short_learn": 2957,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2779,16 +2779,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
    "cell": "gold/2h",
-   "n_eff_learn": 426,
+   "n_eff_learn": 610,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3874,
+   "short_learn": 3690,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2798,18 +2798,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1084,
+   "residual_learn": 651,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 8
   },
   {
    "consumer": "zoo-v2",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 4177,
+   "short_learn": 4083,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -2818,7 +2818,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3202,
+   "residual_learn": 3050,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
@@ -2839,7 +2839,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3293,
+   "residual_learn": 3178,
    "residual_judge": 636,
    "max_inputs_after": 2
   },
@@ -3380,7 +3380,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1m",
-   "n_eff_learn": 8736,
+   "n_eff_learn": 8742,
    "n_eff_judge": 4680,
    "need_train": 4300,
    "need_judge": 1109,
@@ -3399,7 +3399,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 7200,
+   "n_eff_learn": 7276,
    "n_eff_judge": 3856,
    "need_train": 4300,
    "need_judge": 1109,
@@ -3418,7 +3418,7 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 5023,
+   "n_eff_learn": 5188,
    "n_eff_judge": 2750,
    "need_train": 4300,
    "need_judge": 1109,
@@ -3437,11 +3437,11 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3227,
+   "n_eff_learn": 3461,
    "n_eff_judge": 1820,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1073,
+   "short_learn": 839,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3451,16 +3451,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1995,
+   "short_learn": 1675,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3470,16 +3470,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1076,
+   "n_eff_learn": 1325,
    "n_eff_judge": 701,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3224,
+   "short_learn": 2975,
    "short_judge": 408,
    "status": "SHORT",
    "routes": [
@@ -3487,18 +3487,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1510,
+   "residual_learn": 1261,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3887,
+   "short_learn": 3735,
    "short_judge": 828,
    "status": "SHORT",
    "routes": [
@@ -3506,18 +3506,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3202,
+   "residual_learn": 3050,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 35,
+   "n_eff_learn": 150,
    "n_eff_judge": 139,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 4265,
+   "short_learn": 4150,
    "short_judge": 970,
    "status": "SHORT",
    "routes": [
@@ -3525,9 +3525,9 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3923,
+   "residual_learn": 3808,
    "residual_judge": 636,
-   "max_inputs_after": 0
+   "max_inputs_after": 1
   },
   {
    "consumer": "zoo-v2",
@@ -3551,7 +3551,7 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/1m",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5233,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
@@ -3572,7 +3572,7 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/5m",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3914,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
@@ -3593,7 +3593,7 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/15m",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2857,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
@@ -3614,11 +3614,11 @@
   {
    "consumer": "sr-v3",
    "cell": "gold/30m",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1859,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 937,
+   "short_learn": 721,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -3630,16 +3630,16 @@
    "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "sr-v3",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1513,
+   "short_learn": 1237,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -3647,20 +3647,20 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
    "cell": "gold/2h",
-   "n_eff_learn": 426,
+   "n_eff_learn": 610,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2154,
+   "short_learn": 1970,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -3672,16 +3672,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 8
   },
   {
    "consumer": "sr-v3",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2457,
+   "short_learn": 2363,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -3690,7 +3690,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1482,
+   "residual_learn": 1330,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
@@ -3711,7 +3711,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1573,
+   "residual_learn": 1458,
    "residual_judge": 636,
    "max_inputs_after": 2
   },
@@ -4252,7 +4252,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1m",
-   "n_eff_learn": 8736,
+   "n_eff_learn": 8742,
    "n_eff_judge": 4680,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4271,7 +4271,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 7200,
+   "n_eff_learn": 7276,
    "n_eff_judge": 3856,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4290,7 +4290,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 5023,
+   "n_eff_learn": 5188,
    "n_eff_judge": 2750,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4309,7 +4309,7 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3227,
+   "n_eff_learn": 3461,
    "n_eff_judge": 1820,
    "need_train": 2580,
    "need_judge": 1109,
@@ -4323,35 +4323,35 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 275,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1076,
+   "n_eff_learn": 1325,
    "n_eff_judge": 701,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1504,
+   "short_learn": 1255,
    "short_judge": 408,
    "status": "SHORT",
    "routes": [
@@ -4361,16 +4361,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2167,
+   "short_learn": 2015,
    "short_judge": 828,
    "status": "SHORT",
    "routes": [
@@ -4378,18 +4378,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1482,
+   "residual_learn": 1330,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 35,
+   "n_eff_learn": 150,
    "n_eff_judge": 139,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2545,
+   "short_learn": 2430,
    "short_judge": 970,
    "status": "SHORT",
    "routes": [
@@ -4397,9 +4397,9 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2203,
+   "residual_learn": 2088,
    "residual_judge": 636,
-   "max_inputs_after": 0
+   "max_inputs_after": 1
   },
   {
    "consumer": "sr-v3",
@@ -4423,7 +4423,7 @@
   {
    "consumer": "x6",
    "cell": "gold/1m",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5233,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
@@ -4444,11 +4444,11 @@
   {
    "consumer": "x6",
    "cell": "gold/5m",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3914,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 1314,
+   "short_learn": 1246,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4465,11 +4465,11 @@
   {
    "consumer": "x6",
    "cell": "gold/15m",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2857,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2453,
+   "short_learn": 2303,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4477,8 +4477,8 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
    "max_inputs_after": 27
@@ -4486,11 +4486,11 @@
   {
    "consumer": "x6",
    "cell": "gold/30m",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1859,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 3517,
+   "short_learn": 3301,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4502,16 +4502,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "x6",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4093,
+   "short_learn": 3817,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4523,16 +4523,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
    "cell": "gold/2h",
-   "n_eff_learn": 426,
+   "n_eff_learn": 610,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4734,
+   "short_learn": 4550,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4542,18 +4542,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1944,
+   "residual_learn": 1511,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 8
   },
   {
    "consumer": "x6",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 5037,
+   "short_learn": 4943,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -4562,7 +4562,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4062,
+   "residual_learn": 3910,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
@@ -4583,7 +4583,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4153,
+   "residual_learn": 4038,
    "residual_judge": 636,
    "max_inputs_after": 2
   },
@@ -5124,7 +5124,7 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1m",
-   "n_eff_learn": 8736,
+   "n_eff_learn": 8742,
    "n_eff_judge": 4680,
    "need_train": 5160,
    "need_judge": 1109,
@@ -5143,7 +5143,7 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 7200,
+   "n_eff_learn": 7276,
    "n_eff_judge": 3856,
    "need_train": 5160,
    "need_judge": 1109,
@@ -5162,18 +5162,18 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 5023,
+   "n_eff_learn": 5188,
    "n_eff_judge": 2750,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 137,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
    "max_inputs_after": 27
@@ -5181,11 +5181,11 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3227,
+   "n_eff_learn": 3461,
    "n_eff_judge": 1820,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 1933,
+   "short_learn": 1699,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5195,16 +5195,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2855,
+   "short_learn": 2535,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5214,16 +5214,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1076,
+   "n_eff_learn": 1325,
    "n_eff_judge": 701,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4084,
+   "short_learn": 3835,
    "short_judge": 408,
    "status": "SHORT",
    "routes": [
@@ -5231,18 +5231,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2370,
+   "residual_learn": 2121,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4747,
+   "short_learn": 4595,
    "short_judge": 828,
    "status": "SHORT",
    "routes": [
@@ -5250,18 +5250,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4062,
+   "residual_learn": 3910,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 35,
+   "n_eff_learn": 150,
    "n_eff_judge": 139,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 5125,
+   "short_learn": 5010,
    "short_judge": 970,
    "status": "SHORT",
    "routes": [
@@ -5269,9 +5269,9 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4783,
+   "residual_learn": 4668,
    "residual_judge": 636,
-   "max_inputs_after": 0
+   "max_inputs_after": 1
   },
   {
    "consumer": "x6",
@@ -5295,11 +5295,11 @@
   {
    "consumer": "seq-1",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 4953,
+   "short_learn": 4677,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -5307,20 +5307,20 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": null,
-   "closed_due": null,
-   "residual_learn": 287,
+   "closed_by": "D-13",
+   "closed_due": "2026-12-11",
+   "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "seq-1",
    "cell": "gold/2h",
-   "n_eff_learn": 426,
+   "n_eff_learn": 610,
    "n_eff_judge": null,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5594,
+   "short_learn": 5410,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -5330,18 +5330,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2804,
+   "residual_learn": 2371,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 8
   },
   {
    "consumer": "seq-1",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5897,
+   "short_learn": 5803,
    "short_judge": 1109,
    "status": "SHORT",
    "routes": [
@@ -5350,7 +5350,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4922,
+   "residual_learn": 4770,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
@@ -5371,7 +5371,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5013,
+   "residual_learn": 4898,
    "residual_judge": 636,
    "max_inputs_after": 2
   },
@@ -5606,30 +5606,30 @@
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 3715,
+   "short_learn": 3395,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
-   "closed_by": null,
-   "closed_due": null,
-   "residual_learn": 287,
+   "closed_by": "D-13",
+   "closed_due": "2026-12-11",
+   "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1076,
+   "n_eff_learn": 1325,
    "n_eff_judge": 701,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 4944,
+   "short_learn": 4695,
    "short_judge": 408,
    "status": "SHORT",
    "routes": [
@@ -5637,18 +5637,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3230,
+   "residual_learn": 2981,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5607,
+   "short_learn": 5455,
    "short_judge": 828,
    "status": "SHORT",
    "routes": [
@@ -5656,18 +5656,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4922,
+   "residual_learn": 4770,
    "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1d",
-   "n_eff_learn": 35,
+   "n_eff_learn": 150,
    "n_eff_judge": 139,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5985,
+   "short_learn": 5870,
    "short_judge": 970,
    "status": "SHORT",
    "routes": [
@@ -5675,18 +5675,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5643,
+   "residual_learn": 5528,
    "residual_judge": 636,
-   "max_inputs_after": 0
+   "max_inputs_after": 1
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/1m",
-   "n_eff_learn": 5226,
+   "n_eff_learn": 5233,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 5524,
+   "short_learn": 5517,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5703,11 +5703,11 @@
   {
    "consumer": "rl-x1",
    "cell": "gold/5m",
-   "n_eff_learn": 3846,
+   "n_eff_learn": 3914,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 6904,
+   "short_learn": 6836,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5724,11 +5724,11 @@
   {
    "consumer": "rl-x1",
    "cell": "gold/15m",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2857,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 8043,
+   "short_learn": 7893,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5745,11 +5745,11 @@
   {
    "consumer": "rl-x1",
    "cell": "gold/30m",
-   "n_eff_learn": 1643,
+   "n_eff_learn": 1859,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9107,
+   "short_learn": 8891,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5759,18 +5759,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3081,
+   "residual_learn": 2847,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9683,
+   "short_learn": 9407,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5780,18 +5780,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5017,
+   "residual_learn": 4697,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/2h",
-   "n_eff_learn": 426,
+   "n_eff_learn": 610,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 10324,
+   "short_learn": 10140,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5801,18 +5801,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7534,
+   "residual_learn": 7101,
    "residual_judge": 956,
-   "max_inputs_after": 7
+   "max_inputs_after": 8
   },
   {
    "consumer": "rl-x1",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 10627,
+   "short_learn": 10533,
    "short_judge": 3328,
    "status": "SHORT",
    "routes": [
@@ -5821,7 +5821,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 9652,
+   "residual_learn": 9500,
    "residual_judge": 2379,
    "max_inputs_after": 2
   },
@@ -6227,11 +6227,11 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/1m",
-   "n_eff_learn": 8736,
+   "n_eff_learn": 8742,
    "n_eff_judge": 4680,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 2014,
+   "short_learn": 2008,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -6246,11 +6246,11 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/5m",
-   "n_eff_learn": 7200,
+   "n_eff_learn": 7276,
    "n_eff_judge": 3856,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 3550,
+   "short_learn": 3474,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -6265,11 +6265,11 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 5023,
+   "n_eff_learn": 5188,
    "n_eff_judge": 2750,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 5727,
+   "short_learn": 5562,
    "short_judge": 578,
    "status": "SHORT",
    "routes": [
@@ -6284,11 +6284,11 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3227,
+   "n_eff_learn": 3461,
    "n_eff_judge": 1820,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 7523,
+   "short_learn": 7289,
    "short_judge": 1508,
    "status": "SHORT",
    "routes": [
@@ -6296,18 +6296,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3081,
+   "residual_learn": 2847,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 8445,
+   "short_learn": 8125,
    "short_judge": 1923,
    "status": "SHORT",
    "routes": [
@@ -6315,18 +6315,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5017,
+   "residual_learn": 4697,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1076,
+   "n_eff_learn": 1325,
    "n_eff_judge": 701,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9674,
+   "short_learn": 9425,
    "short_judge": 2627,
    "status": "SHORT",
    "routes": [
@@ -6334,18 +6334,18 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7960,
+   "residual_learn": 7711,
    "residual_judge": 956,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 10337,
+   "short_learn": 10185,
    "short_judge": 3047,
    "status": "SHORT",
    "routes": [
@@ -6353,14 +6353,14 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 9652,
+   "residual_learn": 9500,
    "residual_judge": 2379,
    "max_inputs_after": 2
   },
   {
    "consumer": "agg-v1",
    "cell": "gold/15m",
-   "n_eff_learn": 2707,
+   "n_eff_learn": 2857,
    "n_eff_judge": null,
    "need_train": 0,
    "need_judge": 200,
@@ -6381,7 +6381,7 @@
   {
    "consumer": "agg-v1",
    "cell": "gold/1h",
-   "n_eff_learn": 1067,
+   "n_eff_learn": 1343,
    "n_eff_judge": null,
    "need_train": 0,
    "need_judge": 200,
@@ -6402,7 +6402,7 @@
   {
    "consumer": "agg-v1",
    "cell": "gold/4h",
-   "n_eff_learn": 123,
+   "n_eff_learn": 217,
    "n_eff_judge": null,
    "need_train": 0,
    "need_judge": 200,
@@ -6593,7 +6593,7 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 5023,
+   "n_eff_learn": 5188,
    "n_eff_judge": 2750,
    "need_train": 0,
    "need_judge": 200,
@@ -6612,7 +6612,7 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2305,
+   "n_eff_learn": 2625,
    "n_eff_judge": 1405,
    "need_train": 0,
    "need_judge": 200,
@@ -6631,7 +6631,7 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 413,
+   "n_eff_learn": 565,
    "n_eff_judge": 281,
    "need_train": 0,
    "need_judge": 200,
@@ -6654,21 +6654,21 @@
    "kind": "pooled",
    "title": "aug-v1 A2: pooled gold + FX body per tf (real rows, instrument levels, Q2 tie rule picks the body label-blind)",
    "gain": {
-    "gold/1m": 3510,
+    "gold/1m": 3509,
     "gold/1m:judge": 4680,
-    "gold/5m": 3354,
+    "gold/5m": 3362,
     "gold/5m:judge": 3856,
-    "gold/15m": 2316,
+    "gold/15m": 2331,
     "gold/15m:judge": 2750,
-    "gold/30m": 1584,
+    "gold/30m": 1602,
     "gold/30m:judge": 1820,
-    "gold/1h": 1238,
+    "gold/1h": 1282,
     "gold/1h:judge": 1405,
-    "gold/2h": 650,
+    "gold/2h": 715,
     "gold/2h:judge": 701,
-    "gold/4h": 290,
+    "gold/4h": 348,
     "gold/4h:judge": 281,
-    "gold/1d": 35,
+    "gold/1d": 150,
     "gold/1d:judge": 139,
     "gold/1w:judge": 69
    },
@@ -6681,8 +6681,8 @@
    "due": "2026-12-04",
    "status": "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)",
    "pr": "",
-   "counted": 28678,
-   "per_day": 12905.1
+   "counted": 29000,
+   "per_day": 13050.0
   },
   {
    "id": "D-13",
@@ -6785,6 +6785,25 @@
    "per_day": 8397.4
   },
   {
+   "id": "TF-2h",
+   "kind": "organic",
+   "title": "2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe)",
+   "gain": {
+    "gold/2h": 610
+   },
+   "training_gain": "",
+   "effort_days": 0.5,
+   "signoff": "",
+   "p_deliver": 1.0,
+   "basis": "measured",
+   "owner": "data-engineer",
+   "due": "2026-11-26",
+   "status": "code done; PR open",
+   "pr": "data/tf-2h-bar-rule",
+   "counted": 610,
+   "per_day": 1220.0
+  },
+  {
    "id": "BROKER-M1",
    "kind": "organic",
    "title": "broker MT5 M1 forward capture (D-1 fallback ii): gold judge rows from 2026-10-01 at card 2.2 per-day rates, about 65 trading days to 2026-12-31 if the months grade",
@@ -6806,25 +6825,6 @@
    "pr": "",
    "counted": 677,
    "per_day": 947.8
-  },
-  {
-   "id": "TF-2h",
-   "kind": "organic",
-   "title": "2h bar rule: tf_seconds('2h'), so fs-v1/dl-v1 build the 2h cells (research only, not a live Timeframe)",
-   "gain": {
-    "gold/2h": 426
-   },
-   "training_gain": "",
-   "effort_days": 0.5,
-   "signoff": "",
-   "p_deliver": 1.0,
-   "basis": "measured",
-   "owner": "data-engineer",
-   "due": "2026-11-26",
-   "status": "code done; PR open",
-   "pr": "data/tf-2h-bar-rule",
-   "counted": 426,
-   "per_day": 852.0
   },
   {
    "id": "DEEP-DAILY",

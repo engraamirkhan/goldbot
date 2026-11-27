@@ -341,6 +341,16 @@ def test_tier_rules(tmp_path: Path, mins: pd.DataFrame) -> None:
     assert (bd.loc[bd["usable"], "template"] == "T0").all() and bd["usable"].any()   # B: close-to-close only
 
 
+def test_core_12_position_4_is_rv_ratio_and_atr_ratio_14_100_stays_in_p30_after_rev_8() -> None:
+    """Card 3.1 rev 8 (quant ruling 2026-11-26): "core-12 position 4 is `rv_ratio` (replaces `atr_ratio_14_100`, which
+    moves to the rest of P30 in its 3.1 position)". One substitution, the same order at every tf."""
+    core12 = D.COLUMN_SETS["core-12"]
+    assert core12 == ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16", "ret_96",
+                      "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
+    assert D.COLUMN_SETS["core-6"] == core12[:6] and "atr_ratio_14_100" not in core12
+    assert {"atr_ratio_14_100", "rv_ratio"} <= set(D.COLUMN_SETS["P30"])     # P30 itself is unchanged
+
+
 def test_column_sets_and_input_lookback() -> None:
     """ADR 0104 4 (quant ruling 2026-11-26): the lookback is the max of each column's declared lookback, x 7/5 below
     1w; a d1_ column reads its base column's 1d lookback in daily bars x 7/5 on a tf with the d1 context."""

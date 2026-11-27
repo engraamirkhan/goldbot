@@ -438,8 +438,11 @@ def months_between(a: pd.Series, b: pd.Series) -> tuple[np.ndarray, np.ndarray]:
             np.asarray(session_date(b).to_period("M").astype(str)))
 
 
-# card 3.1: the column sets every count is reported for (quant C-3 / R-a); `side` reads no market data
-CORE12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "atr_ratio_14_100", "er_30", "bb_z_20", "ret_16",
+# card 3.1: the column sets every count is reported for (quant C-3 / R-a); `side` reads no market data. Card rev 8
+# (quant ruling 2026-11-26, label-blind, before any sr-v3 label read): "core-12 position 4 is `rv_ratio` (replaces
+# `atr_ratio_14_100`, which moves to the rest of P30 in its 3.1 position)": its 810-bar range lookback left no A-graded
+# gold learn rows at 4h/1d/1w; `rv_ratio` is its close-only regime twin (ADR 0104 R-a). One substitution only.
+CORE12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16",
                            "ret_96", "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
 COST8: tuple[str, ...] = ("em_atr_cost", "em_yz_4_cost", "em_yz_16_cost", "em_yz_48_cost", "spread_atr",
                           "spread_rel_median_48", "tick_count_z_48", "tick_vol_ratio_20")
