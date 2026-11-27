@@ -101,10 +101,14 @@ def look_ahead(fs: pd.DataFrame, sk: pd.DataFrame, learn_end: pd.Timestamp) -> d
            "fs_window_not_before_decision": int((_ns(fs["window_from_utc"]) >= dec).sum())}
     sd = _ns(sk["decision_utc"])
     ok = sk["label_ok"].to_numpy(bool)
-    out["entry_before_decision"] = int((_ns(sk["entry_utc"]) < sd).sum())
+    ent = sk["entry_utc"]
+    out["label_ok_without_entry"] = int((ent.isna().to_numpy() & ok).sum())
+    out["entry_not_after_decision"] = int(((_ns(ent.fillna(sk["decision_utc"])) <= sd) & ok).sum())   # C5: strictly after
     hz = _ns(sk["horizon_end_utc"])
     out["horizon_not_after_decision"] = int((hz <= sd)[ok].sum())
-    out["label_available_before_horizon"] = int((_ns(sk["label_available_utc"]) < hz)[ok].sum())
+    # the label is knowable when the last minute it reads is visible: after the decision, never after the horizon's
+    # data (it may precede horizon_end when the source has no minute at the horizon end: a gap, not a leak)
+    out["label_available_not_after_decision"] = int((_ns(sk["label_available_utc"]) <= sd)[ok].sum())
     out["label_ok_horizon_past_learn_end"] = int((hz > learn_end.value)[ok].sum())
     for what, frame, col in (("fs", fs, "decision_utc"), ("skeleton", sk, "horizon_end_utc")):
         try:

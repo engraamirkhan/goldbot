@@ -69,3 +69,13 @@ def test_norm_acc_uses_only_rows_before_the_cut() -> None:
     acc.add(np.array([[1.0], [100.0]]), hz, "15m")
     f = acc.frame()
     assert f.loc[0, "n"] == 1 and f.loc[0, "mean"] == 1.0
+
+
+def test_entry_must_follow_the_decision_on_labelled_rows_only() -> None:
+    fs, sk = _frames()
+    sk.loc[0, "entry_utc"] = T0                                  # entry at the decision instant: C5 violation
+    sk.loc[1, "entry_utc"] = pd.NaT                               # no minute after the decision: label_ok False
+    sk.loc[1, "label_ok"] = False
+    v = S.look_ahead(fs, sk, pd.Timestamp("2018-01-01", tz="UTC"))
+    assert v["entry_not_after_decision"] == 1
+    assert v["label_ok_without_entry"] == 0
