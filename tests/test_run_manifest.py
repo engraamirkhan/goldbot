@@ -673,3 +673,32 @@ def test_health_fails_while_a_champion_is_refused_for_serving_and_warns_for_a_re
         reg.promote(bad.version, now=FIT_AT)
     c = _serving_check(tmp_path)
     assert c.status == "fail" and "bb" in c.reason and "no run manifest" in c.reason and "good" not in c.reason
+
+
+# ---------------------------------------------------------------------------------------------- code review #494
+def test_a_rollback_is_not_undone_by_a_save_from_a_long_lived_registry(tmp_path: Path) -> None:
+    """The scheduler and the engine hold one ModelRegistry for their life. rollback-model writes registry.json under
+    the lock; a later save of the stale in-memory list (model_watch, a promotion, a recalibration, a rule challenger)
+    wrote the old champion back. Every write now re-reads the file under the lock first, and every query sees it."""
+    root = tmp_path / "models"
+    reg = ModelRegistry(root)
+    t0 = pd.Timestamp("2026-11-01", tz="UTC")
+    a = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0)
+    reg.promote(a.version, now=t0)
+    b = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0 + pd.Timedelta(days=1))
+    reg.promote(b.version, now=t0 + pd.Timedelta(days=1))
+    scheduler = ModelRegistry(root)                                   # the long-lived copy
+    assert scheduler.champion("ag").version == b.version              # type: ignore[union-attr]
+    assert rollback_main(["ag", "--models", str(root)]) == 0
+    assert scheduler.champion("ag").version == a.version              # type: ignore[union-attr]
+    scheduler.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag2", backtest={}, now=t0)
+    scheduler.ensure_rule_challenger(family="box", agent_id="ag3", now=t0)
+    disk = ModelRegistry(root)
+    assert disk.champion("ag").version == a.version and disk.get(b.version).status == "previous"  # type: ignore[union-attr]
+    assert set(disk.agent_ids()) == {"ag", "ag2", "ag3"}
+    # a write from the stale copy of an entry it read before the rollback acts on the file's current state
+    other = ModelRegistry(root)
+    assert rollback_main(["ag", "--models", str(root)]) == 0          # rolls forward: b is champion again
+    other.retire(a.version, "test")
+    disk = ModelRegistry(root)
+    assert disk.champion("ag").version == b.version and disk.get(a.version).status == "retired"  # type: ignore[union-attr]
