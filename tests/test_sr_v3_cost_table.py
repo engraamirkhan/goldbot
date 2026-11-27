@@ -52,7 +52,7 @@ def test_checks_fail_below_w2_or_into_the_holdout() -> None:
 
 def _gold_cost() -> pd.DataFrame:
     return pd.DataFrame({"instrument": C.GOLD, "broker": ["icm"], "session": ["london"], "tf": ["15m"],
-                         "rt_bp": [0.9], "ecr_ub95_usd": [0.36]})
+                         "rt_bp": [0.9], "ecr_ub95_usd": [0.36], "slip_x_usd": [0.05]})
 
 
 def _spread() -> pd.DataFrame:
@@ -67,10 +67,11 @@ def test_gold_row_cost_is_charged_in_usd_at_a_2013_price() -> None:
                          "decision_utc": pd.to_datetime(["2013-06-12 09:00", "2013-06-12 09:00"], utc=True),
                          "entry": [1380.0, 3966.0]})
     rt = C.row_rt_bp(rows, _gold_cost(), _spread(), {"icm": 0.08})
-    # spread leg: May's ub95 (June's is not complete at the decision) + commission, in bp of the entry
-    assert np.isclose(rt[0], (0.30 + 0.08) / 1380.0 * 1e4)
+    # era leg: May's ub95 (June's is not complete at the decision) + commission + the cell's ECR slippage
+    # (quant F4 on #515), in bp of the entry
+    assert np.isclose(rt[0], (0.30 + 0.08 + 0.05) / 1380.0 * 1e4)
     assert rt[0] > 2.5 * 0.9                                     # the $3,966 cell bp under-charges 2013 ~3x
-    assert np.isclose(rt[1], max(0.9, 0.36 / 3966.0 * 1e4, 0.38 / 3966.0 * 1e4))
+    assert np.isclose(rt[1], max(0.9, 0.36 / 3966.0 * 1e4, 0.43 / 3966.0 * 1e4))
     assert rt[0] / rt[1] > 2.5                                   # same USD cost, ~2.9x the bp at the 2013 price
 
 
@@ -92,3 +93,12 @@ def test_metal_swap_charges_both_sides_and_never_credits(tmp_path: Path) -> None
     assert (g["long_per_night"] < 0).all()
     assert (g["short_per_night"] <= 0).all()                     # r_USD 5 % > markup: short would earn, floored at 0
     assert np.isclose(g["long_per_night"].iloc[0], -(0.05 + C.MARKUP_PA) / C.DAYS_PA)
+
+
+def test_ecr_slippage_is_taken_from_the_charged_ecr_account() -> None:
+    """quant F4 on #515: slip_x = max(0, charged - spread - commission) of the ECR row with the largest charge."""
+    rows = pd.DataFrame({"broker": ["icm"], "session": ["london"], "tf": ["15m"],
+                         "decision_utc": pd.to_datetime(["2013-06-12 09:00"], utc=True), "entry": [1380.0]})
+    no_slip = C.row_rt_bp(rows, _gold_cost().assign(slip_x_usd=0.0), _spread(), {"icm": 0.08})
+    slip = C.row_rt_bp(rows, _gold_cost(), _spread(), {"icm": 0.08})
+    assert np.isclose(slip[0] - no_slip[0], 0.05 / 1380.0 * 1e4)
