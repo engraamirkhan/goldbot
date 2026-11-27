@@ -296,6 +296,20 @@ def disabled_wind_down(acc: Account, broker: Any) -> bool:
     return True
 
 
+def real_money_start_problem(acc: Any, info: Any, limits: RiskLimits, *, paper: bool) -> str | None:
+    """ADR 0106 (fail closed): why an engine must not start, or None. An account that may move real money (accounts.yaml
+    `mode: live`, or a terminal reporting anything but demo) must start with the owner's real-money limits on
+    (`RiskLimits.real_money`, set by `engine_limits`); a limits path that lost the flag would trade without them. The
+    paper stand-in moves no money and is not judged."""
+    if paper:
+        return None
+    term = getattr(info, "trade_mode", None) if info is not None else None
+    if (getattr(acc, "is_live", False) or term not in (None, "demo")) and not limits.real_money:
+        return (f"real-money limits not in force for {acc.account_id} (mode {acc.mode}, terminal {term or 'unknown'}): "
+                "the RiskGate must apply ADR 0106's limits before any entry")
+    return None
+
+
 def start_refused(acc: Account, why: str, info: Any = None) -> NoReturn:
     """A start check failed (approval ids, the engine lock, no broker, a wrong terminal account, symbol terms). An
     enabled account ends through `refuse_start` (startup_error written, restarted); a disabled one through
@@ -544,6 +558,34 @@ def start_loop_watch(account_id: str, state_dir: str | Path = "state") -> "LoopW
     return watch
 
 
+# How long the engine waits for models/registry.lock to add a rule challenger (PR #494 round 3 safety MEDIUM): the
+# shadow set is built on the engine loop (startup and every model reload), which also runs exits.
+ENGINE_REGISTRY_LOCK_S = 1.0
+
+
+def rule_shadow_set(models_dir: str | Path, population_file: str | Path, *,
+                    lock_timeout_s: float = ENGINE_REGISTRY_LOCK_S) -> dict:
+    """The engine's shadow models. ADR 0038: a roster rule agent shadow-trades a RuleModel, so one is registered for
+    each that has no entry yet. When another writer holds the registry lock past `lock_timeout_s` the challenger is
+    not created this time (logged; the next reload retries) and the models already on disk are served."""
+    import pandas as pd
+
+    from goldbot.research.model_registry import ModelRegistry, RegistryLockTimeout
+    from goldbot.research.population import Population
+    from goldbot.specialists import SPECIALISTS
+    reg = ModelRegistry(models_dir, lock_timeout_s=lock_timeout_s)
+    pop = Population(Path(population_file))
+    pop.ensure_founders(pd.Timestamp.now("UTC"))
+    for m in pop.in_book():
+        if getattr(SPECIALISTS.get(m.family), "frozen_config", False):
+            try:
+                reg.ensure_rule_challenger(family=m.family, agent_id=m.agent_id)
+            except RegistryLockTimeout as exc:
+                log.warning("rule challenger for %s not created this reload: %s", m.agent_id, exc)
+                break                             # the lock is busy: do not wait once per agent
+    return reg.shadow_models()
+
+
 def run_engine(account_id: str) -> None:
     watch = resolve(start_loop_watch)(account_id)   # loop heartbeat + systemd watchdog (goldbot/ops/watchdog.py)
     try:
@@ -571,7 +613,6 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
-    from goldbot.specialists import SPECIALISTS
     from goldbot.telegram.approvals import ApprovalCenter
     from goldbot.telegram.bus import ApprovalBus
     configured = accounts.load_accounts()
@@ -593,6 +634,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     boot_id, boot_at = uuid.uuid4().hex, pd.Timestamp.now("UTC")     # this start's id on every row it writes
     settings = load_settings()
     bridge = accounts.bridge_endpoint(account_id)
+    info: Any = None                                       # the terminal's account read (None: the paper stand-in)
     verify: Callable[[Any], str | None] | None = None      # R1: the start check, run again on every account read
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -642,6 +684,14 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
     limits = policy.defaults
+    # ADR 0106 (review H1, both ways): a live account or a terminal that is not demo never trades without the owner's
+    # real-money limits. A start that finds them off forces them on and winds down: every entry refused
+    # (`account_disabled`), exits keep running; the journal and the decision log say why
+    if why := real_money_start_problem(acc, info, limits, paper=paper):
+        log.error("%s: %s; starting wound down (entries refused, exits run) with the real-money limits forced on",
+                  account_id, why)
+        policy.defaults = limits = limits.model_copy(update={"real_money": True, "adv_reference": {}})
+        wind_down = True
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -658,13 +708,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         return {aid: ch.version for aid in reg.agent_ids() if (ch := reg.champion(aid)) is not None}
 
     def shadow_set() -> dict:
-        reg = ModelRegistry(settings.research.models_dir)
-        pop = Population(population_file)
-        pop.ensure_founders(pd.Timestamp.now("UTC"))
-        for m in pop.in_book():                           # ADR 0038: a roster rule agent shadow-trades a RuleModel
-            if getattr(SPECIALISTS.get(m.family), "frozen_config", False):
-                reg.ensure_rule_challenger(family=m.family, agent_id=m.agent_id)
-        return reg.shadow_models()
+        return rule_shadow_set(settings.research.models_dir, population_file)
 
     def population_view() -> tuple[list, dict[str, float]]:
         """Agents in the shadow book (live, shadow, recently retired) and the live agents' capital shares."""
@@ -934,20 +978,24 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     ADR 0055 ("Option (a) for account `icm-live` only. Every other account and every default is unchanged"): a live
     account's enabled `pilot:` block (goldbot/risk/pilot.py) goes to the gate with its four changed rails, all read
     from that block: the per-trade maximum (`max_risk_frac`), the daily and weekly caps (`daily_cap_frac`,
-    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, and
-    the drawdown stages off when `drawdown_stages` is false (the pilot stop is the hard halt), plus one position.
-    Against the real terminal only."""
+    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, plus one position. Against the real terminal only.
+
+    ADR 0106 decision 2: a live account against its real terminal is `real_money` (the owner's limits of
+    goldbot/risk/real_money.py apply in the gate after everything set here) with the reference daily volumes of
+    config/data/adv_reference.yaml; the pilot's fractions are bounded by those limits at load and its drawdown
+    stages always run. Paper and demo: neither, so every demo decision is as before."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
+    from goldbot.risk.real_money import load_adv_reference
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
     pilot = acc.pilot if acc.pilot.enabled and acc.is_live and not paper else None
     if pilot is not None:
-        stages = {} if pilot.drawdown_stages else {"dd_stage1": 1.0, "dd_stage2": 1.0, "dd_stage1_clear": 1.0}
         limits = limits.model_copy(update={"pilot": pilot, "max_positions": min(limits.max_positions,
                                                                                  pilot.max_positions),
                                            "max_risk_per_trade": pilot.max_risk_frac, "daily_cap": pilot.daily_cap_frac,
                                            "weekly_cap": pilot.weekly_cap_frac,
-                                           "leverage_cap": pilot.leverage_cap, **stages})
+                                           "leverage_cap": pilot.leverage_cap})
+    money = acc.is_live and not paper
     # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
                                      "probe_only": acc.probe_only and not paper,
@@ -963,7 +1011,10 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      "blackout_entries": blackout_entries(acc, paper=paper),
                                      # ADR 0097: no limits on a demo probe_only account that says so, the floor kept
                                      "demo_unlimited": demo_unlimited(acc, paper=paper),
-                                     "demo_floor": settings.risk.demo_floor})
+                                     "demo_floor": settings.risk.demo_floor,
+                                     # ADR 0106: the owner's real-money limits, a live account's real terminal only
+                                     "real_money": money,
+                                     "adv_reference": load_adv_reference() if money else {}})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

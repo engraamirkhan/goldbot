@@ -5,6 +5,77 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-27 health `learning:cost_cells` is judged by its input, not the clock: daily_review refits a (broker,
+  session) cell only after `refit_min_fills` (200) eligible fills since its fit, and at ~40 fills a day the 9-day
+  silence read as a dead learner (WARN, FAIL 48 h later).
+  - `daily_review.pending_trades`/`pending_fills` (one rule for refit and health); `refit_cells` uses it, output unchanged.
+  - All cells below 200: ok, "waiting on fills: most-filled cell <broker> <session> n/200 since its fit <age> ago; at 0:
+    <brokers>". A cell at 200 whose daily_review ran with no new row: WARN, FAIL 48 h after that run.
+  - Counted over `HealthContext.learning_hosts` (enabled exploring accounts), cached 15 min; none or unreadable: clock.
+  - `learning:arm_lifecycle_verdicts` stays on the clock: one verdict per settled candidate, no count threshold.
+- 2026-11-27 health `self_retrain` reasons lead with "next slot <slot> UTC" (computed from scheduler.self_retrain).
+  - The late-start WARN fires only while the newest run is under a day old: the 11-24 run (slot 11-22,
+    `run_if_never_run`) no longer reads "40.9 h late" every day, which the 4 h cycle took for "self_retrain stopped".
+  - `model_influence` names the active/shadow models shadow scoring refuses, judged by the scorer's own
+    `provenance_problem` (now public), e.g. "0 served: 1 rows refused (no provenance, trained before migration 45)".
+    No provenance backfill.
+- 2026-11-27 refit cost cells (aux.db `exploration_cost_cells`) age: a cell whose fills end more than 14 days before
+  the label's slot (`slot - through_ns`, `daily_review.CELL_MAX_AGE`; exactly 14 d is still fresh, and a late fit of
+  old fills is still stale) is stale.
+  - A stale cell keeps charging its broker's last measurement (H-60 "never credited": a host that stopped filling has
+    not shown cheaper slippage). When it sets the charge, `cost_model_version` records `+cells-stale:<newest stale
+    day>` and `effective_utc` moves to that cell's fitted time (no migration). Vantage (replay-only since PR #505,
+    newest cells 11-06/07) is the case this covers.
+  - The bias is conservative only: a stale cell can raise a label's cost, never lower it.
+  - The one cross-broker label read, the autodisc discovery priors (`read_demo_obs`), drops tagged labels
+    (`exploration_data.drop_stale_cost_labels`), so pooled priors use only freshly measured cost bases. Per-broker
+    learners keep them. Labels written before this change carry no tag and are not relabelled; r2 versions inherit
+    the tag, which describes r1's cost.
+  - Point in time: a cell fitted after the slot, or resting on fills after the slot (`through_ns > slot`), is never
+    read. Same-day merged rows can still hide an earlier fit: backlog 276 (append-only rows). The table's own age:
+    backlog 275.
+- 2026-11-27 R7-VANTAGE-REVIEW decided (research-director): **option (i), vantage-demo stays replay-only, "no broker
+  arm by design"**. (ii) is not started (fails the cost card), (iii) is rejected. No config change in this PR.
+  - Facts re-derived from config at fa11faf2 (not relayed): vantage-demo lists 70 exploration arms, 68 retired (36
+    controls, 20 edge, 12 learning) and 2 running (VEX15, VEX1H), both `control_mode: replay_only`, so **0
+    order-capable arms**; `cost_probe.enabled: false`, `scheduled.enabled: false`, `daily_review.probe_plan: {}`.
+    vantage-247 is the same (2 replay-only controls, account disabled). Money: £0/day traded, host ~£4.52/month
+    (~£0.15/day).
+  - Wording fix: it is **not** "cost measurement". With probes off there are no Vantage fills, so no slippage or
+    commission is measured; the VEX replay labels record only Vantage's quoted spread at signal time. Report it as
+    "replay-only (quoted spread), no broker arm by design".
+  - Why not (ii), a GD-1 twin on Vantage (rule 2 cost card): GD-1's own prereg (prereg-amendment-2026-11-20-gd1-asia-
+    learning.md s1) puts the edge at ~1-2 bp/day historical drift, **+0.9 bp/day excess over drift, 95 % CI -0.42 to
+    +2.25**, "learning, not money", about $0.05/day at 0.01 lot. Vantage's last measured cost: probes -£65.8 on 306
+    fills = **£0.215/fill** (re-derived from the 11-07 record in config/accounts.yaml), ~0.7 bp round trip at 1 oz.
+    Excess 0.9 bp < 2 x 0.7 = 1.4 bp: not started. It is also the same bet on the same bars as GD1D/GD1P (no
+    independent edge evidence), and at ~23 fills per run it never reaches GD-1's 40-fill cost check before
+    2027-01-04, so it would not even deliver a decision-grade Vantage cost read. A third copy adds risk, not learning.
+  - Why not (iii): scheduled probes are random-time orders with no edge. They were 22.9 % of vantage-demo's loss at
+    11-07 (prereg-amendment-2026-11-07-kill-only.md s4), and trading-safety F1 switched them off on 11-22 under "only
+    arms with evidence place orders". Nothing consumes a fresh Vantage cost cell today: docs/research/live-candidates.md
+    is empty (re-checked), so no venue question is open. Paying to measure a cost nobody reads is a leak (rule 1a).
+  - ADR 0106: survival is untouched by every option (demo money); consistency and return favour (i): zero orders
+    without evidence beats correlated or random orders on a second venue.
+  - Leak to fix (code, not config): Vantage `exploration_cost_cells` last refreshed 11-06/07 and are frozen. Until a
+    fix lands, Vantage replay labels are **stale-cost** and excluded from any cross-broker or ICM-vs-Vantage read.
+    Owner: data-engineer with quant-reviewer; acceptance: a cell older than 14 days is flagged `stale` on the label
+    row and the label falls back to the documented prior, with a test.
+  - Pre-registered trigger to reopen (ii), no K until it fires: the **first** entry on docs/research/live-candidates.md
+    that names vantage-live as its venue. On the trigger the twin is that candidate's rule (not GD-1 by default), with
+    its own card, K row and 1:1 replay control. If there is no trigger by 2027-01-04, the CFO reviews keeping the host
+    (£4.52/month) against the quoted-spread labels it produces; vantage-live-obs and vantage-live are unaffected.
+  - Change set for an implementer **when the trigger fires** (GD-1 rows as the template; swap in the candidate's
+    rule): `config/exploration_arms.yaml` adds `{ id: <X>V, twin_of: <X>D, rule/timeframe/params as the ICM arm,
+    role: learning, learning: {prereg, control: <X>CV, loss_cap_gbp, since, until} }` and `{ id: <X>CV, ..., role:
+    control, control_mode: replay_only }` (hashes from the loader); `config/accounts.yaml` vantage-demo
+    `exploration.arms` gains `<X>V: { style: swing, max_loss: 40.0 }` and `<X>CV: { style: swing, max_loss: 40.0,
+    control_share: 0.01 }` (swing pot stays 2 slots); `config/arm_stops.yaml` adds a `<X>V` stop copying the ICM
+    arm's kill rule and `follows: { <X>CV: <X>V }`; K rows via `scripts/record_learning_k_rows.py`; a prereg amendment
+    naming the venue read. `daily.max_per_day` stays 40 and `probe_plan` stays `{}`
+    (tests/test_exploration_daily_budget.py unchanged). Reviewers: quant-reviewer (card, K, control), trading-safety-
+    reviewer (new order path on vantage-demo), code-reviewer; sre for the restart. (iii) would also need trading-
+    safety to reverse F1 in writing and CFO sign-off on the probe budget; not recommended.
 - 2026-11-26 ADR 0085 A4 records the D-1 served tiers file `tiers_served_r11-v2.1.csv` (sha256 ff653ea7…, rule blob
   c6f283d7), using the quant's text R-b on #472 verbatim.
   - `dense_labels.RECORDED_TIERS_SHA256` now holds it, which unseals learn-window label reads only.
@@ -34,6 +105,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - Until lane 1's reference ADV is wired into `run.py gates`, `as_if_real_money` is unmet (fail closed).
   - Confirm reads (`promotion_confirm.run_batch`) write buy-and-hold beside the random twin. This is report only:
     the frozen cards, G3 and N10 do not move.
+- 2026-11-26 ADR 0106 decision 2: the owner's real-money limits are in the RiskGate as code constants
+  (`goldbot/risk/real_money.py`, `Final`, no settings key): 1 % a trade with its round trip (`rm_risk_per_trade`), each
+  entry sized down to what is left of the day's 2 % after the loss so far and the open risk (`rm_daily_projected` below
+  the minimum lot; open risk must be known), a 2 % day latched to the risk-day roll and kept across restarts (`rm_daily_stop`), a halt at min(dd_stage2, 15 %)
+  (`rm_drawdown_halt`), and an order within 1 % of the instrument's reference daily volume (`rm_volume`; unknown refuses
+  `rm_volume_unknown`). They apply after every profile, override, dynamic term and pilot rule on a real-money account
+  (`RiskLimits.real_money`, set by `engine_limits` for a live account's real terminal); demo is unchanged.
+  - The ADR 0055 pilot block is bounded by them at load (max_risk_frac <= 0.01, daily_cap_frac <= 0.02, stages always
+    on; icm-live now 0.01 / 0.02 / true). At 1 % the £50 pilot cannot trade (needs about £280); ADR 0055 amended.
+  - `config/data/adv_reference.yaml` is a placeholder (XAUUSD `adv_notional: null`): every real-money entry is refused
+    until the data engineer fills it with source and date (finding ADV-REFERENCE-XAUUSD). No live account is enabled.
+  - Trading-safety review of #491: real money also by the terminal's own report (`AccountState.terminal_trade_mode`,
+    a real login under a demo id gets every limit and no ADR 0097 freeze); the day latches only on two agreeing
+    comparable account reads; the ADV reference's age is judged at every entry; on real money the sizing target leaves
+    room for the round trip (1 % is a ceiling, not a refusal); the pilot weekly cap is back to 5 %; an engine start
+    without the limits on a live or real-terminal account forces them on and winds down (exits run). RUNBOOK: withdraw
+    from a real-money account only when flat, then re-arm. Rollback floor for live hosts: finding ADR0106-ROLLBACK-FLOOR.
 - 2026-11-26 ADR 0106 lane 3, reproducibility and model quality (ADR 0109). Every training run can now record one
   immutable run manifest (`goldbot/research/run_manifest.py`, `models/manifests/<sha256>.json`). It holds the data
   version and per-file sha256, the settings and their hash, the seeds, the git HEAD and whether the tree was clean, the
@@ -59,6 +147,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     registry lock and keeps the demoted one as previous (run it again to roll forward); it refuses when there is none or
     when that one would not serve. A CUSUM alarm whose previous model would not serve retires the champion and fails
     health `model_watch`.
+  - Safety review round 2: the Saturday retrain (`saturday_retrain`, off while `research.specialist_retrain` is false)
+    fits seed_list(key) 5 seeds, records a family-C manifest with a seed_stability verdict, and registers seed 0 only
+    when the serving rule admits it (else it reports why and registers nothing). `promote` refuses a challenger the
+    serving rule refuses. A blackout re-score with no served model writes `blackout_rescore_no_model` and the engine
+    publishes `open_without_model` (health `engine:<account>` warns); exits untouched. New health check
+    `model_serving` fails while a champion is refused and warns for a refused challenger. Registry writes re-read
+    registry.json under `registry.lock`, so a long-lived scheduler or engine instance can no longer undo a
+    rollback-model. Other trainers are not affected: self_retrain (aux.db) and the nightly classifier never touch
+    the model registry.
+  - Round 3: the engine's registry lock wait is bounded at 1 s (`ENGINE_REGISTRY_LOCK_S`, `rule_shadow_set`), so a
+    stalled writer can no longer freeze the engine loop; `ModelRegistry.entries` re-reads a changed file; a failed
+    recalibration of one model no longer aborts the weekly job; the refit's data_version covers the context bars.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart
@@ -92,6 +192,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     position 4) and `price_action_x6.X6_MERGED_UTC` are all on main; the CLI stops before any phase on the same check.
   - Core-12 follows card rev 8: `rv_ratio` replaces `atr_ratio_14_100` at position 4 (charged at ρ_x = 1 until the
     D-12a file measures it).
+- 2026-11-26 sr-v3 card rev 8 (quant ruling, label-blind, before any sr-v3 label read): `rv_ratio` replaces
+  `atr_ratio_14_100` at core-12 position 4, at every tf; `atr_ratio_14_100` stays in P30. K 0.
+  - Code: `dense_labels.CORE12`, so `COLUMN_SETS` core-6 and core-12. The trainer's `sr_v3.CORE_12` follows in PR #488.
+  - Counts re-run once and taken as they come (`config/data/sufficiency.yaml`, docs/data/sufficiency.md): gold learn
+    core-12 T2 n_eff 5,233 · 3,913 · 2,854 · 1,852 · 1,331 · – · 209 · 0 · 0 (re-counted at the main merge
+    with R-a, which admits rv_ratio's B lookback months). Gold 1d/1w stay NOT STARTED (data).
+  - No label value was read.
+  - This is the later merge behind `price_action_x6.X6_MERGED_UTC`: the one-line follow-up sets it to this PR's
+    merge commit committer time (UTC), the later of it and #484's (quant sequencing on #482).
 - **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
     `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.

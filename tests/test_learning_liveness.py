@@ -215,6 +215,28 @@ def test_influence_counts_scored_and_changed_decisions(tmp_path):
     assert c.status == "ok"
 
 
+def test_influence_names_the_models_refused_for_missing_provenance(tmp_path):
+    # the 11-24 self_retrain_models rows predate migration 45: no model_sha256/feature_versions, so shadow scoring
+    # refuses them (goldbot/engine/shadow_scoring.py) and "learning reaches nothing" must say why
+    _seed_today(tmp_path)                   # one shadow model, m1, without provenance
+    _obs(_aux(tmp_path), 40, TODAY)
+    c = health.check_model_influence(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
+    assert c.status == "warn"
+    assert "0 served: 1 rows refused (no provenance, trained before migration 45)" in c.reason
+
+
+def test_influence_counts_a_null_feature_version_as_refused_by_the_scorers_own_rule(tmp_path):
+    # code review of #503: health and scorer share one rule; 'null' is no recorded feature version to the scorer
+    from goldbot.research import self_retrain as sr
+    _seed_today(tmp_path)
+    with _aux(tmp_path).write() as c:
+        c.execute("UPDATE self_retrain_models SET model_sha256 = ?, feature_versions = 'null'",
+                  (sr.model_sha256("{}"),))
+    _obs(_aux(tmp_path), 40, TODAY)
+    chk = health.check_model_influence(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
+    assert "0 served: 1 rows refused (no provenance, trained before migration 45)" in chk.reason
+
+
 def test_influence_is_read_at_most_every_15_minutes(tmp_path):
     db = _aux(tmp_path)
     _obs(db, 10, TODAY)
@@ -238,7 +260,7 @@ def test_self_retrain_warns_on_a_late_run_low_label_use_a_broker_with_no_rows_an
     _seed_today(tmp_path)
     c = health.check_self_retrain(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
     assert c is not None and c.status == "warn"
-    assert c.reason.startswith("run of 2026-11-24: ")
+    assert c.reason.startswith("next slot 2026-11-29 15:00 UTC; run of 2026-11-24: ")
     assert "40.9 h late" in c.reason
     assert "8.7 % of labels" in c.reason
     assert "vantage: 0 labels" in c.reason
@@ -249,7 +271,35 @@ def test_self_retrain_extra_rules_stay_quiet_on_a_clean_run():
     slot = pd.Timestamp("2026-11-29 15:00", tz="UTC")
     run = {"broker": "icm", "status": "ok", "slot_ns": _ns(slot), "run_ns": _ns(slot + pd.Timedelta(minutes=20)),
            "n_labels": 1000, "n_with_features": 900, "n_active": 1}
-    assert sr_check.extra_warnings([run], max_late_h=6.0) == []
+    assert sr_check.extra_warnings([run], max_late_h=6.0, now=slot + pd.Timedelta(hours=1)) == []
+
+
+def test_a_late_first_run_stops_warning_after_a_day_and_the_reason_names_the_next_slot(tmp_path):
+    # SRE 11-27: the 11-24 run (slot 11-22, run_if_never_run) read "40.9 h late" every day, and the 4 h cycle report
+    # took it for "self_retrain stopped"; the next slot is Sun 11-29 15:00 UTC
+    _seed_today(tmp_path)
+    now = pd.Timestamp("2026-11-27 09:00", tz="UTC")
+    c = health.check_self_retrain(make_ctx(tmp_path, now=now, settings=_today_settings()))
+    assert c is not None
+    assert c.reason.startswith("next slot 2026-11-29 15:00 UTC; ")
+    assert "late" not in c.reason
+
+
+def test_an_ok_self_retrain_reason_leads_with_the_next_slot(tmp_path):
+    slot = pd.Timestamp("2026-11-29 15:00", tz="UTC")
+    db = _aux(tmp_path)
+    with db.write() as c:
+        c.execute("INSERT INTO self_retrain_runs (run_id, broker, spec_version, slot_ns, cutoff_ns, run_ns, status, "
+                  "n_labels, n_with_features, n_features, n_weights, n_arms, n_active, n_shadow, n_demoted, detail) "
+                  "VALUES ('r1', 'icm', 'sr-v2', ?, ?, ?, 'ok', 1000, 900, 40, 41, 1, 1, 0, 0, '{}')",
+                  (_ns(slot), _ns(slot) - 10 * NS, _ns(slot + pd.Timedelta(minutes=20))))
+        c.execute("INSERT INTO self_retrain_models (model_version, run_id, broker, arm_id, spec_version, status, "
+                  "status_reason, gate_pass, cutoff_ns, activation_ns, n_train, n_features, n_weights, model, oos, "
+                  "recorded_ns, status_ns) VALUES ('m1', 'r1', 'icm', 'RBR15', 'sr-v2', 'active', 'gate', 1, ?, ?, "
+                  "132, 40, 41, '{}', '{}', ?, ?)", (_ns(slot) - 10 * NS, _ns(slot) + 10 * NS, _ns(slot), _ns(slot)))
+    chk = health.check_self_retrain(make_ctx(tmp_path, now=slot + pd.Timedelta(hours=2), settings=_today_settings()))
+    assert chk is not None and chk.status == "ok"
+    assert chk.reason.startswith("next slot 2026-12-06 15:00 UTC; last run 2026-11-29 15:20 UTC")
 
 
 # ---------------------------------------------------------------------------------------------- stop coverage
@@ -367,3 +417,90 @@ def test_the_decision_time_index_is_additive_so_a_rollback_still_opens_aux_db(tm
     finally:
         con.close()
     assert "exploration_obs_decision" in plan
+
+
+def test_an_open_position_whose_agent_has_no_served_model_warns(tmp_path):
+    """PR #494 safety MEDIUM-3: the engine publishes open positions whose agent has no served model (no blackout
+    re-score possible); health warns while any is open. Exits are untouched: broker stop and target and the policy."""
+    engine(tmp_path, 60, open_without_model=[4711])
+    c = health.check_engine(make_ctx(tmp_path), "icm-demo")
+    assert c.status == "warn" and "4711" in c.reason and "no served model" in c.reason
+    engine(tmp_path, 60, open_without_model=[])
+    assert "no served model" not in health.check_engine(make_ctx(tmp_path), "icm-demo").reason
+
+
+# ---------------------------------------------------------------------------------------------- fill-gated cost cells
+FIT = pd.Timestamp("2026-11-27 22:00", tz="UTC")                  # the icm london cell's last fit (its through)
+FILL_DAY = "2026-12-02"                                           # a Wednesday opportunity day
+FILL_HOSTS = {"icm-demo": "icm", "vantage-demo": "vantage"}
+
+
+def _seed_fills(tmp_path: Path, n: int, *, start: pd.Timestamp = pd.Timestamp("2026-12-02 09:00", tz="UTC")) -> None:
+    """Today's brain, the icm london cell fitted at FIT and `n` icm london entry fills after it (none on vantage)."""
+    from goldbot.research import daily_review as dr
+    from tests.test_daily_review import _trade
+    _seed_today(tmp_path)
+    db = _aux(tmp_path)
+    dr.write_cell(db, broker="icm", session="london", day="2026-11-27", slippage_usd=0.3, fills=200, through=FIT,
+                  now=FIT + pd.Timedelta(hours=8))
+    for i in range(n):
+        _trade(db, f"f{i}", host="icm-demo", sent=start + pd.Timedelta(seconds=30 * i))
+
+
+def _gated(tmp_path: Path, now: pd.Timestamp) -> Any:
+    learning._FILL_CACHE.clear()
+    ctx = make_ctx(tmp_path, now=now, settings=_today_settings(), learning_hosts=FILL_HOSTS)
+    return {c.name: c for c in health.check_learning_liveness(ctx)}["learning:cost_cells"]
+
+
+def _review_ran(tmp_path: Path, day: str, at: pd.Timestamp) -> None:
+    from goldbot.research import daily_review as dr
+    write(dr.review_path(tmp_path, day), {"day": day, "generated_utc": at.isoformat(), "dry_run": False})
+
+
+def test_a_cost_cell_starved_of_fills_reads_ok_with_its_count_however_long_since_its_last_row(tmp_path):
+    _seed_fills(tmp_path, 40)
+    now = pd.Timestamp("2026-12-06 12:00", tz="UTC")              # 8.2 days without a row: FAIL by the wall clock
+    c = _gated(tmp_path, now)
+    assert c.status == "ok", c.reason
+    assert "waiting on fills: most-filled cell icm london 40/200 since its fit 8.2 d ago" in c.reason
+    assert "at 0: vantage" in c.reason
+
+
+def test_a_cost_cell_at_200_fills_warns_once_a_daily_review_ran_without_a_row_then_fails_48_hours_later(tmp_path):
+    _seed_fills(tmp_path, 200)
+    ran = pd.Timestamp("2026-12-03 06:16", tz="UTC")              # the review of FILL_DAY, whose fills crossed 200
+    before = _gated(tmp_path, ran - pd.Timedelta(hours=2))
+    assert before.status == "ok" and "icm london 200/200" in before.reason and "next daily_review" in before.reason
+    _review_ran(tmp_path, FILL_DAY, ran)
+    warn = _gated(tmp_path, ran + pd.Timedelta(hours=1))
+    assert warn.status == "warn", warn.reason
+    assert "icm london 200/200" in warn.reason and f"daily_review of {FILL_DAY}" in warn.reason
+    assert _gated(tmp_path, ran + pd.Timedelta(hours=47)).status == "warn"
+    assert _gated(tmp_path, ran + pd.Timedelta(hours=49)).status == "fail"
+
+
+def test_a_cost_cell_refit_after_its_200_fills_reads_ok_again(tmp_path):
+    from goldbot.research import daily_review as dr
+    _seed_fills(tmp_path, 200)
+    ran = pd.Timestamp("2026-12-03 06:16", tz="UTC")
+    _review_ran(tmp_path, FILL_DAY, ran)
+    _, hi = dr.day_bounds(FILL_DAY)
+    dr.write_cell(_aux(tmp_path), broker="icm", session="london", day=FILL_DAY, slippage_usd=0.3, fills=200,
+                  through=hi, now=ran)
+    c = _gated(tmp_path, ran + pd.Timedelta(hours=60))
+    assert c.status == "ok" and "waiting on fills" in c.reason, c.reason
+
+
+def test_a_ledger_row_the_fill_gate_cannot_parse_leaves_cost_cells_to_the_clock_rule(tmp_path):
+    from tests.test_daily_review import _bad_row
+    _seed_fills(tmp_path, 40)
+    _bad_row(_aux(tmp_path), "torn", host="icm-demo", sent=pd.Timestamp("2026-12-02 10:00", tz="UTC"))
+    c = _gated(tmp_path, pd.Timestamp("2026-12-06 12:00", tz="UTC"))
+    assert c.status == "fail" and "no output for 8.2 d" in c.reason, c.reason    # the clock: 8.2 d is past 84 h + 48 h
+
+
+def test_arm_lifecycle_verdicts_are_candidate_driven_not_fill_gated():
+    by = {x.name: x for x in learning.LEARNERS}
+    assert by["cost_cells"].fill_gate is True
+    assert by["arm_lifecycle_verdicts"].fill_gate is False

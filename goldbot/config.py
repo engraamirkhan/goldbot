@@ -40,6 +40,7 @@ TF_SECONDS: dict[str, int] = {
     "15m": 900,
     "30m": 1800,
     "1h": 3600,
+    "2h": 7200,         # TF-2h (data item, 2026-11-26): research cell bar rule, UTC-clock floor like 1h/4h
     "4h": 14400,
     "1d": 86400,
     "1w": 7 * 86400,

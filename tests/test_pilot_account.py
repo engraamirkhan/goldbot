@@ -3,7 +3,8 @@ account with owner-confirmed entries and a daily limit of at most £6.25 only, i
 terms, engine_limits turns its four changed rails into that account's limits and nobody else's, the bridge's notional
 ceiling follows its leverage cap, and the engine counts the pilot's realised loss and filled entries from the broker's
 deals, keeps them and the sticky stop in core.db, and refuses entries when the record cannot be read. icm-live itself
-stays disabled and its login null."""
+stays disabled and its login null. ADR 0106 decision 2 supersedes rails 1, 2 and 4: the block's fractions are bounded
+by the owner's real-money limits (1 %, 2 %) and its drawdown stages always run (tests/test_real_money_limits.py)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -29,8 +30,8 @@ START = pd.Timestamp("2026-10-29", tz="UTC")
 
 def _rules(**kw: Any) -> PilotRules:
     base: dict[str, Any] = dict(enabled=True, adr=55, pilot_id="icm-live-adr55", start_utc=START, leverage_cap=500,
-                                max_risk_frac=0.125, daily_cap_frac=0.25, weekly_cap_frac=0.25,
-                                drawdown_stages=False, weekend_flat=True)
+                                max_risk_frac=0.01, daily_cap_frac=0.02, weekly_cap_frac=0.05,
+                                drawdown_stages=True, weekend_flat=True)
     return PilotRules(**{**base, **kw})
 
 
@@ -60,8 +61,9 @@ def test_a_pilot_outside_its_rails_fails_at_load(kw, match):
 
 @pytest.mark.parametrize("kw", [dict(stop_loss_abs=25.5), dict(max_risk_per_trade_abs=3.2), dict(lot=0.02),
                                 dict(max_stop_usd=4.5), dict(max_entries=31), dict(max_positions=2),
-                                dict(leverage_cap=600), dict(max_risk_frac=0.2), dict(daily_cap_frac=0.3),
-                                dict(weekly_cap_frac=0.3),
+                                dict(leverage_cap=600), dict(max_risk_frac=0.011), dict(daily_cap_frac=0.021),
+                                dict(drawdown_stages=False),
+                                dict(weekly_cap_frac=0.051),
                                 dict(pilot_id=""), dict(start_utc=None)])
 def test_the_pilot_rails_cannot_be_widened_past_the_adr_terms_by_config(kw):
     with pytest.raises(ValidationError):
@@ -83,8 +85,9 @@ def test_the_committed_icm_live_is_a_disabled_pilot_with_the_adr_0055_terms_and_
     assert p.enabled and p.adr == 55 and p.lot == 0.01 and p.max_stop_usd == 4.0
     assert p.max_risk_per_trade_abs == 3.12 and p.stop_loss_abs == 25.0 and p.max_entries == 30
     assert p.timeframes == ("15m",) and p.max_positions == 1 and p.leverage_cap == 500
-    assert p.weekly_cap_frac == 0.25 and p.weekend_flat
-    assert not p.drawdown_stages and p.start_utc is not None and p.start_utc < pd.Timestamp("2026-10-30", tz="UTC")
+    assert p.weekly_cap_frac == 0.05 and p.weekend_flat                  # restored (ADR 0106 review L3)
+    assert p.max_risk_frac == 0.01 and p.daily_cap_frac == 0.02         # ADR 0106 (were 0.125 and 0.25)
+    assert p.drawdown_stages and p.start_utc is not None and p.start_utc < pd.Timestamp("2026-10-30", tz="UTC")
     assert a.daily_loss_limit_abs == 6.25 and a.approval_mode == "propose" and not a.dynamic_limits
     # the same broker's measured server clock (icm-demo and icm-probe, 2026-10-26 gap week)
     assert a.server_tz == accs["icm-demo"].server_tz == accs["icm-probe"].server_tz == "NY+7"
@@ -102,13 +105,14 @@ def test_a_terminal_reporting_another_currency_than_the_declared_one_is_refused(
 
 
 # ---------------------------------------------------------------- engine_limits
-def test_engine_limits_apply_the_four_changed_rails_to_the_pilot_account_only():
+def test_engine_limits_apply_the_pilot_rails_within_the_real_money_limits_to_the_pilot_account_only():
     s = load_settings()
     on = engine_limits(s, _account())
     assert on.pilot is not None and on.pilot.pilot_id == "icm-live-adr55"
     assert on.max_positions == 1 and on.daily_loss_limit_abs == 6.25 and on.leverage_cap == 500
-    assert on.max_risk_per_trade == 0.125 and on.daily_cap == 0.25 and on.dd_stage2 == 1.0 and on.dd_stage1 == 1.0
-    assert on.weekly_cap == 0.25 and s.risk.weekly_cap == 0.05
+    assert on.max_risk_per_trade == 0.01 and on.daily_cap == 0.02 and on.real_money       # ADR 0106
+    assert (on.dd_stage1, on.dd_stage2) == (s.risk.drawdown_stage1, s.risk.drawdown_stage2)
+    assert on.weekly_cap == 0.05 == s.risk.weekly_cap
     assert engine_limits(s, _account(), paper=True).pilot is None
     plain = RiskLimits.from_settings(s.risk, tiny_live=False)
     demo = engine_limits(s, _account(mode="demo", daily_loss_limit_abs=220.0, currency=None, pilot=PilotRules()))

@@ -610,11 +610,14 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/learners.py", "load_artifact", "cls"):
         "strict: an sr-v3 / zoo-v2 learner artifact (ADR 0108, card A19 fail-closed load): a model with an unknown "
         "field must refuse, never serve with the field dropped",
+    ("goldbot/risk/real_money.py", "load_adv_reference", "AdvReference"):
+        "strict: config/data/adv_reference.yaml, versioned config (ADR 0106); an entry that does not validate gives no "
+        "reference, so real-money entries are refused rm_volume_unknown (fail closed)",
     ("goldbot/research/run_manifest.py", "load", "RunManifest"):
-        "strict: a stored run manifest (ADR 0109): a manifest with an unknown or missing field cannot rebuild its model "
-        "byte for byte, so the load must refuse",
+        "strict: a content-addressed run manifest (ADR 0109); manifest_id is the hash of the body, so dropping an "
+        "unknown key would change what was recorded and a manifest that does not read must refuse serving",
     ("goldbot/research/run_manifest.py", "record", "RunManifest"):
-        "not persisted: builds the new manifest from the in-memory run body before it is stored",
+        "not persisted: builds a new manifest from the run's fields before it is stored (built strictly, ADR 0010)",
     ("goldbot/research/sr_v3_train.py", "record_unit", "MQ.QualityVerdict"):
         "not persisted: the in-memory param_shift verdict of the same run, validated into its record",
     ("goldbot/ops/findings.py", "load_register", "Register"):

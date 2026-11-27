@@ -1,4 +1,4 @@
-id: R187
+id: R190
 requirement: 'Retraining on a fixed schedule, every change reversible (ADR 0106 decision 7, goal "retraining on a fixed schedule (e.g. monthly), every change reversible"; ADR 0109): job monthly_walkforward on the 1st at 04:30 UTC, window ending 00:00 UTC that day, calls model_quality.monthly_trainers, checks each manifest (on schedule, train and scaler fit end before the window, stored), fails after all trainers when any failed, never promotes; rollback-model <agent> restores the previous champion in one command and refuses when none or when it would not serve'
 status: in review
 code: 'goldbot/research/monthly_walkforward.py (`run`, `window_end`); goldbot/ops/jobs.py `monthly_walkforward`, JOBS; goldbot/config.py SchedulerSettings.monthly_walkforward; settings scheduler.monthly_walkforward; goldbot/research/model_registry.py `rollback_main`; goldbot/ops/commands/research.py `rollback-model`'

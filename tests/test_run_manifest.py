@@ -10,6 +10,7 @@ import os
 import pickle
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from goldbot.research import model_quality as mq
 from goldbot.research import monthly_walkforward as mwf
 from goldbot.research import run_manifest as rm
 from goldbot.research.model import MetaLabelModel
-from goldbot.research.model_registry import ModelRegistry, rollback_main
+from goldbot.research.model_registry import ModelRegistry, RegistryLockTimeout, rollback_main
 from goldbot.research.rule_model import RuleModel
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -303,9 +304,41 @@ def test_a_fitted_model_trained_after_the_cutoff_without_a_manifest_is_refused_f
     with pytest.raises(mq.ModelRefused, match="no run manifest"):
         reg.load_for_serving(e)
     assert reg.shadow_models() == {}
-    reg.promote(e.version, now=FIT_AT)
-    assert reg.champion_models() == {}
     assert isinstance(reg.load(e), MetaLabelModel)            # the plain checksummed load (backups, recalibration) still works
+
+
+def test_promote_refuses_a_challenger_the_serving_rule_refuses_and_keeps_the_champion(tmp_path: Path) -> None:
+    """PR #494 safety MEDIUM-3(a): promoting a refused challenger would demote a serving champion for a model the
+    engine never loads, leaving the agent's open trades with no model to re-score them."""
+    reg = ModelRegistry(tmp_path / "models")
+    before = mq.MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)
+    old = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={},
+                             now=before)
+    reg.promote(old.version, now=before)
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
+    with pytest.raises(mq.ModelRefused, match="no run manifest"):
+        reg.promote(e.version, now=FIT_AT)
+    assert reg.get(e.version).status == "challenger" and reg.champion("bb").version == old.version  # type: ignore[union-attr]
+    assert ModelRegistry(tmp_path / "models").champion("bb").version == old.version             # type: ignore[union-attr]
+    assert set(reg.champion_models()) == {"bb"}
+
+
+def test_the_saturday_job_does_not_promote_a_refused_challenger_and_reports_it(tmp_path: Path,
+                                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from goldbot.ops import jobs
+    from goldbot.research.promotion import PromotionDecision
+    reg = ModelRegistry(tmp_path / "models")
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={"n": 1},
+                           now=FIT_AT)
+    monkeypatch.setattr(jobs, "_backtest_stats", lambda entry: object())
+    monkeypatch.setattr(jobs, "shadow_stats", lambda ctx, entry: SimpleNamespace(n_trades=60, n_clusters=60))
+    monkeypatch.setattr(jobs, "evaluate_promotion",
+                        lambda bt, sh, champ: PromotionDecision(promote=True, ready=True, checks=[]))
+    out = jobs._decide_challengers(SimpleNamespace(models=reg, state_dir=tmp_path), "bb", FIT_AT)  # type: ignore[arg-type]
+    assert out[0]["action"] == "promotion_refused" and "no run manifest" in out[0]["refused"]
+    assert reg.get(e.version).status == "challenger" and reg.champion("bb") is None
 
 
 def test_a_legacy_fitted_entry_from_before_the_cutoff_still_serves(tmp_path: Path) -> None:
@@ -375,10 +408,13 @@ def test_rollback_model_refuses_an_agent_without_a_previous_champion(tmp_path: P
 
 
 def test_rollback_model_refuses_a_previous_champion_that_would_not_serve(tmp_path: Path,
-                                                                         capsys: pytest.CaptureFixture[str]) -> None:
+                                                                         capsys: pytest.CaptureFixture[str],
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     reg = ModelRegistry(tmp_path / "models")
     old = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
-    reg.promote(old.version, now=FIT_AT)
+    with monkeypatch.context() as mp:     # promoted while it served (its refusal arises later): promote checks it
+        mp.setattr(reg, "serving_refusal", lambda e: None)
+        reg.promote(old.version, now=FIT_AT)
     new = reg.add_challenger(RuleModel(rule="box_break"), family="box_break", agent_id="bb", backtest={},
                              now=FIT_AT + pd.Timedelta(days=1))
     reg.promote(new.version, now=FIT_AT + pd.Timedelta(days=1))
@@ -586,14 +622,17 @@ def test_monthly_trainers_are_refused_until_they_run_in_a_bounded_child() -> Non
         ModelQualitySettings(monthly_trainers=["goldbot.research.sr_v3_train:monthly"])
 
 
-def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_path: Path) -> None:
+def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_path: Path,
+                                                                             monkeypatch: pytest.MonkeyPatch) -> None:
     from goldbot.ops.checks.feeds import check_model_watch
     from goldbot.ops.health import HealthContext
     from goldbot.ops.jobs import model_watch
     from tests.test_shadow import _promote_pair, _shadow_rets, _watch_ctx
     ctx = _watch_ctx(tmp_path)
     t = FIT_AT                                        # both fitted after the cutoff, without a manifest
-    a, b = _promote_pair(ctx, t)
+    with monkeypatch.context() as mp:     # promoted while they served (the refusal arises later): promote checks it
+        mp.setattr(ctx.models, "serving_refusal", lambda e: None)
+        a, b = _promote_pair(ctx, t)
     promoted = t + pd.Timedelta(days=30)
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     out = model_watch(ctx, promoted + pd.Timedelta(days=6))
@@ -602,3 +641,136 @@ def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_
     assert ctx.models.get(b).status == "retired" and ctx.models.get(a).status == "previous"
     hc = HealthContext(state_dir=tmp_path, now=promoted + pd.Timedelta(days=6), get_secret=lambda k: None)
     assert check_model_watch(hc).status == "fail"
+
+
+# ---------------------------------------------------------------------------------------------- PR #494 safety LOW-4
+def _serving_check(tmp_path: Path) -> Any:
+    from goldbot.ops.checks.feeds import check_model_serving
+    from tests.test_health import SETTINGS, make_ctx
+    s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(
+        update={"models_dir": str(tmp_path / "models")})})
+    return check_model_serving(make_ctx(tmp_path, settings=s))
+
+
+def test_health_fails_while_a_champion_is_refused_for_serving_and_warns_for_a_refused_challenger(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refused champion is left out by the engine (its agent trades no model): only logged until now. Health reads
+    the registry with the engine's own rule (`serving_refusal`), so no second copy of the state can go stale."""
+    assert _serving_check(tmp_path).status == "ok"                         # no registry yet
+    reg = ModelRegistry(tmp_path / "models")
+    before = mq.MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)
+    ok = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="good", backtest={},
+                            now=before)
+    reg.promote(ok.version, now=before)
+    assert _serving_check(tmp_path).status == "ok"
+    late = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="cand", backtest={},
+                              now=FIT_AT)
+    c = _serving_check(tmp_path)
+    assert c.status == "warn" and late.version in c.reason and "challenger" in c.reason
+    bad = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={},
+                             now=FIT_AT)
+    with monkeypatch.context() as mp:                                     # promoted while it served
+        mp.setattr(reg, "serving_refusal", lambda e: None)
+        reg.promote(bad.version, now=FIT_AT)
+    c = _serving_check(tmp_path)
+    assert c.status == "fail" and "bb" in c.reason and "no run manifest" in c.reason and "good" not in c.reason
+
+
+# ---------------------------------------------------------------------------------------------- code review #494
+def test_a_rollback_is_not_undone_by_a_save_from_a_long_lived_registry(tmp_path: Path) -> None:
+    """The scheduler and the engine hold one ModelRegistry for their life. rollback-model writes registry.json under
+    the lock; a later save of the stale in-memory list (model_watch, a promotion, a recalibration, a rule challenger)
+    wrote the old champion back. Every write now re-reads the file under the lock first, and every query sees it."""
+    root = tmp_path / "models"
+    reg = ModelRegistry(root)
+    t0 = pd.Timestamp("2026-11-01", tz="UTC")
+    a = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0)
+    reg.promote(a.version, now=t0)
+    b = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0 + pd.Timedelta(days=1))
+    reg.promote(b.version, now=t0 + pd.Timedelta(days=1))
+    scheduler = ModelRegistry(root)                                   # the long-lived copy
+    assert scheduler.champion("ag").version == b.version              # type: ignore[union-attr]
+    assert rollback_main(["ag", "--models", str(root)]) == 0
+    assert scheduler.champion("ag").version == a.version              # type: ignore[union-attr]
+    scheduler.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag2", backtest={}, now=t0)
+    scheduler.ensure_rule_challenger(family="box", agent_id="ag3", now=t0)
+    disk = ModelRegistry(root)
+    assert disk.champion("ag").version == a.version and disk.get(b.version).status == "previous"  # type: ignore[union-attr]
+    assert set(disk.agent_ids()) == {"ag", "ag2", "ag3"}
+    # a write from the stale copy of an entry it read before the rollback acts on the file's current state
+    other = ModelRegistry(root)
+    assert rollback_main(["ag", "--models", str(root)]) == 0          # rolls forward: b is champion again
+    other.retire(a.version, "test")
+    disk = ModelRegistry(root)
+    assert disk.champion("ag").version == b.version and disk.get(a.version).status == "retired"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------------------------- #494 round 3: lock
+def _hold_registry_lock(root: Path) -> subprocess.Popen[str]:
+    """Another process holding <root>/registry.lock (a suspended rollback-model, a scheduler stalled on disk)."""
+    root.mkdir(parents=True, exist_ok=True)
+    ready = root / "held"
+    code = ("import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
+            "fcntl.flock(fd, fcntl.LOCK_EX); open(sys.argv[2], 'w').close(); time.sleep(60)")
+    p = subprocess.Popen([sys.executable, "-c", code, str(root / "registry.lock"), str(ready)], text=True)
+    deadline = time.monotonic() + 10
+    while not ready.exists():
+        assert time.monotonic() < deadline, "the lock holder did not start"
+        time.sleep(0.02)
+    return p
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the holder uses fcntl")
+def test_a_rule_agent_that_has_an_entry_needs_no_lock_and_a_new_one_times_out(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    ModelRegistry(root).ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT)
+    holder = _hold_registry_lock(root)
+    try:
+        reg = ModelRegistry(root, lock_timeout_s=0.3)
+        t = time.monotonic()
+        assert reg.ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT) is None   # no lock taken
+        assert time.monotonic() - t < 0.2
+        t = time.monotonic()
+        with pytest.raises(RegistryLockTimeout):
+            reg.ensure_rule_challenger(family="box_break", agent_id="new", now=FIT_AT)
+        assert time.monotonic() - t < 2.0
+        assert set(ModelRegistry(root).agent_ids()) == {"bb"}
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the holder uses fcntl")
+def test_the_engine_shadow_set_returns_within_its_bound_while_another_process_holds_the_registry_lock(
+        tmp_path: Path) -> None:
+    """PR #494 round 3 safety MEDIUM: the engine builds its shadow set on its loop (startup and every reload); a
+    lock wait without a bound froze engine-run exits. It now skips creating rule challengers and serves what is on
+    disk."""
+    from goldbot.ops.services.engine import ENGINE_REGISTRY_LOCK_S, rule_shadow_set
+    holder = _hold_registry_lock(tmp_path / "models")
+    try:
+        t = time.monotonic()
+        out = rule_shadow_set(tmp_path / "models", tmp_path / "population.json")
+        assert time.monotonic() - t < ENGINE_REGISTRY_LOCK_S + 3.0
+        assert out == {} and ModelRegistry(tmp_path / "models").entries == []
+    finally:
+        holder.kill()
+        holder.wait()
+    out = rule_shadow_set(tmp_path / "models", tmp_path / "population.json")     # lock free: challengers created
+    assert out and all(isinstance(m, RuleModel) for _, m in out.values())
+
+
+def test_a_long_lived_registry_entries_list_follows_a_rollback_in_another_process(tmp_path: Path) -> None:
+    """PR #494 round 3 code review: jobs read `ctx.models.entries` directly (recalibrate, drift_watch, limits); it now
+    re-reads registry.json when another writer changed it, as the query methods do."""
+    root = tmp_path / "models"
+    reg = ModelRegistry(root)
+    t0 = pd.Timestamp("2026-11-01", tz="UTC")
+    a = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0)
+    reg.promote(a.version, now=t0)
+    b = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0 + pd.Timedelta(days=1))
+    reg.promote(b.version, now=t0)
+    scheduler = ModelRegistry(root)
+    assert [e.version for e in scheduler.entries if e.status == "champion"] == [b.version]
+    assert rollback_main(["ag", "--models", str(root)]) == 0
+    assert [e.version for e in scheduler.entries if e.status == "champion"] == [a.version]

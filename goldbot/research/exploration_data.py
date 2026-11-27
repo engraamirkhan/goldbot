@@ -131,6 +131,22 @@ BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
+# A label whose r1 slippage was set by a refit cell older than daily_review.CELL_MAX_AGE at the slot (its broker's last
+# measurement, carried forward) carries this in its cost_model_version (r1's cost; r2 inherits it).
+STALE_CELLS_TAG = "+cells-stale:"
+
+
+def cost_cells_stale(version: object) -> bool:
+    """True when a label's r1 slippage was a stale refit cell carried forward (STALE_CELLS_TAG)."""
+    return isinstance(version, str) and STALE_CELLS_TAG in version
+
+
+def drop_stale_cost_labels(obs: pd.DataFrame) -> pd.DataFrame:
+    """`obs` without labels whose cost is a carried-forward stale cell: reads that pool brokers keep only freshly
+    measured cost bases."""
+    if obs.empty or "cost_model_version" not in obs.columns:
+        return obs
+    return obs[~obs["cost_model_version"].map(cost_cells_stale)].reset_index(drop=True)
 
 # versioned replay (EVAL-2 prereg-2026-11-09-eval2.md section 5): r1 is the row's own label_sim_r (the 2 x $0.15
 # prior), r2 the side table `exploration_replay` (measured legs, no credit, stop overshoot). Never overwritten
@@ -801,7 +817,8 @@ def bar_implied_stop_legs(legs: pd.DataFrame, bars_by_account: Mapping[str, pd.D
 def replay_costs_v2(base: ReplayCosts, legs: pd.DataFrame, *, before: pd.Timestamp, min_fills: int,
                     prior_usd: float = SLIPPAGE_FLOOR_USD) -> ReplayCostsV2:
     """`base.broker`'s r2 cost model from its own ledger legs strictly before `before` (`ledger_legs`, stops through
-    `bar_implied_stop_legs`), commission and swap from its r1 model. Never another broker's measurements, with the
+    `bar_implied_stop_legs`), commission and swap from its r1 model. The version inherits `base.version`, so a
+    `+cells-stale:` tag in it describes r1's slippage, not r2's (r2 slippage comes from the legs, never the cells). Never another broker's measurements, with the
     exceptions the quant ruled (2026-11-09 and C7): a broker whose demo server fills stops and targets at the level
     (`costs.DEMO_EXIT_AT_LEVEL`) has no measurable exit leg, so each exit cell charges "the larger of the ICM-measured
     exit slip per leg and session and the stop-slip prior"; when 95 % or more of its entries also fill within $0.005 of
