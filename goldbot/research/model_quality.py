@@ -246,11 +246,16 @@ def beats_baseline(model_net: pd.Series, baseline_net: pd.Series, days: pd.Serie
 def holm_adjust(verdicts: Mapping[str, QualityVerdict], *, group: str, alpha: float = ALPHA
                 ) -> dict[str, QualityVerdict]:
     """Holm over the A, B and D `beats_baseline` reads of one unit in one cycle (`group`, e.g. "XAUUSD:15m|2027-01"):
-    name -> verdict with `detail.holm` = {group, m, p_holm} and `passed` = d > 0 and p_holm <= alpha."""
+    name -> verdict with `detail.holm` = {group, m, missing, p_holm} and `passed` = d > 0 and p_holm <= alpha.
+
+    m is fixed at |BASELINE_REQUIRED| = 3 per unit and cycle; a read not passed in (its family fitted in another run,
+    or not at all) counts as p = 1. Adjusting a lone read over m = 1 would let each family pass at the unadjusted
+    alpha and the unit's family-wise false-pass rate rise to ~1 - 0.95^3 = 0.14."""
     if not verdicts or any(v.check != "beats_baseline" for v in verdicts.values()):
         raise ValueError("holm_adjust takes the beats_baseline verdicts of one unit and cycle")
     order = sorted(verdicts, key=lambda k: float(verdicts[k].detail["p"]))
-    m, running, out = len(order), 0.0, {}
+    m, running, out = max(len(order), len(BASELINE_REQUIRED)), 0.0, {}
+    missing = m - len(order)     # padded at p = 1: they sort last, so they only raise the earlier ranks' multipliers
     for i, k in enumerate(order):
         v = verdicts[k]
         running = max(running, min(1.0, (m - i) * float(v.detail["p"])))
@@ -258,7 +263,8 @@ def holm_adjust(verdicts: Mapping[str, QualityVerdict], *, group: str, alpha: fl
         if running > alpha:
             reasons.append(f"Holm p {running:.4f} > {alpha} over {m} reads of {group}")
         out[k] = QualityVerdict(check="beats_baseline", passed=not reasons, reasons=reasons,
-                                detail={**v.detail, "holm": {"group": group, "m": m, "p_holm": running}})
+                                detail={**v.detail, "holm": {"group": group, "m": m, "missing": missing,
+                                                             "p_holm": running}})
     return out
 
 
@@ -301,6 +307,10 @@ def _baseline_reasons(manifest: RunManifest, lookup: Callable[[str], RunManifest
     out: list[str] = []
     end = manifest.train_end.isoformat()
     for v in wins:
+        hm = int((v.detail.get("holm") or {}).get("m", 0))
+        if hm < len(BASELINE_REQUIRED):
+            out.append(f"beats_baseline Holm m {hm} < {len(BASELINE_REQUIRED)}: the adjustment must count the A, B "
+                       "and D reads of the unit's cycle (a missing read at p = 1)")
         bid = str(v.detail.get("baseline_manifest_id", ""))
         if v.detail.get("train_end") != end or list(v.detail.get("fold_keys", [])) != manifest.fold_keys:
             out.append("beats_baseline was read on other folds or another train_end than the model's")
