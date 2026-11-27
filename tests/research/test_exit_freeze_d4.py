@@ -32,22 +32,22 @@ def _fresh_behaviour():
 
 
 def test_xt_v1_is_the_card_table_literally() -> None:
-    tpl = {t.name: (t.stop_k, t.target_k, t.trail_k, t.be_at_r) for t in D.EXIT_FREEZE.templates}
+    tpl = {t.name: (t.stop_k, t.target_k, t.trail_k, t.be_at_r) for t in D.exit_freeze().templates}
     assert tpl == {"T0": (None, None, None, None), "T1": (1.0, 1.0, None, None), "T2": (1.0, 2.0, None, None),
                    "T3": (1.0, 3.0, None, None), "T4": (1.5, 1.5, None, None), "T5": (1.0, None, 1.0, None),
                    "T6": (2.0, None, None, None), "T7": (1.0, 3.0, None, 1.0)}
-    assert D.EXIT_FREEZE.freeze_id == "xt-v1"
-    assert D.EXIT_FREEZE.h_by_tf == D.H_BY_TF and D.H_BY_TF["1m"] == 3_600 and D.H_BY_TF["1w"] == 20 * 86_400
+    assert D.exit_freeze().freeze_id == "xt-v1"
+    assert D.exit_freeze().h_by_tf == D.H_BY_TF and D.H_BY_TF["1m"] == 3_600 and D.H_BY_TF["1w"] == 20 * 86_400
     # h_ref = H per tf, in seconds: sqrt(H / h_ref) = 1, so k is the ATR14_tf multiple the card's table states
-    assert D.EXIT_FREEZE.h_ref == D.H_BY_TF
-    assert (D.EXIT_FREEZE.atr_n, D.EXIT_FREEZE.floor_tr_mult, D.EXIT_FREEZE.floor_window_min,
-            D.EXIT_FREEZE.clip_r) == (14, 1.5, 1_440, 10.0)
+    assert D.exit_freeze().h_ref == D.H_BY_TF
+    assert (D.exit_freeze().atr_n, D.exit_freeze().floor_tr_mult, D.exit_freeze().floor_window_min,
+            D.exit_freeze().clip_r) == (14, 1.5, 1_440, 10.0)
     # quant 1 on #514: the mechanics are frozen too, not only the parameters
-    assert D.EXIT_FREEZE.sides == (1, -1)
-    assert D.EXIT_FREEZE.grid_time_exit_tfs == ("1d", "1w") and D.EXIT_FREEZE.close_to_close == ("T0",)
-    assert len(D.EXIT_FREEZE.behaviour_sha) == 64
+    assert D.exit_freeze().sides == (1, -1)
+    assert D.exit_freeze().grid_time_exit_tfs == ("1d", "1w") and D.exit_freeze().close_to_close == ("T0",)
+    assert len(D.exit_freeze().behaviour_sha) == 64
     # one definition repo-wide: the label spec carries exactly the frozen record
-    assert D.exit_freeze(D.SPEC) == D.EXIT_FREEZE
+    assert D.exit_freeze(D.SPEC) == D.exit_freeze()
 
 
 def test_xt_v1_hash_is_pinned_and_recorded_in_the_card() -> None:
@@ -212,3 +212,40 @@ def test_label_rows_is_the_core_plus_the_stamp() -> None:
     assert "exit_freeze_sha" not in core.columns
     full = D.label_rows(mm, rows, "15m")
     pd.testing.assert_frame_equal(D._typed(core.assign(exit_freeze_sha=D.EXIT_FREEZE_SHA256)[list(D.COLUMNS)]), full)
+
+
+def test_a_transient_behaviour_failure_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review LOW-1 on #514: a failure while measuring the mechanics is never cached, so the next call (after the
+    cause is gone) measures again and gets the frozen value without a cache_clear."""
+    def boom(*a: object, **k: object) -> None:
+        raise MemoryError("transient")
+    monkeypatch.setattr(D, "first_passage", boom)
+    assert D.exit_freeze_hash(D.SPEC) != D.EXIT_FREEZE_SHA256
+    assert D._behaviour_of(D.SPEC).startswith("unmeasurable:")
+    monkeypatch.undo()
+    assert D.exit_freeze_hash(D.SPEC) == D.EXIT_FREEZE_SHA256
+
+
+def test_partition_exists_needs_the_xt_v1_stamp_in_its_manifest(tmp_path: Path) -> None:
+    """Code review LOW-1 on #514: `label_key` does not carry the stamp, so a partition built while the stamp was not
+    xt-v1 must not count as built (build_dense_labels skips existing partitions): it is rebuilt."""
+    import json
+    lab = D.label_rows(D.Minutes(_minutes()), _rows15(), "15m")
+    parts = {"fs_key": "f", "minutes_sha256": "m", "minutes_to_utc": "2015-03-06"}
+    key = D.write_partition(lab, cache=tmp_path, instrument="XAUUSD", tf="15m", year=2015, phase=0, parts=parts)
+
+    def exists() -> bool:
+        return D.partition_exists(tmp_path, "XAUUSD", "15m", 2015, 0, parts)
+    assert exists()
+    mp = next((tmp_path / "dl-v1" / "XAUUSD" / "15m" / "p0" / "2015").glob(f"{key[:24]}.json"))
+    man = json.loads(mp.read_text())
+    mp.write_text(json.dumps({**man, "exit_freeze_sha": "unmeasurable:MemoryError"}))
+    assert not exists()
+    mp.write_text(json.dumps({k: v for k, v in man.items() if k != "exit_freeze_sha"}))
+    assert not exists()
+
+
+def test_no_module_getattr_so_mypy_sees_typos() -> None:
+    """Code review LOW-2 on #514: a module `__getattr__` makes every attribute Any to mypy; the record is
+    `exit_freeze()`."""
+    assert "__getattr__" not in vars(D) and not hasattr(D, "EXIT_FREEZE")
