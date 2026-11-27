@@ -1029,6 +1029,21 @@ AUX: tuple[Migration, ...] = (
     ), add_columns=(("self_retrain_models", "model_sha256", "TEXT"),
                     ("self_retrain_models", "feature_versions",
                      "TEXT CHECK (feature_versions IS NULL OR json_valid(feature_versions))"))),
+    # additive (vantage-demo 2026-10-26..11-27: a 61-minute DST-gap-week break refused every 1h/4h close for weeks;
+    # goldbot/engine/history.py `save_closures`): the spans a clean broker-bar pull found without a minute (a broker
+    # closure, `History.covered`), per account and live feed, so a restart keeps them instead of judging the hole open
+    # again once it is older than the fill can reach. A release without it never reads the table
+    Migration(version=46, name="history_closures", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS history_closures (
+               account_id TEXT NOT NULL,
+               source TEXT NOT NULL,
+               symbol TEXT NOT NULL,
+               start_ns INTEGER NOT NULL,
+               end_ns INTEGER NOT NULL CHECK (end_ns > start_ns),
+               updated_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, source, symbol, start_ns, end_ns)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

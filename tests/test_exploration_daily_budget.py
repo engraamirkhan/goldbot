@@ -684,3 +684,25 @@ def test_a_filled_row_written_without_signal_ns_during_a_rollback_still_counts(t
     _history(tmp_path, fills={}, signals={"c": [START, START + pd.Timedelta(minutes=15)]})
     day_after = START.floor("D") + pd.Timedelta(days=1)                    # the NULL row's fill is in the window: 1 / 2
     assert budget.control_propensity(eng2, ex, "c", ("e",), START + pd.Timedelta(days=1), day_after, 1.0) == 0.5
+
+
+def test_the_session_split_counts_replay_only_control_candidates_apart_from_the_edge_ones(tmp_path, caplog):
+    """Reporting (vantage-demo 2026-11-26: "0 of 0 candidates" read as a dead account while 62 control candidates were
+    replayed): the split's counts say edge and control apart; the split itself still takes only edge candidates."""
+    d = DailyEntries(max_per_day=90)
+    db = exploration.ledger_db(str(tmp_path))
+    ex = SimpleNamespace(db=db, budget_cache={})
+    eng = SimpleNamespace(cfg=SimpleNamespace(account_id="icm-probe", broker_name="icm", weekend_window=None))
+    day = START.floor("D")
+    for i in range(3):
+        ed.record_candidate(db, candidate_id=f"k{i}", account_id="icm-probe", broker="icm", arm_id="ZC", family="f",
+                            style="scalp", tf="1m", side=1, decision_utc=day - pd.Timedelta(hours=5, minutes=i),
+                            stop_dist=3.0, target_dist=3.0, max_hold_s=60, taken=True, is_control=True)
+    arms = {"e": _arm("e", style="scalp")}
+    budget.SHARES.clear()
+    with caplog.at_level(logging.INFO, logger="goldbot.engine.exploration_budget"):
+        got = budget.session_budgets(eng, ex, d, day, arms)  # type: ignore[arg-type]
+    assert got == budget.apportion(90, {})                       # controls take no share
+    assert budget.split_counts(eng, ex, day, arms) == budget.SplitCounts(edge=0, candidates=0, control=3)  # type: ignore[arg-type]
+    assert any("from 0 edge of 0; 3 replay-only control candidates" in r.getMessage() for r in caplog.records)
+    assert budget.SplitCounts(edge=0, candidates=0, control=62).line() == "0 edge of 0; 62 replay-only control"
