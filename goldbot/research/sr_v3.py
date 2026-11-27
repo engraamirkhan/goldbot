@@ -181,7 +181,7 @@ def _upper(cell: Mapping[str, Any] | None) -> float | None:
 
 
 def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
-               columns: Sequence[str] = P30) -> RhoInputs:
+               columns: Sequence[str] = P30, freeze_sha: str | None = None) -> RhoInputs:
     """The D-12 / D-12a measurements (docs/research/rho-measurement-2026-11.json) for a body at a tf. ρ_x is read on the
     smallest fold (`fold_2010_11`), the fold the gate is computed on; a negative upper bound counts as 0."""
     d = json.loads(Path(path).read_text())
@@ -193,6 +193,12 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
     if body == "gold":
         rho_inst, lam_a = 0.0, LAMBDA_ROWS
     else:
+        # a pooled body reads rho_u,inst and tau_a: Stage 0 is a power read, so the file must be measured at the
+        # xt-v1 exit freeze (quant ruling on #514, D-12-xt; code review of #514). Gold reads neither. `freeze_sha` is
+        # dense_labels.EXIT_FREEZE_SHA256 from the (unguarded) caller; None refuses (fail closed).
+        from goldbot.config import xt_v1_rho_refusal
+        if (why := xt_v1_rho_refusal(d, path, freeze_sha or "")) is not None:
+            raise ValueError(why)
         rho_inst = min(1.0, float(b["rho_u_inst_day_mean"][f"{rc}|{bucket}"]["max"]))
         tau = max(TAU_A_FLOOR, float(b["tau_a"][f"pooled|{bucket}"]["tau_a"]))     # D-12 (d): the pooled-body row
         lam_a = RESIDUAL_VAR / tau ** 2

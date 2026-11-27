@@ -3,6 +3,7 @@ cost per fold, Stage 0 reads no label, the learner reports, deterministic v0 art
 sealed-store refusal, and train/serve parity of the L-cw export."""
 from __future__ import annotations
 
+import json
 import zlib
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,7 @@ def O_clip(x: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------------------------- Stage 0
-def test_stage0_reads_no_label_column() -> None:
+def test_stage0_reads_no_label_column(tmp_path: Path) -> None:
     rng = np.random.default_rng(3)
     dec = pd.date_range("2010-01-04", "2011-12-30", freq="4h", tz="UTC")
     ev = pd.DataFrame({"instrument": "XAUUSD", "tf": "4h", "phase": 0, "decision_utc": dec, "usable": True,
@@ -138,11 +139,18 @@ def test_stage0_reads_no_label_column() -> None:
     b = T.stage0_counts(with_labels.drop(columns=["gross_r_raw"]), years=(2010, 2011))
     c = T.stage0_counts(with_labels, years=(2010, 2011))
     assert a == b == c
-    s0 = T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=RHO_FILE)
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256 as XT
+    rho = tmp_path / "rho.json"                          # the pooled body reads rho only from an xt-v1 file (D-12-xt)
+    rho.write_text(json.dumps({**json.loads(RHO_FILE.read_text()), "exit_freeze_sha": XT}))
+    s0 = T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=rho,
+                  freeze_sha=XT)
     s1 = T.stage0("4h", ("4h",), {"XAUUSD": with_labels, "EURUSD": with_labels.assign(instrument="EURUSD")},
-                  rho_file=RHO_FILE)
+                  rho_file=rho, freeze_sha=XT)
     assert s0.model_dump() == s1.model_dump()
-    assert s0.rho["gold"].source_sha256 == V.file_sha256(RHO_FILE)
+    assert s0.rho["gold"].source_sha256 == V.file_sha256(rho)
+    with pytest.raises(ValueError, match="xt-v1"):       # the pre-xt-v1 D-12 file refuses a pooled Stage 0
+        T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=RHO_FILE,
+                 freeze_sha=XT)
 
 
 REV8_CORE12 = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16", "ret_96",
