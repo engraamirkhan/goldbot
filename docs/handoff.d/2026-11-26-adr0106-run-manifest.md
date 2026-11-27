@@ -32,6 +32,9 @@
     registry.json under `registry.lock`, so a long-lived scheduler or engine instance can no longer undo a
     rollback-model. Other trainers are not affected: self_retrain (aux.db) and the nightly classifier never touch
     the model registry.
+  - Round 3: the engine's registry lock wait is bounded at 1 s (`ENGINE_REGISTRY_LOCK_S`, `rule_shadow_set`), so a
+    stalled writer can no longer freeze the engine loop; `ModelRegistry.entries` re-reads a changed file; a failed
+    recalibration of one model no longer aborts the weekly job; the refit's data_version covers the context bars.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart
