@@ -149,8 +149,10 @@ def test_tampered_artefact_is_refused(tmp_path):
     e = reg.add_challenger(_model("a"), family="session_open", agent_id="x", backtest={})
     reg.promote(e.version)
     (tmp_path / e.artefact).write_bytes(b"not the model")
+    champion = reg.champion("x")
+    assert champion is not None                             # the registry row survives; only its artefact is bad
     with pytest.raises(ValueError, match="checksum"):
-        reg.load(reg.champion("x"))
+        reg.load(champion)
     # ADR 0109 serving rule (#494): a champion whose artefact fails its checksum is left out, logged, never served
     assert reg.champion_models() == {}
 
