@@ -30,9 +30,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     class basis per instrument, `wait_charged_tfs` empty), and a recording line in ADR 0098 R-H. The unread draft
     srv3-cost-bb199294 (era term without slippage) was never recorded. Table files are local
     (`~/tmp/sr-v3-trainsets/costs-v2`); swap and spread are byte-identical to #512's, the cost table adds `slip_x_usd`.
-  - `goldbot/research/srv3_cost_record.py`: `apply(labels, meta, version, files, *, rt_bp, spec)` verifies the version
-    and files, refuses a measured row charged below `charge_floor` (worse broker of cell rt_bp and ECR ub95 / entry),
-    re-stamps gold rows, keeps every other block, blocks every prior-class row (named) and gold 1m/5m (D-15).
+  - `goldbot/research/srv3_cost_record.py`: `apply(labels, meta, version, paths, *, rt_bp, spec)` hashes the three
+    table files' bytes itself, reads the spread from the verified file, refuses any measured row whose charge is not
+    `gold_row_bp` within 1e-6 bp (quant R1; `charge_floor` is a diagnostic), re-stamps gold rows, keeps every other block, blocks every prior-class row (named) and gold 1m/5m (D-15).
     `gold_row_bp(rows, record, spread)` is the per-row charge of record (point in time). `dense_labels.py` untouched.
   - Read requirements (card 9a): first cost version read is the version of record (another is K+1); S by year and the
     share of rows where the ECR term bound; 15m reads report S at the vantage cell charge (descriptive); holdout read
