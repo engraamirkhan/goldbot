@@ -482,44 +482,81 @@ def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp) -> tup
             pd.Timestamp(max(v[2] for v in cells.values()), unit="ns", tz="UTC"))
 
 
-def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, min_fills: int,
-                now: pd.Timestamp, write: bool) -> list[CellRefit]:
-    """Per (broker, session): the entry fills sent after the cell's last fit and before `hi`; at `min_fills` or more,
-    a new fit = max(research floor, mean adverse-positive slippage) (prereg H-60 costs: "slippage max(0.15, measured)
-    ... never credited")."""
+def last_fits(conn: sqlite3.Connection, broker: str) -> dict[str, tuple[float, str, int, int]]:
+    """session -> (slippage, day, fitted_ns, through_ns) of `broker`'s newest fit, whenever it took effect."""
+    return _cells(conn, broker, pd.Timestamp(2**62, unit="ns", tz="UTC"))
+
+
+def pending_trades(conn: sqlite3.Connection, hosts: Mapping[str, str],
+                   hi: pd.Timestamp) -> dict[tuple[str, str], list[ExplorationRecord]]:
+    """(broker, session) -> the eligible entry fills of the cell not yet in a fit: sent after the cell's last fit's
+    through and before `hi`, filled with a requested price, not void for `cost_cells` (prereg Amendment 4); every
+    session of every host broker, an empty list included. What `refit_cells` refits from and the health check
+    `learning:cost_cells` counts (one rule, so health and learner never disagree)."""
     from goldbot.research.evidence_exclusions import excluded
-    from goldbot.research.exploration_data import SLIPPAGE_FLOOR_USD
     from goldbot.telegram.labs import trades
-    out: list[CellRefit] = []
-    hi_ns = int(hi.value)
+    out: dict[tuple[str, str], list[ExplorationRecord]] = {}
+    void = excluded(conn, "cost_cells")
     for broker in sorted(set(hosts.values())):
         accts = sorted(a for a, b in hosts.items() if b == broker)
         marks = ",".join("?" * len(accts))
-        with db.connection() as conn:
-            last = _cells(conn, broker, pd.Timestamp(2**62, unit="ns", tz="UTC"))
-            void = excluded(conn, "cost_cells")                # prereg Amendment 4
-            rows = [t for t in trades(conn, f"account_id IN ({marks}) AND ts_ns < ?", (*accts, hi_ns))
-                    if t.fill_price is not None and t.requested_price is not None and t.client_order_id not in void]
-        if not rows:
-            continue
+        last = last_fits(conn, broker)
+        rows = [t for t in trades(conn, f"account_id IN ({marks}) AND ts_ns < ?", (*accts, int(hi.value)))
+                if t.fill_price is not None and t.requested_price is not None and t.client_order_id not in void]
         labels = _sessions([t.sent_utc for t in rows])
         for session in SESSIONS:
             since = last[session][3] if session in last else -1
-            sel = [t for t, s in zip(rows, labels, strict=True) if s == session and int(t.sent_utc.value) > since]
-            if len(sel) < min_fills:
-                continue
-            slip = max(SLIPPAGE_FLOOR_USD,
-                       float(np.mean([t.side * (float(t.fill_price or 0.0) - float(t.requested_price or 0.0))
-                                      for t in sel])))
-            prev = last[session][0] if session in last else None
-            if write:
-                value = write_cell(db, broker=broker, session=session, day=day, slippage_usd=slip, fills=len(sel),
-                                   through=hi, now=now)
-            else:                     # what write_cell would keep: never cheaper than the same day's fit
-                value = max(slip, prev) if prev is not None and last[session][1] == day else slip
-            out.append(CellRefit(broker=broker, session=session, day=day, fills=len(sel), slippage_usd=round(value, 6),
-                                 previous_usd=prev))
+            out[(broker, session)] = [t for t, s in zip(rows, labels, strict=True)
+                                      if s == session and int(t.sent_utc.value) > since]
     return out
+
+
+def pending_fills(conn: sqlite3.Connection, hosts: Mapping[str, str],
+                  hi: pd.Timestamp | None = None) -> dict[tuple[str, str], int]:
+    """(broker, session) -> how many eligible entry fills the cell has since its last fit (`pending_trades`); a cell
+    is refit at `refit_min_fills`. `hi`: fills sent before it (None: all)."""
+    top = pd.Timestamp(2**62, unit="ns", tz="UTC") if hi is None else hi
+    return {k: len(v) for k, v in pending_trades(conn, hosts, top).items()}
+
+
+def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, min_fills: int,
+                now: pd.Timestamp, write: bool) -> list[CellRefit]:
+    """Per (broker, session): the entry fills sent after the cell's last fit and before `hi` (`pending_trades`); at
+    `min_fills` or more, a new fit = max(research floor, mean adverse-positive slippage) (prereg H-60 costs: "slippage
+    max(0.15, measured) ... never credited")."""
+    from goldbot.research.exploration_data import SLIPPAGE_FLOOR_USD
+    out: list[CellRefit] = []
+    with db.connection() as conn:
+        pending = pending_trades(conn, hosts, hi)
+        last = {b: last_fits(conn, b) for b in sorted(set(hosts.values()))}
+    for (broker, session), sel in pending.items():
+        if len(sel) < min_fills:
+            continue
+        cell = last[broker].get(session)
+        slip = max(SLIPPAGE_FLOOR_USD,
+                   float(np.mean([t.side * (float(t.fill_price or 0.0) - float(t.requested_price or 0.0))
+                                  for t in sel])))
+        prev = cell[0] if cell is not None else None
+        if write:
+            value = write_cell(db, broker=broker, session=session, day=day, slippage_usd=slip, fills=len(sel),
+                               through=hi, now=now)
+        else:                         # what write_cell would keep: never cheaper than the same day's fit
+            value = max(slip, prev) if prev is not None and cell is not None and cell[1] == day else slip
+        out.append(CellRefit(broker=broker, session=session, day=day, fills=len(sel), slippage_usd=round(value, 6),
+                             previous_usd=prev))
+    return out
+
+
+def reviewed_at(state_dir: str | Path, day: str) -> pd.Timestamp | None:
+    """When the (non-dry) daily review of `day` last ran (its file's generated_utc); None without a readable one."""
+    try:
+        doc = json.loads(review_path(state_dir, day).read_text(encoding="utf-8"))
+        if doc.get("dry_run"):
+            return None
+        ts = pd.Timestamp(doc["generated_utc"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
 
 
 # ---------------------------------------------------------------------------------------------- figures
@@ -1323,6 +1360,7 @@ def main(argv: list[str]) -> int:
 
 
 __all__ = ["DailyReview", "WeeklyRollup", "cost_cells", "load_review", "load_weekly",
-           "main", "mark_weekly_consumed", "weekly_consumed", "outbox_dir", "refit_cells", "refits_on", "replay_cells", "report_lines", "retire",
+           "main", "mark_weekly_consumed", "weekly_consumed", "outbox_dir", "refit_cells", "pending_fills", "pending_trades", "last_fits",
+           "reviewed_at", "refits_on", "replay_cells", "report_lines", "retire",
            "retired_arms", "retired_on", "review_path", "run_daily_review", "scrub", "stale_outbox", "summary",
            "trials_left", "write_cell"]

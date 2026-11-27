@@ -283,6 +283,31 @@ def test_a_cost_cell_is_refit_after_200_fills_since_the_last_fit_and_never_cheap
     assert dr.cost_cells(db, "icm", NOW)["london"] == pytest.approx(0.4)     # point in time
 
 
+def test_pending_fills_counts_each_cells_eligible_entry_fills_since_its_fit_and_the_refit_reads_the_same_count(
+        tmp_path):
+    db = _db(tmp_path)
+    for i in range(120):
+        _trade(db, f"l{i}", sent=LONDON + pd.Timedelta(seconds=10 * i), requested=2000.0, fill=2000.3)
+    for i in range(30):
+        _trade(db, f"n{i}", host="vantage-demo", sent=NEWYORK + pd.Timedelta(seconds=10 * i))
+    _trade(db, "unfilled", sent=LONDON, fill=None)                         # never filled: not a fill
+    with db.connection() as conn:
+        got = dr.pending_fills(conn, HOSTS, HI)
+    assert got[("icm", "london")] == 120 and got[("vantage", "newyork")] == 30
+    assert got[("icm", "asia")] == 0 and got[("vantage", "london")] == 0   # every session of every broker, 0 included
+    dr.write_cell(db, broker="icm", session="london", day=DAY, slippage_usd=0.3, fills=120, through=HI, now=NOW)
+    later = HI + pd.Timedelta(hours=12)                                    # the next day's London session
+    for i in range(200):
+        _trade(db, f"m{i}", sent=later + pd.Timedelta(seconds=10 * i), requested=2000.0, fill=2000.5)
+    with db.connection() as conn:
+        after = dr.pending_fills(conn, HOSTS, later + pd.Timedelta(days=1))
+    assert after[("icm", "london")] == 200                                 # only the fills after the fit's through
+    [cell] = dr.refit_cells(db, hosts=HOSTS, day="2026-10-23", hi=later + pd.Timedelta(days=1), min_fills=200,
+                            now=later + pd.Timedelta(days=1), write=False)
+    assert (cell.broker, cell.session, cell.fills) == ("icm", "london", 200)
+    assert cell.slippage_usd == pytest.approx(0.5) and cell.previous_usd == pytest.approx(0.3)
+
+
 def test_the_refit_floor_is_the_research_slippage_floor(tmp_path):
     db = _db(tmp_path)
     for i in range(200):
