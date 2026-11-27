@@ -566,6 +566,45 @@ def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
         D.booked(ledger, "r", "s", [WN.Window.CONFIRM], "sr_v3")
 
 
+def _mixed_tiers(tmp_path: Path, inst: str, by_month: dict[str, str]) -> F.Tiers:
+    p = tmp_path / "tiers_mixed.csv"
+    pd.DataFrame({"key": inst, "month": list(by_month), "tier": list(by_month.values()),
+                  "r11_id": "r11-test"}).to_csv(p, index=False)
+    return F.Tiers.from_csv(p)
+
+
+def test_rule_r_a_close_only_lookbacks_accept_b_months_nothing_else_does(tmp_path: Path) -> None:
+    """R-a (quant ruling on PR #486, ADR 0104 4): B lookback months only for close-only columns; the label window
+    stays A / A-consistent; C never; usability is the conjunction over the requested columns."""
+    m = _minutes("2015-03-26", 8 * 1440).assign(source="histdata:EURUSD")
+    rows = _rows(m, "15m", source="histdata:EURUSD").assign(instrument="EURUSD")
+    lab = D.label_rows(D.Minutes(m), rows, "15m")
+    assert D.close_only("ret_96") and not D.close_only("atr_ratio_14_100") and D.close_only("d1_rv_ratio")
+
+    def month(ts: pd.Series) -> np.ndarray:
+        return D.months_between(pd.Series(ts), pd.Series(ts))[0]
+
+    def starts_in_march(col: str) -> np.ndarray:
+        return month(pd.Series(pd.DatetimeIndex(lab["decision_utc"]) - D.input_lookback("15m", [col]))) == "2015-03"
+    april = (month(lab["decision_utc"]) == "2015-04") & (month(lab["horizon_end_utc"]) == "2015-04")
+    ok = lab["label_ok"].to_numpy(bool) & april
+    reach = starts_in_march("ret_96") & april
+    strict_reach = starts_in_march("spread_rel_median_48")
+    assert (reach & ~strict_reach).any() and (april & ~reach).any() and ok.any()
+    mar_b = _mixed_tiers(tmp_path, "EURUSD", {"2015-03": "B", "2015-04": "A"})
+    close = D.attach_tiers(lab, mar_b, columns=("side", "ret_96", "spread_rel_median_48"))
+    # B only in a close-only lookback: usable; B in the strict column's lookback or the label window: not
+    assert (close["usable"].to_numpy() == (ok & ~strict_reach)).all() and close["usable"].to_numpy()[reach].any()
+    assert set(close.loc[reach, "tier"]) == {"B"}            # reported tier = the worst month read
+    strict = D.attach_tiers(lab, mar_b, columns=("side", "atr_ratio_14_100"))
+    assert starts_in_march("atr_ratio_14_100")[april].all() and not strict["usable"].any()   # strict lookback: B refused
+    both = D.attach_tiers(lab, mar_b, columns=("side", "ret_96", "atr_ratio_14_100"))
+    assert not both["usable"].any()                          # conjunction over the columns
+    mar_c = _mixed_tiers(tmp_path, "EURUSD", {"2015-03": "C", "2015-04": "A"})
+    c = D.attach_tiers(lab, mar_c, columns=("side", "ret_96"))
+    assert not c.loc[reach, "usable"].any() and (c["usable"].to_numpy()[april & ~reach] == ok[april & ~reach]).all()
+
+
 def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
     """ADR 0085 A4 (recorded 2026-11-26, quant R-b on #472): a store read under the recorded tiers file opens on the
     learn window without monkeypatching the seal, and a 2018 read without a booked read id is still refused."""
