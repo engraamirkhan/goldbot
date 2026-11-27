@@ -249,3 +249,60 @@ def test_no_module_getattr_so_mypy_sees_typos() -> None:
     """Code review LOW-2 on #514: a module `__getattr__` makes every attribute Any to mypy; the record is
     `exit_freeze()`."""
     assert "__getattr__" not in vars(D) and not hasattr(D, "EXIT_FREEZE")
+
+
+def _fail_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_behaviour_sha` raises on its first call, then measures as usual (a one-off failure)."""
+    real = D._behaviour_sha
+    calls = {"n": 0}
+
+    def flaky(key: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise MemoryError("one-off")
+        return real(key)
+    flaky.cache_clear = real.cache_clear  # type: ignore[attr-defined]
+    monkeypatch.setattr(D, "_behaviour_sha", flaky)
+
+
+def test_the_manifest_stamp_is_the_rows_stamp_never_a_second_measurement(tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review LOW-1 on #516: a one-off failure while `label_rows` stamps the rows must not be hidden by a good
+    stamp measured again in `write_partition`; the manifest takes the rows' one stamp, so the partition is rebuilt."""
+    import json
+    D._behaviour_sha.cache_clear()
+    _fail_once(monkeypatch)
+    lab = D.label_rows(D.Minutes(_minutes()), _rows15(), "15m")
+    assert lab["exit_freeze_sha"].nunique() == 1 and lab["exit_freeze_sha"].iloc[0] != D.EXIT_FREEZE_SHA256
+    assert D.exit_freeze_hash(D.SPEC) == D.EXIT_FREEZE_SHA256            # the failure is over
+    parts = {"fs_key": "f", "minutes_sha256": "m", "minutes_to_utc": "2015-03-06"}
+    key = D.write_partition(lab, cache=tmp_path, instrument="XAUUSD", tf="15m", year=2015, phase=0, parts=parts)
+    man = json.loads(next((tmp_path / "dl-v1" / "XAUUSD" / "15m" / "p0" / "2015").glob(f"{key[:24]}.json"))
+                     .read_text())
+    assert man["exit_freeze_sha"] == lab["exit_freeze_sha"].iloc[0]
+    assert not D.partition_exists(tmp_path, "XAUUSD", "15m", 2015, 0, parts)
+    good = D.label_rows(D.Minutes(_minutes()), _rows15(), "15m")
+    with pytest.raises(ValueError, match="exit_freeze_sha"):
+        D.write_partition(pd.concat([good, lab], ignore_index=True), cache=tmp_path, instrument="XAUUSD", tf="15m",
+                          year=2015, phase=0, parts=parts)
+    with pytest.raises(ValueError, match="exit_freeze_sha"):
+        D.write_partition(good.drop(columns="exit_freeze_sha"), cache=tmp_path, instrument="XAUUSD", tf="15m",
+                          year=2015, phase=0, parts=parts)
+
+
+def test_build_dense_labels_fails_fast_when_this_host_does_not_hash_to_xt_v1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review LOW-2 on #516: the label build stops with a clear message instead of rebuilding every partition
+    into rows no gate can read."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_dense_labels", ROOT / "scripts" / "research"
+                                                  / "build_dense_labels.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.require_frozen_exits()                                           # this host: xt-v1
+    monkeypatch.setattr(D, "exit_freeze_hash", lambda *a, **k: "unmeasurable-host")
+    with pytest.raises(SystemExit, match="xt-v1"):
+        mod.require_frozen_exits()
+    monkeypatch.setattr("sys.argv", ["build_dense_labels.py"])
+    with pytest.raises(SystemExit, match="xt-v1"):
+        mod.main()
