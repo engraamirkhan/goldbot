@@ -72,6 +72,8 @@ def ecr_cells(path: Path) -> tuple[dict[str, Any], pd.DataFrame]:
             for tf, c in tfs.items():
                 rows.append({"broker": broker, "account": acc, "session": s, "tf": tf, "n": int(c["n"]),
                              "n_days": int(c["n_days"]), "charged_usd": float(c["charged_usd"]),
+                             "spread_usd": float(c.get("spread_usd", np.nan)),
+                             "commission_usd": float(c.get("commission_usd", np.nan)),
                              "sparse": bool(c.get("sparse", False))})
     return d, pd.DataFrame(rows)
 
@@ -114,11 +116,15 @@ def gold_rows(ecr_path: Path, raw: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
                     else:
                         basis = "w2:below-min-fills"
                 ok = g[g["n"] >= min_fills] if basis.startswith("ecr") else g.iloc[0:0]
-                usd = float(ok["charged_usd"].max()) if len(ok) else np.nan
+                top = ok.loc[ok["charged_usd"].idxmax()] if len(ok) else None
+                usd = float(top["charged_usd"]) if top is not None else np.nan
+                # quant F4 on #515: the slippage the era term must carry, from the SAME charged ECR cell
+                slip_x = (max(0.0, usd - float(top["spread_usd"]) - float(top["commission_usd"]))
+                          if top is not None else np.nan)
                 bp = usd / price[b] * 1e4 if np.isfinite(usd) else np.nan
                 rt = max(DC.RT_BP, bp) if np.isfinite(bp) else DC.RT_BP
                 out.append({"instrument": GOLD, "broker": b, "session": s, "tf": tf, "w2_bp": DC.RT_BP,
-                            "measured_usd": usd, "ecr_ub95_usd": usd, "measured_n": int(g["n"].max()) if len(g) else 0,
+                            "measured_usd": usd, "ecr_ub95_usd": usd, "slip_x_usd": slip_x, "measured_n": int(g["n"].max()) if len(g) else 0,
                             "ref_price": price[b], "measured_bp": bp, "rt_bp": rt,
                             "basis": basis if np.isfinite(bp) and bp > DC.RT_BP else
                             (basis if not np.isfinite(bp) else f"{basis}:w2-floor"),
@@ -210,7 +216,7 @@ def row_rt_bp(rows: pd.DataFrame, cost: pd.DataFrame, spread: pd.DataFrame, comm
     (Dukascopy spread ub95 of the session's latest COMPLETED month + the broker's round-trip commission) / entry x
     1e4) (quant N2). The spread is joined as-of on its `available_utc` (no part of the decision month is used)."""
     c = rows[["broker", "session", "tf"]].merge(
-        cost[cost["instrument"] == GOLD][["broker", "session", "tf", "rt_bp", "ecr_ub95_usd"]],
+        cost[cost["instrument"] == GOLD][["broker", "session", "tf", "rt_bp", "ecr_ub95_usd", "slip_x_usd"]],
         on=["broker", "session", "tf"], how="left")
     entry = rows["entry"].to_numpy(float)
     ecr = c["ecr_ub95_usd"].to_numpy(float) / entry * 1e4
@@ -225,7 +231,7 @@ def row_rt_bp(rows: pd.DataFrame, cost: pd.DataFrame, spread: pd.DataFrame, comm
         v = g["ub95_usd"].to_numpy(float)
         sp[m] = np.where(i >= 0, v[np.clip(i, 0, None)], np.nan)
     comm = rows["broker"].map(commission_rt).to_numpy(float)
-    spread_bp = (sp + comm) / entry * 1e4
+    spread_bp = (sp + comm + c["slip_x_usd"].to_numpy(float)) / entry * 1e4     # quant F4 on #515
     return np.asarray(np.nanmax(np.vstack([c["rt_bp"].to_numpy(float), ecr, spread_bp]), axis=0))
 
 
@@ -328,7 +334,8 @@ def main() -> int:
                     "tf takes the session `all` cell, else W2; non-gold: prior (spread+commission), W2 floor, "
                     "cost_version label 'prior'. GOLD PER ROW (quant N2, row_rt_bp): max(cell rt_bp, ecr_ub95_usd / "
                     "entry x 1e4, (gold spread ub95_usd of the session's latest completed month, as-of available_utc "
-                    "+ commission_rt_usd_per_oz[broker]) / entry x 1e4)",
+                    "+ commission_rt_usd_per_oz[broker] + slip_x_usd[cell]) / entry x 1e4); slip_x_usd = max(0, ECR "
+                    "charged_usd - spread_usd - commission_usd) of the cell's charged ECR account (quant F4 on #515)",
             "commission_rt_usd_per_oz": comm_rt,
             "fx_cost_label": "prior (quant: FX reads are labelled cost_version=prior until measured)",
             "w2_bp": DC.RT_BP, "overshoot_bp": DC.OVERSHOOT_BP, "gold": gmeta, "other": ometa, "swap": smeta,
