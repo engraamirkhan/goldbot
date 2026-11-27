@@ -62,7 +62,7 @@ def refuse_before_x6() -> None:
 
 
 def _costs(a: argparse.Namespace) -> T.CostTable | None:
-    return T.CostTable.from_manifest(a.cost_manifest) if a.cost_manifest else None
+    return ST.cost_table(a.cost_manifest) if a.cost_manifest else None
 
 
 def _store(a: argparse.Namespace, unit: str | None = None, key: str | None = None) -> ST.StoreData:
@@ -111,7 +111,8 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
             events[inst] = pd.concat(ev, ignore_index=True)
     out = Path(a.out) / unit
     out.mkdir(parents=True, exist_ok=True)
-    s0 = T.stage0(unit, tfs, events, rho_file=Path(a.rho))
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
+    s0 = T.stage0(unit, tfs, events, rho_file=Path(a.rho), freeze_sha=EXIT_FREEZE_SHA256)
     (out / "stage0.json").write_text(json.dumps({"stage0": s0.model_dump(mode="json"),
                                                  "inputs": {"rho_sha256": V.file_sha256(a.rho),
                                                             "tiers_sha256": V.file_sha256(a.tiers),

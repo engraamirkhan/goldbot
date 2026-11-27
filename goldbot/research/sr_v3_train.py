@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -87,7 +87,8 @@ HB_COLUMNS: tuple[str, ...] = tuple(c for c in V.P30 if c != "dist_vwap48_atr") 
 CODE_FILES: tuple[str, ...] = ("goldbot/research/sr_v3.py", "goldbot/research/learners.py",
                                "goldbot/research/sr_v3_train.py", "goldbot/research/sr_v3_store.py",
                                "goldbot/research/sr_v3_report.py", "goldbot/research/sr_v3_serve.py",
-                               "goldbot/research/objective.py", "goldbot/research/decision_cost.py")
+                               "goldbot/research/objective.py", "goldbot/research/decision_cost.py",
+                               "goldbot/research/srv3_cost_record.py")
 
 
 ROW_COLS: tuple[str, ...] = ("instrument", "tf", "phase", "decision_utc", "horizon_end_utc", "side", "gross",
@@ -173,12 +174,17 @@ class CostTable:
     gold_cells: pd.DataFrame | None = None               # gold: broker, session, tf, rt_bp, ecr_ub95_usd
     gold_spread: pd.DataFrame | None = None              # session, available_utc, ub95_usd (sorted)
     commission_rt: Mapping[str, float] = field(default_factory=dict)   # broker -> USD per oz round trip
+    paths: Mapping[str, Path] = field(default_factory=dict)   # the table files, for srv3_cost_record.apply (F6 on #515)
+    # the D-3 per-row gold charge of record (srv3_cost_record.gold_row_bp), injected by sr_v3_store.cost_table: this
+    # guarded module may not import srv3_cost_record (it reaches dense_labels -> self_retrain -> sklearn.metrics)
+    gold_charge: Callable[[pd.DataFrame], np.ndarray] | None = None
 
     @classmethod
     def from_manifest(cls, path: Path | str) -> CostTable:
         m = json.loads(Path(path).read_text())
         c = m.get("costs", m)
         f = c["files"]
+        version = str(c["cost_version"])
         shas = {}
         for name in ("cost_table", "swap_table", *(("gold_spread_table",) if "gold_spread_table" in f else ())):
             p = Path(f[name])
@@ -196,7 +202,8 @@ class CostTable:
             comm = {str(k): float(v) for k, v in meta["commission_rt_usd_per_oz"].items()}
             gold_cells = ct[ct["instrument"] == V.GOLD][["broker", "session", "tf", "rt_bp", "ecr_ub95_usd"]]
             gold_spread = pd.read_parquet(f["gold_spread_table"]).sort_values("available_utc").reset_index(drop=True)
-        return cls(version=str(c["cost_version"]), gold_cells=gold_cells, gold_spread=gold_spread, commission_rt=comm,
+        return cls(version=version, gold_cells=gold_cells, gold_spread=gold_spread, commission_rt=comm,
+                   paths={k: Path(f[k]) for k in shas},
                    rt={(str(r.instrument), str(r.session), str(r.tf)): float(r.rt_bp)
                        for r in rt.itertuples()},
                    swap={(str(i), str(mo)): (float(lp), float(sp)) for i, mo, lp, sp in zip(
@@ -217,7 +224,10 @@ class CostTable:
         gold = rows["instrument"].astype(str).to_numpy() == V.GOLD
         if self.gold_cells is not None and gold.any():
             g = rows[gold]
-            rt[gold] = np.maximum.reduce([self._gold_row_bp(g, sess[gold], b) for b in sorted(self.commission_rt)])
+            if self.gold_charge is not None:       # the D-3 cost of record: its own charge, slip_x included (R1)
+                rt[gold] = self.gold_charge(g)
+            else:                                   # an unrecorded (fit-only) table: the builder's legacy terms
+                rt[gold] = np.maximum.reduce([self._gold_row_bp(g, sess[gold], b) for b in sorted(self.commission_rt)])
         return np.maximum(DC.RT_BP, rt)
 
     def _gold_row_bp(self, rows: pd.DataFrame, sess: np.ndarray, broker: str) -> np.ndarray:
@@ -398,7 +408,7 @@ def stage0_counts(events: pd.DataFrame, *, years: Sequence[int], kish_eff: float
 
 
 def stage0(unit: str, tfs: Sequence[str], events: Mapping[str, pd.DataFrame], *, rho_file: Path,
-           available: Mapping[str, Sequence[str]] | None = None) -> V.Stage0Unit:
+           available: Mapping[str, Sequence[str]] | None = None, freeze_sha: str | None = None) -> V.Stage0Unit:
     """Both bodies on fold 2010-11 and, if needed, 2010-13. `events[instrument]`: the instrument's outcome-blind events
     over every tf of the unit (stage0_counts' columns). 1d+1w pools its two tfs' events (one unit)."""
     if any(len(f) and (f["tf"].astype(str) == "").any() for f in events.values()):
@@ -409,7 +419,7 @@ def stage0(unit: str, tfs: Sequence[str], events: Mapping[str, pd.DataFrame], *,
     tf0 = tfs[0]
     rho: dict[str, V.RhoInputs] = {"gold": V.rho_inputs(rho_file, body="gold", members=[V.GOLD], tf=tf0)}
     if len(members) > 1:
-        rho["pooled"] = V.rho_inputs(rho_file, body="pooled", members=members, tf=tf0)
+        rho["pooled"] = V.rho_inputs(rho_file, body="pooled", members=members, tf=tf0, freeze_sha=freeze_sha)
     av = {"gold": tuple(available.get("gold", V.P30)) if available else V.P30,
           "pooled": tuple(available.get("pooled", HB_COLUMNS)) if available else HB_COLUMNS}
 

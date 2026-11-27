@@ -139,6 +139,26 @@ def default_ledger() -> Path:
     return default_registry().with_name(WN.READS_LEDGER)
 
 
+
+def cost_table(manifest: Path | str) -> CostTable:
+    """The trainer's cost table from a cost manifest. A version recorded under srv3_cost_record (D-3) charges gold rows
+    the record's own `gold_row_bp` (files verified from their bytes); it needs the manifest's gold_spread_table, else
+    refused (F6 on #515). An unrecorded version keeps the builder's legacy charge and is never a gate read."""
+    import dataclasses
+    import functools
+
+    from goldbot.research import srv3_cost_record as CR
+    table = CostTable.from_manifest(manifest)
+    if table.version not in CR.recorded():
+        return table
+    if "gold_spread_table" not in table.paths or table.gold_spread is None:
+        raise CR.CostRecordRefused(f"cost {table.version} is recorded but the manifest has no gold_spread_table: the "
+                                   "per-row gold charge of record cannot be made (F6 on #515): refused")
+    rec = CR.verify(table.version, table.paths)
+    # a partial of a module-level function, not a lambda: the table stays picklable (code review)
+    return dataclasses.replace(table, gold_charge=functools.partial(CR.gold_row_bp, rec=rec,
+                                                                    spread=table.gold_spread))
+
 @dataclass
 class StoreData:
     """The local dl-v1 label store, the fs-v1 feature store and the uniqueness weights (scripts/research/
@@ -181,6 +201,17 @@ class StoreData:
             raise ValueError(f"dl-v1 {instrument} {tf} p{phase} {year}: {len(cands)} partitions under this spec and "
                              "code; prune the stale one so the read is unambiguous")
         return str(cands[0]["key"]), str(cands[0]["fs_key"])
+
+    def _charge_of_record(self, lab: pd.DataFrame, meta: dict[str, Any], instrument: str, tf: str
+                          ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """`lab` charged at the D-3 cost of record and its gate status re-derived (`srv3_cost_record.apply`, F6 on
+        #515), when the costs are a recorded version; otherwise unchanged (w2-point rows keep the D-3 block)."""
+        from goldbot.research import dense_labels as D
+        from goldbot.research import srv3_cost_record as CR
+        if self.costs is None or self.costs.version not in CR.recorded():
+            return lab, meta
+        rows = lab.assign(instrument=instrument, tf=tf)
+        return CR.apply(rows, meta, self.costs.version, self.costs.paths, rt_bp=self.costs.rt_bp(rows), spec=D.SPEC)
 
     def _weights_path(self, instrument: str, tf: str) -> Path:
         return Path(self.weights or Path(self.labels) / "_weights") / instrument / f"{tf}.parquet"
@@ -247,6 +278,7 @@ class StoreData:
                                   keys={k: v[0] for k, v in ks.items()},
                                   window=WN.SPANS[WN.Window.LEARN], purpose="train", phases=list(phases),
                                   templates=("T0", V.JUDGED_HEAD))
+        lab, meta = self._charge_of_record(lab, meta, instrument, tf)
         feats, fmeta = F.load(self.features, instrument=instrument, tf=tf, years=years, tiers=tiers,
                               phases=list(phases), purpose="train", expect_keys={k: v[1] for k, v in ks.items()})
         self.used.setdefault("labels", {})[f"{instrument}:{tf}"] = {

@@ -2,6 +2,7 @@
 Card test 18 (i)-(iii), (v), (vi) here; (iv) (no label read) in tests/research/test_sr_v3_train.py."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -138,14 +139,19 @@ def test_constants_are_pinned() -> None:
                                                                             "15m": "gt4h", "4h": "gt4h"}
 
 
-def test_rho_inputs_read_the_committed_d12_file() -> None:
+def test_rho_inputs_read_the_committed_d12_file(tmp_path: Path) -> None:
+    """Gold reads the committed D-12 file as is; a pooled body (rho_u,inst, tau_a) only from a file stamped with the
+    xt-v1 exit freeze (D-12-xt): here the D-12 values under the stamp, to pin the reading."""
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256 as XT
+    xt = tmp_path / "rho.json"
+    xt.write_text(json.dumps({**json.loads(RHO_FILE.read_text()), "exit_freeze_sha": XT}))
     g = V.rho_inputs(RHO_FILE, body="gold", members=["XAUUSD"], tf="1m")
     assert g.rho_u_day == pytest.approx(0.14771) and g.rho_class == "gold" and g.source_sha256
     assert 0 <= g.x_day("adx14") <= 1 and "side" in g.defaults and g.x_day("side") == 1.0
-    p = V.rho_inputs(RHO_FILE, body="pooled", members=[*V.POOLED_MEMBERS], tf="15m")
+    p = V.rho_inputs(xt, body="pooled", members=[*V.POOLED_MEMBERS], tf="15m", freeze_sha=XT)
     assert p.rho_class == "pooled" and p.lambda_a == pytest.approx(1.35 / 0.06293 ** 2)
     assert p.rho_u_day == pytest.approx(V.RHO_DAY_PRIOR), "holds over 60 min keep the 0.25 floor"
-    two = V.rho_inputs(RHO_FILE, body="pooled", members=["XAUUSD", "EURUSD"], tf="1m")
+    two = V.rho_inputs(xt, body="pooled", members=["XAUUSD", "EURUSD"], tf="1m", freeze_sha=XT)
     assert two.rho_class == "gold+fx10" and two.lambda_a == pytest.approx(1.35 / 0.04057 ** 2)
     d = V.rho_inputs(RHO_FILE, body="gold", members=["XAUUSD"], tf="1d")
     assert set(d.defaults) == set(V.P30), "no tf-1d feature ICC is measured: the rev-3 floor"
