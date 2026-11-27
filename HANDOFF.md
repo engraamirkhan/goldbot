@@ -29,6 +29,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     <brokers>". A cell at 200 whose daily_review ran with no new row: WARN, FAIL 48 h after that run.
   - Counted over `HealthContext.learning_hosts` (enabled exploring accounts), cached 15 min; none or unreadable: clock.
   - `learning:arm_lifecycle_verdicts` stays on the clock: one verdict per settled candidate, no count threshold.
+- 2026-11-27 run manifest hardening (security follow-up to #494): a manifest's `builder` must be
+  `goldbot.<module>:<function>` or `tests.rebuild_builders:<function>` (public name, defined in that module); anything else (`os:system`, `json:loads`)
+  fails validation and `build` refuses it before any import. `ModelEntry.manifest_id` must be 64 lowercase hex.
+  `rebuild` refuses a `data_files` key that resolves outside the data root (`../x`) before hashing or fitting.
 - 2026-11-27 health `self_retrain` reasons lead with "next slot <slot> UTC" (computed from scheduler.self_retrain).
   - The late-start WARN fires only while the newest run is under a day old: the 11-24 run (slot 11-22,
     `run_if_never_run`) no longer reads "40.9 h late" every day, which the 4 h cycle took for "self_retrain stopped".

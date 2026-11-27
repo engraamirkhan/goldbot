@@ -66,7 +66,7 @@ class ModelEntry(Record):
     promoted_utc: UtcTimestamp | None = None
     notes: list[str] = Field(default_factory=list)
     recalibrations: list[dict[str, Any]] = Field(default_factory=list)    # minor versions: only the calibrator changed
-    manifest_id: str | None = None    # run manifest in models/manifests/ (None: a rule model or a pre-manifest fit)
+    manifest_id: str | None = Field(None, pattern=rm._HEX64)    # run manifest in models/manifests/ (None: a rule model or a pre-manifest fit)
     model_family: ModelFamily | None = None    # ADR 0106 decision 3, from the manifest
 
 

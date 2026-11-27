@@ -774,3 +774,56 @@ def test_a_long_lived_registry_entries_list_follows_a_rollback_in_another_proces
     assert [e.version for e in scheduler.entries if e.status == "champion"] == [b.version]
     assert rollback_main(["ag", "--models", str(root)]) == 0
     assert [e.version for e in scheduler.entries if e.status == "champion"] == [a.version]
+
+
+# ----------------------------------------------------------------- security follow-up to #494 (builder, ids, paths)
+@pytest.mark.parametrize("ref", ["os:system", "json:loads", "subprocess:run", "goldbotx.evil:f", "tests.other:f",
+                                 "goldbot:f", "goldbot..x:f"])
+def test_a_builder_outside_goldbot_or_the_test_builders_is_refused_before_import(
+        ref: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    imported: list[str] = []
+    monkeypatch.setattr(rm.importlib, "import_module", lambda name: imported.append(name))
+    with pytest.raises(rm.RebuildRefused, match="not an allowed builder"):
+        rm.build(ref, rm._spec(Path("."), [], {}, [0], T_END, T_END))
+    assert imported == []
+
+
+@pytest.mark.parametrize("ref", ["os:system", "json:loads"])
+def test_a_manifest_naming_a_builder_outside_goldbot_does_not_validate(tmp_path: Path, ref: str) -> None:
+    repo = git_repo(tmp_path / "repo")
+    with pytest.raises(ValueError, match="builder"):
+        rm.record(**manifest_fields(builder=ref), root=tmp_path / "m", repo=repo)
+
+
+def test_a_registry_entry_manifest_id_that_is_not_64_lowercase_hex_is_rejected() -> None:
+    from goldbot.research.model_registry import ModelEntry
+    base = {"version": "v1", "family": "f", "agent_id": "a", "status": "challenger", "created_utc": T_END,
+            "feature_version": "fv", "feature_names": [], "artefact": "a.pkl", "sha256": "0" * 64}
+    for bad in ("../x", "A" * 64, "a" * 63):
+        with pytest.raises(ValueError, match="manifest_id"):
+            ModelEntry.model_validate({**base, "manifest_id": bad})
+    assert ModelEntry.model_validate({**base, "manifest_id": "a" * 64}).manifest_id == "a" * 64
+    assert ModelEntry.model_validate(base).manifest_id is None
+
+
+def test_rebuild_refuses_a_data_file_key_that_escapes_the_data_root(tmp_path: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, m = _recorded(tmp_path)
+    outside = _rows(tmp_path / "outside.csv")
+    evil = m.model_copy(update={"data_files": {"../outside.csv": rm.file_sha256(outside)}})
+    monkeypatch.setattr(rm, "build", lambda *a, **k: pytest.fail("built from a path outside the data root"))
+    with pytest.raises(rm.RebuildRefused, match="outside the data root"):
+        rm.rebuild(evil, repo=repo, data_root=tmp_path / "data")
+
+
+def test_a_dunder_or_private_builder_function_is_refused() -> None:
+    for ref in ("goldbot.research.run_manifest:__class__", "goldbot.research.run_manifest:_builder"):
+        with pytest.raises(rm.RebuildRefused, match="not an allowed builder"):
+            rm._builder(ref)
+
+
+def test_a_goldbot_module_re_exporting_a_foreign_function_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rm, "loads", json.loads, raising=False)    # as `from json import loads` would
+    with pytest.raises(rm.RebuildRefused, match="defined in json"):
+        rm._builder("goldbot.research.run_manifest:loads")
+    assert rm._builder("tests.rebuild_builders:tiny_lightgbm").__name__ == "tiny_lightgbm"
