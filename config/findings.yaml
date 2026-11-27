@@ -482,7 +482,7 @@ findings:
     due: 2026-11-27
     source: cycle 2026-11-26 06:21 UTC health (FAIL job:broker_m1_copy, learning:broker_m1_copy after the 35da0698 deploy);
       repo unit fixed in fix/scheduler-raw-write, the brain needs the unit drop-in + scheduler restart (deploy does not reinstall units)
-    check: {fn: manual, params: {}}
+    check: {fn: health_ok, params: {names: ["job:broker_m1_copy", "learning:broker_m1_copy"]}}
 
   # ---------------------------------------------------------------- ADR 0106 lane 3 (reproducibility and model quality)
   - id: GM2-SEED-STABILITY
