@@ -1,15 +1,15 @@
 name: ci
 # Gates every PR and every push to main (docs/process/ci-performance-2026-10-18.md has the measurements and design).
 # The repo is public, so Actions minutes are free; the limits that matter are wall-clock (target: the whole run in
-# about 3 min) and the account's 20 concurrent jobs (this file peaks at exactly 20: smoke, lint, e2e x2, unit x6,
-# integration x10; `changes` has finished before the test shards start). Shape of a run:
+# about 3 min) and the account's 20 concurrent jobs (this file peaks at exactly 20: smoke, lint, e2e x2, unit x7,
+# integration x9; `changes` has finished before the test shards start). Shape of a run:
 #   changes            which jobs a PR needs (scripts/ci_changes.py); pushes to main always run everything
 #   smoke              ~1 min, always, in parallel with everything else: pre-commit (incl. the docs checks), ruff, uv
 #                      lock check, full test collection. Nothing waits for it; it fails the run (via `backend`).
 #   lint               mypy (cached), the API contract, then eslint, tsc and vitest (one job: fewer runners)
-#   backend-unit       6 shards x pytest-xdist -n auto
-#   backend-integration 10 shards x -n auto; known-heavy tests spread first (tests/shard_weights.json, about 135 s of
-#                      serial test time per shard, ~35 s at 4 workers); dry run in the lightest shard (5)
+#   backend-unit       7 shards x pytest-xdist -n auto
+#   backend-integration 9 shards x -n auto; known-heavy tests spread first (tests/shard_weights.json, about 140 s of
+#                      serial test time per shard, ~35 s at 4 workers); dry run in the lightest shard (7)
 #   e2e                one job per Playwright project (each has its own server); flaky = failed (failOnFlakyTests)
 #   backend, frontend  aggregates: the REQUIRED checks on main and the checks goldbot-deploy reads; keep these names
 #   deployable         main only, when both aggregates are green: commit status `goldbot/deployable` + the owner's
@@ -155,9 +155,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6]
     env:
-      GOLDBOT_SHARD: ${{ matrix.shard }}/6
+      GOLDBOT_SHARD: ${{ matrix.shard }}/7
       CHECK: backend-unit-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,9 +187,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8]
     env:
-      GOLDBOT_SHARD: ${{ matrix.shard }}/10
+      GOLDBOT_SHARD: ${{ matrix.shard }}/9
       CHECK: backend-integration-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +204,7 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         run: pytest -m "integration and not selftest" --last-failed --last-failed-no-failures none -q -n 0 --tb=short --junitxml="ci-out/rerun-$CHECK.xml" 2>&1 | tail -60 || true
       - name: dry-run
-        if: (success() || failure()) && matrix.shard == 9   # the lightest shard (tests/test_ci_workflow.py checks it)
+        if: (success() || failure()) && matrix.shard == 7   # the lightest shard (tests/test_ci_workflow.py checks it)
         run: set -o pipefail; python scripts/dry_run.py 1 2>&1 | tail -40 | tee ci-out/dry-run.txt || { echo dry-run >> "ci-out/failed-$CHECK.list"; exit 1; }
       - name: summary
         if: ${{ !cancelled() }}
