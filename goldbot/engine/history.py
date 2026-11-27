@@ -19,9 +19,12 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   break left 61 open minutes the table calls open, 20:58-23:02 UTC, and every 1h/4h close refused for weeks). A clean
   pull (`BrokerRates.closures`: a good bar pull with a bar before the span and one at or after its end) that has no
   minute, ticks or bars, in a run of at least CLOSURE_MIN_RUN minutes with an open minute in it covers that run; a run
-  the pull does not reach past (the live tail) never does. Covered spans are recorded in aux.db (`history_closures`)
-  and a restart starts with them (`load_closures`), so a closure stays one after the hole is older than the fill
-  reaches. A hole wholly older than the fill floor (backfill_max_days) that no pull covered, with at most
+  the pull does not reach past (the live tail) never does. A closure one pull found is kept in memory only (`pending`;
+  trading-safety review of #508: one pull trusts the terminal's local 1m history, which may hold a disconnect hole it
+  never resynced): it is pulled again once CONFIRM_AFTER has passed (or once it is CONFIRM_AGE old) and recorded in
+  aux.db (`history_closures`) only when that second clean pull finds the same empty run; a second pull that finds
+  minutes in it un-marks it (the hole is judged, and filled, again). A restart starts with the recorded closures
+  (`load_closures`), so a confirmed closure stays one after the hole is older than the fill reaches. A hole wholly older than the fill floor (backfill_max_days) that no pull covered, with at most
   `history_stale_gap_max_min` open minutes, is a closure for the refusal (`stale`, logged once per hole): no fill can
   ever reach it again; the old holes inside one decision frame together may hold at most that many (quant review). Off with either at 0; a hole inside the fill window is judged as before (fail closed).
 - A hole before the cut-over that the release cannot fill moves the cut-over back to the hole (`rebase`; vantage-demo
@@ -107,6 +110,8 @@ REREAD_WARN_S = 2.0                 # a store read (`StoreRead`, own thread) slo
 READ_HUNG_S = 120.0                 # a store read still running after this is logged once as an error
 RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
 WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
+CONFIRM_AFTER = pd.Timedelta(hours=1)   # a closure is recorded only when a pull this much later finds it again
+CONFIRM_AGE = pd.Timedelta(days=1)      # ... or when that second pull runs once the span ended this long ago
 CLOSURE_MIN_RUN = 15               # minutes without a broker minute that make a sub-day closure (`BrokerRates.closures`)
 
 Span = tuple[pd.Timestamp, pd.Timestamp]
@@ -331,6 +336,7 @@ class HistoryFill:
         self.pace = _Deadline(clk, sleep, pause_s=PAUSE_S, page_limit_s=PAGE_LIMIT_S, budget_s=budget_s)
         self.bars: list[pd.DataFrame] = []
         self.covered: list[Span] = []
+        self.pulled: list[Span] = []          # the spans pulled through without an error (`_confirm`)
         self.error: str | None = None
         self.done = threading.Event()
         self.thread = threading.Thread(target=self._run, name="history-fill", daemon=True)
@@ -355,6 +361,8 @@ class HistoryFill:
                                                sessions=self.sessions)
                 self.bars += bars
                 self.covered += covered
+                if not err:
+                    self.pulled.append(span)
                 if err:
                     self.error = err
                     break
@@ -505,6 +513,8 @@ class History:
         self.gaps: dict[str, dict[str, Any]] = {}
         self.covered: list[Span] = []
         self.stale_logged: set[tuple[pd.Timestamp, pd.Timestamp]] = set()    # `stale` holes already logged
+        self.pending: dict[Span, pd.Timestamp] = {}   # closure -> the fill that first found it (unrecorded: `_confirm`)
+        self.recorded: set[Span] = set()              # closures in aux.db `history_closures`
         self.gap_memo = GapMemo()             # window_gaps' holes already judged (GapMemo)
         self.cutover: pd.Timestamp | None = None
         self.broker: Any = None
@@ -557,7 +567,9 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     # closed or quiet): rebuilding its minute would duplicate the stored one and block entries with duplicate_ts
     eng._history_through = pd.Timestamp(eng.bars_1m["visible_at"].max()) if not eng.bars_1m.empty else None
     h.backfill["cutover"] = h.cutover.isoformat() if h.cutover is not None else None
-    h.covered += [s for s in load_closures(eng, lo) if s not in h.covered]
+    loaded = load_closures(eng, lo)
+    h.recorded.update(loaded)
+    h.covered += [s for s in loaded if s not in h.covered]
     if h.read_error is None:
         _judge_short(eng, now)
     start_fill(eng, now)
@@ -737,6 +749,9 @@ def start_fill(eng: Engine, now: pd.Timestamp) -> None:
                 spans.append(((max(g.start, floor), g.end), bool(g.start >= cut)))
             if h.cutover is not None and floor <= g.start < h.cutover and (rebase is None or g.start < rebase[0]):
                 rebase = (g.start, h.cutover)         # the release cannot fill it (reload_release ran): move the cut-over
+    for sp in [sp for sp in h.pending if sp[1] <= floor]:   # out of the fill's reach: never confirmed (stays in memory)
+        del h.pending[sp]
+    spans += [(sp, False) for sp in _confirm_due(h, now)]   # the second pull of a found closure (`_confirm`)
     if not spans:
         return
     h.fill = HistoryFill(h.broker, cfg.symbol, spans, page_ticks=cfg.backfill_page_ticks, budget_s=cfg.backfill_budget_s,
@@ -761,7 +776,7 @@ def absorb(eng: Engine) -> bool:
     new = [(max(a, cut), b) if cut is not None and a < cut < b else (a, b) for a, b in f.covered
            if cut is None or b > cut or not _kept_before(f, (a, b))]
     h.covered += [s for s in new if s not in h.covered]
-    save_closures(eng, new)
+    _confirm(eng, f, new)
     got = pd.concat(f.bars, ignore_index=True) if f.bars else pd.DataFrame()
     h.backfill.update({"bars": int(h.backfill["bars"]) + len(got), "error": f.error, "running": False})
     if got.empty:
@@ -868,9 +883,40 @@ def save_cutover(eng: Engine, cutover: pd.Timestamp) -> None:
                     type(exc).__name__)
 
 
+def _inside(span: Span, spans: list[Span]) -> bool:
+    return any(a <= span[0] and span[1] <= b for a, b in spans)
+
+
+def _confirm_due(h: History, now: pd.Timestamp) -> list[Span]:
+    """The found closures a second pull may confirm now: CONFIRM_AFTER after the first, or ended CONFIRM_AGE ago."""
+    return [sp for sp, first in h.pending.items() if now - first >= CONFIRM_AFTER or sp[1] <= now - CONFIRM_AGE]
+
+
+def _confirm(eng: Engine, f: HistoryFill, new: list[Span]) -> None:
+    """Trading-safety review of #508: a closure this fill found for the first time is pending (memory only); one a
+    second clean pull, due by `_confirm_due` at this fill's start, finds again is recorded (`save_closures`); a pending
+    one this fill pulled through without finding it (minutes there now) is un-marked: out of `covered`, a hole again."""
+    h = eng.history
+    at = h.last_fill if h.last_fill is not None else pd.Timestamp.now("UTC")
+    due = set(_confirm_due(h, at))
+    for sp in list(h.pending):
+        if _inside(sp, new):
+            if sp in due:
+                del h.pending[sp]
+                h.recorded.add(sp)
+                save_closures(eng, [sp])
+        elif _inside(sp, f.pulled):
+            del h.pending[sp]
+            h.covered = [c for c in h.covered if c != sp]
+            log.warning("history: the closure %s..%s was not found again by a second pull: judged as a hole", *sp)
+    for sp in new:
+        if sp not in h.recorded and sp not in h.pending:
+            h.pending[sp] = at
+
+
 def save_closures(eng: Engine, spans: list[Span]) -> None:
-    """Record the covered spans of a fill (aux.db `history_closures`, idempotent), so a restart keeps them after the
-    hole is older than the fill reaches. A failed write is logged; the next fill within the window covers it again."""
+    """Record confirmed closures (`_confirm`; aux.db `history_closures`, idempotent), so a restart keeps them after the
+    hole is older than the fill reaches. A failed write is logged; the next fills within the window confirm it again."""
     from goldbot.db.connection import Database, now_ns
     if not spans:
         return
@@ -1010,7 +1056,7 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
         absorb(eng)
         h = eng.history
         reread(eng, close_ts)                         # only while a failed or short read refuses entries
-        if h.gaps and (h.last_fill is None or close_ts - h.last_fill >= REFILL_EVERY):
+        if (h.gaps or _confirm_due(h, close_ts)) and (h.last_fill is None or close_ts - h.last_fill >= REFILL_EVERY):
             try:
                 reload_release(eng, close_ts)
             except Exception as exc:                  # noqa: BLE001 - fail closed (`read_failed`); the fill still runs

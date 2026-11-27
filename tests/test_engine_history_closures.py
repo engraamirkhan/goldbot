@@ -117,17 +117,59 @@ def _holed_store(tmp_path: Path) -> None:
     Store(tmp_path / "data").append("bars_1m", ticks_to_1m(HOLED), source="dukascopy")
 
 
-def test_a_covered_closure_is_kept_by_a_restart(tmp_path):
-    _holed_store(tmp_path)
-    eng = _engine(tmp_path)
-    eng.warm_start(NOW, Broker(_rates(HOLED)))
+def _absorbed(eng: Engine) -> None:
     assert eng.history.fill is not None and eng.history.fill.done.wait(60)
     history.absorb(eng)
-    assert history.window_gaps(eng, eng.bars_1m) == []
+
+
+def _first_pull(tmp_path: Path, broker: Broker) -> Engine:
+    _holed_store(tmp_path)
+    eng = _engine(tmp_path)
+    eng.warm_start(NOW, broker)
+    _absorbed(eng)
+    assert history.window_gaps(eng, eng.bars_1m) == []           # covered in memory at once
+    return eng
+
+
+def _restart_gaps(tmp_path: Path) -> list[history.HistoryGap]:
     again = _engine(tmp_path)
     again.warm_start(NOW, None)                               # no broker: nothing can be pulled again
-    assert any(lo <= HOLE[0] and HOLE[1] <= hi for lo, hi in again.history.covered)
-    assert history.window_gaps(again, again.bars_1m) == []
+    return history.window_gaps(again, again.bars_1m)
+
+
+def test_a_closure_one_pull_found_is_not_recorded_so_a_restart_refuses_the_hole_again(tmp_path):
+    """Trading-safety LOW on #508: one pull trusts the terminal's local 1m history, which can hold an un-resynced
+    disconnect hole; recording it would make that permanent."""
+    eng = _first_pull(tmp_path, Broker(_rates(HOLED)))
+    assert HOLE in eng.history.pending
+    [g] = _restart_gaps(tmp_path)
+    assert (g.start, g.end) == HOLE
+
+
+def test_a_closure_a_second_clean_pull_an_hour_later_confirms_is_kept_by_a_restart(tmp_path):
+    eng = _first_pull(tmp_path, Broker(_rates(HOLED)))
+    history.start_fill(eng, NOW + pd.Timedelta(minutes=30))     # not due yet: the closure is not re-pulled
+    assert eng.history.fill is None or HOLE not in [sp for sp, _ in eng.history.fill.spans]
+    if eng.history.fill is not None:
+        _absorbed(eng)
+    assert _restart_gaps(tmp_path) != []
+    history.start_fill(eng, NOW + pd.Timedelta(hours=1))
+    _absorbed(eng)
+    assert HOLE not in eng.history.pending
+    assert _restart_gaps(tmp_path) == []
+
+
+def test_a_second_pull_that_finds_bars_in_the_span_unmarks_the_closure(tmp_path):
+    broker = Broker(_rates(HOLED))
+    eng = _first_pull(tmp_path, broker)
+    broker.rates = _rates(TICKS)                              # the terminal resynced: the minutes are there
+    history.start_fill(eng, NOW + pd.Timedelta(hours=1))
+    _absorbed(eng)
+    assert HOLE not in eng.history.pending and HOLE not in eng.history.covered
+    [g] = history.window_gaps(eng, eng.bars_1m)
+    assert (g.start, g.end) == HOLE
+    [g] = _restart_gaps(tmp_path)
+    assert (g.start, g.end) == HOLE
 
 
 def test_without_the_record_the_restart_refuses_the_hole_again(tmp_path):
