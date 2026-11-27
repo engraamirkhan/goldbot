@@ -12,7 +12,7 @@
 #     smoke (pre-commit, ruff, collection) runs first, beside backend-lint (mypy, api-contract) ->
 #     frontend-checks; when smoke passes the unit and integration shards start (GOLDBOT_SHARD=i/N, same
 #     `pytest -m ...` as CI, random order, dry run in the integration shard CI names) and e2e runs per project after
-#     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard). CI runs 6 + 10 shards at once;
+#     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard). CI runs 7 + 9 shards at once;
 #     here at most CI_LOCAL_MAX_JOBS (default 12, the Mac's core count) background lanes run at a time and the rest
 #     wait for a free slot, so the machine is never oversubscribed. A failed smoke skips the shards and e2e (CI
 #     itself no longer waits for smoke: it runs beside the shards and fails the run).
