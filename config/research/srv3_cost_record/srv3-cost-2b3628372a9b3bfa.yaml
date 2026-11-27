@@ -3,6 +3,7 @@
 # here). Label-blind: built from broker fills (ECR) and Dukascopy quoted spreads; no label or outcome was read.
 version: srv3-cost-2b3628372a9b3bfa
 content_sha256: 2b3628372a9b3bfa10e84b8b63bbcc04dac152d198883430654b4bd509dfa684
+record_sha256: 416adbd878e2f3eab59512cc1c89ca3c2c2b263a64a9a67337afbccbec80bdc9
 frozen_utc: '2026-11-27'
 frozen_by: microstructure-researcher (D-3); quant-reviewer countersigns on the PR
 builder: 'scripts/research/sr_v3_cost_table.py (PR #512 at 17181d1b + the quant F4 slip_x patch of #515)'

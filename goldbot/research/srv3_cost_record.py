@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import io
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +41,7 @@ import pandas as pd
 import yaml
 
 from goldbot.base import FrozenRecord
+from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +77,8 @@ class ClassEntry(FrozenRecord):
 
 class CostRecord(FrozenRecord):
     version: str
-    content_sha256: str
+    content_sha256: str          # the builder's sha over the three tables + commission (`content_sha256`)
+    record_sha256: str           # this record's own canonical content (`record_sha256`): an in-place edit is refused
     frozen_utc: str
     frozen_by: str
     builder: str
@@ -105,41 +109,80 @@ class CostRecord(FrozenRecord):
         return pd.DataFrame([c.model_dump() for c in self.gold_cells])
 
 
+def content_sha256(cost: pd.DataFrame, swap: pd.DataFrame, spread: pd.DataFrame,
+                   commission_rt_usd_per_oz: Mapping[str, float]) -> str:
+    """The builder's content sha256 (scripts/research/sr_v3_cost_table.py, #512): the three tables' row hashes and the
+    round-trip commission per broker. Recomputed from the parsed file bytes by `verify`."""
+    h = hashlib.sha256()
+    for f in (cost, swap, spread):
+        h.update(pd.util.hash_pandas_object(f, index=False).to_numpy().tobytes())
+    h.update(json.dumps(dict(commission_rt_usd_per_oz), sort_keys=True).encode())
+    return h.hexdigest()
+
+
+def record_sha256(rec: CostRecord) -> str:
+    """sha256 of the record's canonical JSON without version, content_sha256 and record_sha256 (code review 1 on
+    #515): the version names the tables; this pins every other field of the record file."""
+    body = rec.model_dump(mode="json", exclude={"version", "content_sha256", "record_sha256"})
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 @functools.cache
-def _load(record_dir: Path) -> dict[str, CostRecord]:
+def _load(record_dir: Path, stamp: tuple[tuple[str, str], ...]) -> dict[str, CostRecord]:
     out: dict[str, CostRecord] = {}
-    for p in sorted(record_dir.glob("*.yaml")):
+    for name, _ in stamp:
+        p = record_dir / name
         rec = CostRecord.model_validate(yaml.safe_load(p.read_text()))
         if p.stem != rec.version or rec.version != "srv3-cost-" + rec.content_sha256[:16]:
-            raise ValueError(f"{p.name}: file name, version and content sha256 disagree")
+            raise CostRecordRefused(f"{p.name}: file name, version and content sha256 disagree")
+        if record_sha256(rec) != rec.record_sha256:
+            raise CostRecordRefused(f"{p.name}: record_sha256 {rec.record_sha256[:12]} is not the record's content "
+                                    f"({record_sha256(rec)[:12]}): edited in place, refused")
+        if rec.w2_bp != DC.RT_BP:
+            raise CostRecordRefused(f"{p.name}: w2_bp {rec.w2_bp} is not the W2 floor {DC.RT_BP}")
         out[rec.version] = rec
     return out
 
 
 def recorded() -> dict[str, CostRecord]:
     """Every frozen cost of record, by version."""
-    return dict(_load(RECORD_DIR))
+    stamp = tuple((p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(RECORD_DIR.glob("*.yaml")))
+    return dict(_load(RECORD_DIR, stamp))              # re-read whenever a record file's bytes change
 
 
-def _sha256(path: Path | str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def verify(version: str, paths: Mapping[str, Path | str]) -> CostRecord:
-    """The recorded cost of record `version`, if every table file at `paths` hashes (its bytes, here) to the
-    record's sha256; refuses otherwise (an unrecorded version is never a gate read, whatever its numbers)."""
+def _verified(version: str, paths: Mapping[str, Path | str]) -> tuple[CostRecord, dict[str, pd.DataFrame]]:
     rec = recorded().get(version)
     if rec is None:
         raise CostRecordRefused(f"cost version {version} is not recorded in {RECORD_DIR} (D-3)")
-    bad = [k for k in TABLE_FILES if k not in paths or not Path(paths[k]).is_file()
-           or _sha256(paths[k]) != rec.files[k]]
+    blobs = {k: Path(paths[k]).read_bytes() for k in TABLE_FILES if k in paths and Path(paths[k]).is_file()}
+    bad = [k for k in TABLE_FILES if k not in blobs or hashlib.sha256(blobs[k]).hexdigest() != rec.files[k]]
     if bad:
         raise CostRecordRefused(f"cost {version}: {', '.join(bad)} sha256 is not the record's: refused")
-    return rec
+    frames = {k: pd.read_parquet(io.BytesIO(b)) for k, b in blobs.items()}     # parsed from the hashed bytes
+    got = content_sha256(frames["cost_table"], frames["swap_table"], frames["gold_spread_table"],
+                         rec.commission_rt_usd_per_oz)
+    if got != rec.content_sha256:
+        raise CostRecordRefused(f"cost {version}: the files' content sha256 {got[:12]} is not the record's: refused")
+    drift = check_cells(frames["cost_table"], rec)
+    if drift:
+        raise CostRecordRefused(f"cost {version}: the record's gold cells are not the cost table's: {drift[:5]}")
+    _check_spread_sessions(frames["gold_spread_table"], rec)
+    return rec, frames
+
+
+def verify(version: str, paths: Mapping[str, Path | str]) -> CostRecord:
+    """The recorded cost of record `version`, if every table file at `paths` hashes (its bytes, read once here) to
+    the record's sha256, the parsed tables reproduce its content sha256 and gold cells, and the spread table's sessions
+    are the cells'; refuses otherwise (an unrecorded version is never a gate read, whatever its numbers)."""
+    return _verified(version, paths)[0]
+
+
+def _check_spread_sessions(spread: pd.DataFrame, rec: CostRecord) -> None:
+    want = {c.session for c in rec.gold_cells}
+    have = set(spread["session"].astype(str))
+    if have != want:
+        raise CostRecordRefused(f"cost {rec.version}: spread table sessions {sorted(have)} are not the cells' "
+                                f"{sorted(want)}: refused")
 
 
 def check_cells(cost_table: pd.DataFrame, rec: CostRecord) -> list[str]:
@@ -160,6 +203,9 @@ def check_cells(cost_table: pd.DataFrame, rec: CostRecord) -> list[str]:
 def _sessions(rows: pd.DataFrame) -> np.ndarray:
     from goldbot.data.calendar import DEFAULT_SESSIONS
     dec = pd.DatetimeIndex(pd.to_datetime(rows["decision_utc"], utc=True))
+    nat = np.asarray(dec.isna(), dtype=bool)
+    if nat.any():
+        raise CostRecordRefused(f"{int(nat.sum())} rows have a NaT decision_utc: no session, no charge")
     return np.asarray(DEFAULT_SESSIONS.session_label(dec)).astype(str) if len(dec) else np.array([], str)
 
 
@@ -191,6 +237,7 @@ def gold_row_bp(rows: pd.DataFrame, rec: CostRecord, spread: pd.DataFrame) -> np
     spread table); joined as-of on `available_utc`, so a row never sees its own month or later (point in time)."""
     entry = rows["entry"].to_numpy(float)
     sess = _sessions(rows)
+    _check_spread_sessions(spread, rec)
     dec = pd.to_datetime(rows["decision_utc"], utc=True).to_numpy()
     sp = np.full(len(rows), np.nan)
     for s_name, g in spread.sort_values("available_utc").groupby("session"):
@@ -201,6 +248,12 @@ def gold_row_bp(rows: pd.DataFrame, rec: CostRecord, spread: pd.DataFrame) -> np
         i = np.searchsorted(av, dec[m], side="right") - 1
         v = g["ub95_usd"].to_numpy(float)
         sp[m] = np.where(i >= 0, v[np.clip(i, 0, None)], np.nan)
+    gap = ~np.isfinite(sp)                     # code review 2 on #515: never let nanmax drop the era term
+    if gap.any():
+        raise CostRecordRefused(f"cost {rec.version}: {int(gap.sum())} gold rows have no finite era spread ub95 "
+                                f"(no complete prior month, or a NaN month), first decision_utc "
+                                f"{pd.DatetimeIndex(pd.to_datetime(rows['decision_utc'], utc=True))[gap][0]}: "
+                                "refused")
     per = []
     for b, comm in sorted(rec.commission_rt_usd_per_oz.items()):
         c = _cell_terms(rows, rec, b)
@@ -220,7 +273,10 @@ def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, paths: Ma
     any measured row whose charge is not the record's `gold_row_bp` within 1e-6 bp (higher too). Measured-class rows take cost_version = version and cost_rt_bp =
     rt_bp; every other row keeps its own and is blocked (D-3, named). Gold 1m/5m rows are blocked until their wait cost
     is pinned (D-15). Every existing block but the w2-point D-3 one is kept. The inputs are not mutated."""
-    rec = verify(version, paths)
+    rec, frames = _verified(version, paths)
+    if not rec.measured() <= {GOLD}:
+        raise CostRecordRefused(f"cost {version}: measures {sorted(rec.measured())}; only gold has a per-row charge "
+                                "of record (gold_row_bp): refused")
     rt = np.asarray(rt_bp, dtype=float)
     if rt.shape != (len(labels),):
         raise ValueError(f"rt_bp has {rt.shape} values for {len(labels)} label rows")
@@ -230,7 +286,7 @@ def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, paths: Ma
         r = rt[meas]
         if not np.isfinite(r).all():
             raise ValueError(f"cost {version}: a measured row's rt_bp is not finite")
-        want = gold_row_bp(labels[meas], rec, pd.read_parquet(paths["gold_spread_table"]))
+        want = gold_row_bp(labels[meas], rec, frames["gold_spread_table"])
         off = ~np.isclose(r, want, rtol=0, atol=CELL_TOL)
         if off.any():
             raise CostRecordRefused(f"cost {version}: {int(off.sum())} measured rows differ from the record's charge, "
@@ -254,5 +310,5 @@ def apply(labels: pd.DataFrame, meta: Mapping[str, Any], version: str, paths: Ma
     return out, m
 
 
-__all__ = ["D3_BLOCK", "RECORD_DIR", "TABLE_FILES", "WAIT_TFS", "ClassEntry", "CostRecord", "CostRecordRefused",
+__all__ = ["content_sha256", "record_sha256", "D3_BLOCK", "RECORD_DIR", "TABLE_FILES", "WAIT_TFS", "ClassEntry", "CostRecord", "CostRecordRefused",
            "GoldCell", "apply", "charge_floor", "check_cells", "gold_row_bp", "recorded", "verify"]

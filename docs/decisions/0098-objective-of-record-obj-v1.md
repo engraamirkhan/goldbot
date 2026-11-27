@@ -93,7 +93,7 @@ instruments whose class is measured (`goldbot/research/srv3_cost_record.py`; a p
 1m/5m stay blocked until the D-15 decision-to-fill wait cost is pinned). The cost version a unit is first read under
 is its version of record. A read of the same unit under another cost version is a new trial (K+1), and the first read
 stands. A holdout read needs a new version.
-- Recorded 2026-11-27: srv3-cost-2b3628372a9b3bfa, content sha256 2b3628372a9b3bfa10e84b8b63bbcc04dac152d198883430654b4bd509dfa684 (ECR ecr-2026-11-20.2, charge rule ub95, era term with slip_x per quant F4 on #515; measured: XAUUSD; prior: FX10, XAGUSD; wait-charged tfs: none). Frozen label-blind, before any sr-v3 label value was read under it. It supersedes the unread draft srv3-cost-bb199294 (era term without slippage), which was never recorded.
+- Recorded 2026-11-27: srv3-cost-2b3628372a9b3bfa, content sha256 2b3628372a9b3bfa10e84b8b63bbcc04dac152d198883430654b4bd509dfa684, record sha256 416adbd878e2f3eab59512cc1c89ca3c2c2b263a64a9a67337afbccbec80bdc9 (ECR ecr-2026-11-20.2, charge rule ub95, era term with slip_x per quant F4 on #515; measured: XAUUSD; prior: FX10, XAGUSD; wait-charged tfs: none). Frozen label-blind, before any sr-v3 label value was read under it. It supersedes the unread draft srv3-cost-bb199294 (era term without slippage), which was never recorded.
 
 **R-I. The filter's implementation: cost-offset form first.**
 - **Primary (pre-registered):** the offset form. The learner predicts E[gross R | x] (clipped at ±10 R; uniqueness

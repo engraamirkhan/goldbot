@@ -68,7 +68,7 @@ def make(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Make:
         swap.to_parquet(paths["swap_table"], index=False)
         spread.to_parquet(paths["gold_spread_table"], index=False)
         frames = [pd.read_parquet(p) for p in paths.values()]
-        sha = CR.content_sha256(*frames, base.commission_rt_usd_per_oz)
+        sha = CR.content_sha256(frames[0], frames[1], frames[2], base.commission_rt_usd_per_oz)
         rec = base.model_copy(update={"version": "srv3-cost-" + sha[:16], "content_sha256": sha, "files": {
             k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()}})
         rd = tmp_path / "records"
