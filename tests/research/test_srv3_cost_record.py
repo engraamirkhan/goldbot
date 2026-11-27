@@ -1,7 +1,7 @@
 """D-3 of the sr-v3 card: the frozen ub95 cost of record per class (W2-2, A9; ADR 0098 R-H). A label read is a gate
-read on cost only when its rows are charged a RECORDED cost of record (version + content sha256 + file sha256s), at
-least the record's own cell and ECR terms, and only for instruments whose class is measured; a prior keeps the D-3
-block (quant A4 on #482; quant review of #515: F1-F5, F7)."""
+read on cost only when its rows are charged EXACTLY the recorded cost of record (version + content sha256, the table
+files hashed from their bytes), and only for instruments whose class is measured; a prior keeps the D-3 block (quant
+A4 on #482; quant review of #515: F1-F5, F7, R1)."""
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
@@ -22,11 +23,38 @@ FROZEN_SPEC = D.SPEC.model_copy(update={"h_ref": "frozen-D4"})
 FX10 = ("AUDJPY", "AUDUSD", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY")
 TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 LONDON = "2015-03-02 10:00"                         # a London-session stamp (DEFAULT_SESSIONS)
+BIG = 5.0                                           # an era spread (USD) that binds every broker
 
 
 def _rec() -> CR.CostRecord:
     (rec,) = CR.recorded().values()
     return rec
+
+
+def _spread(months: pd.PeriodIndex, usd: float) -> pd.DataFrame:
+    return pd.DataFrame([{"session": s, "month": str(m), "ub95_usd": usd,
+                          "available_utc": (m + 1).start_time.tz_localize("UTC")}
+                         for s in ("asia", "london", "newyork") for m in months])
+
+
+@pytest.fixture
+def fx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CR.CostRecord, dict[str, Path], pd.DataFrame]:
+    """A recorded copy of the real record whose table files exist (tmp parquet): the record, the paths, the spread."""
+    spread = _spread(pd.period_range("2014-01", "2015-02", freq="M"), BIG)
+    paths = {"cost_table": tmp_path / "cost_table.parquet", "swap_table": tmp_path / "swap_table.parquet",
+             "gold_spread_table": tmp_path / "gold_spread_table.parquet"}
+    pd.DataFrame({"instrument": ["XAUUSD"], "rt_bp": [1.0]}).to_parquet(paths["cost_table"], index=False)
+    pd.DataFrame({"instrument": ["XAUUSD"], "month": ["2015-01"]}).to_parquet(paths["swap_table"], index=False)
+    spread.to_parquet(paths["gold_spread_table"], index=False)
+    sha = "a" * 64
+    rec = _rec().model_copy(update={"version": "srv3-cost-" + sha[:16], "content_sha256": sha, "files": {
+        k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()}})
+    rd = tmp_path / "records"
+    rd.mkdir()
+    (rd / f"{rec.version}.yaml").write_text(yaml.safe_dump(rec.model_dump(mode="json"), sort_keys=False))
+    monkeypatch.setattr(CR, "RECORD_DIR", rd)
+    got = CR.recorded()[rec.version]
+    return got, paths, spread
 
 
 def _labels(instrument: str = "XAUUSD", n: int = 4, tf: str = "15m", start: str = LONDON,
@@ -40,17 +68,19 @@ def _meta(lab: pd.DataFrame, spec: D.LabelSpec = FROZEN_SPEC) -> dict:
     return {"rows": len(lab), **D.gate_status(lab, spec)}
 
 
-def _apply(lab: pd.DataFrame, meta: dict, rt: np.ndarray | None = None, spec: D.LabelSpec = FROZEN_SPEC,
-           rec: CR.CostRecord | None = None) -> tuple[pd.DataFrame, dict]:
-    rec = rec or _rec()
-    rt = CR.charge_floor(lab, rec) + 1.0 if rt is None else rt
-    return CR.apply(lab, meta, rec.version, dict(rec.files), rt_bp=rt, spec=spec)
+def _charge(lab: pd.DataFrame, rec: CR.CostRecord, spread: pd.DataFrame) -> np.ndarray:
+    """The record's own charge on measured rows; prior rows get any value (they are never stamped)."""
+    meas = lab["instrument"].isin(sorted(rec.measured())).to_numpy()
+    rt = np.full(len(lab), 9.0)
+    rt[meas] = CR.gold_row_bp(lab[meas], rec, spread)
+    return rt
 
 
-def _spread(months: pd.PeriodIndex, usd: float) -> pd.DataFrame:
-    return pd.DataFrame([{"session": s, "month": str(m), "ub95_usd": usd,
-                          "available_utc": (m + 1).start_time.tz_localize("UTC")}
-                         for s in ("asia", "london", "newyork") for m in months])
+def _apply(fx: tuple, lab: pd.DataFrame, meta: dict, rt: np.ndarray | None = None,
+           spec: D.LabelSpec = FROZEN_SPEC) -> tuple[pd.DataFrame, dict]:
+    rec, paths, spread = fx
+    rt = _charge(lab, rec, spread) if rt is None else rt
+    return CR.apply(lab, meta, rec.version, paths, rt_bp=rt, spec=spec)
 
 
 # ---------------------------------------------------------------------------------------------- the record
@@ -72,7 +102,6 @@ def test_record_is_frozen_complete_and_label_blind() -> None:
 
 def test_slip_x_is_the_charged_ecr_cells_slippage() -> None:
     """slip_x = max(0, ECR charged - spread - commission) of the account the cell charges (the max charged)."""
-    import yaml
     rec = _rec()
     ecr = yaml.safe_load((ROOT / "config" / "engine_costs" / f"{rec.ecr_version}.yaml").read_text())
     for c in rec.gold_cells:
@@ -101,25 +130,27 @@ def test_record_is_on_an_adr_0098_recording_line_with_the_version_of_record_rule
             "another cost version is a new trial (K+1), and the first read stands.") in " ".join(adr.split())
 
 
-def test_verify_refuses_unrecorded_versions_and_any_file_sha_mismatch() -> None:
-    rec = _rec()
-    assert CR.verify(rec.version, dict(rec.files)) == rec
+def test_verify_hashes_the_files_itself_and_refuses_unrecorded_versions_or_other_bytes(fx: tuple,
+                                                                                         tmp_path: Path) -> None:
+    rec, paths, _ = fx
+    assert CR.verify(rec.version, paths) == rec
     with pytest.raises(CR.CostRecordRefused, match="not recorded"):
-        CR.verify(SUPERSEDED, dict(rec.files))
-    with pytest.raises(CR.CostRecordRefused, match="swap_table"):
-        CR.verify(rec.version, {**rec.files, "swap_table": "0" * 64})
+        CR.verify(SUPERSEDED, paths)
+    other = tmp_path / "other_spread.parquet"
+    _spread(pd.period_range("2014-01", "2015-02", freq="M"), 0.5).to_parquet(other, index=False)
     with pytest.raises(CR.CostRecordRefused, match="gold_spread_table"):
-        CR.verify(rec.version, {k: v for k, v in rec.files.items() if k != "gold_spread_table"})
+        CR.verify(rec.version, {**paths, "gold_spread_table": other})
+    with pytest.raises(CR.CostRecordRefused, match="swap_table"):
+        CR.verify(rec.version, {k: v for k, v in paths.items() if k != "swap_table"})
 
 
 # ---------------------------------------------------------------------------------------------- the per-row charge
 def test_era_term_charges_spread_plus_commission_plus_slip_x_when_it_binds() -> None:
     rec = _rec()
     lab = _labels(entry=1200.0)
-    big = 5.0                                                           # an era spread that binds every broker
-    got = CR.gold_row_bp(lab, rec, _spread(pd.period_range("2014-01", "2015-02", freq="M"), big))
+    got = CR.gold_row_bp(lab, rec, _spread(pd.period_range("2014-01", "2015-02", freq="M"), BIG))
     cells = {(c.broker, c.session, c.tf): c for c in rec.gold_cells}
-    want = max((big + rec.commission_rt_usd_per_oz[b] + cells[(b, "london", "15m")].slip_x_usd) / 1200.0 * 1e4
+    want = max((BIG + rec.commission_rt_usd_per_oz[b] + cells[(b, "london", "15m")].slip_x_usd) / 1200.0 * 1e4
                for b in rec.commission_rt_usd_per_oz)
     assert np.allclose(got, want, rtol=0, atol=1e-9)
 
@@ -134,44 +165,47 @@ def test_gold_row_bp_is_point_in_time() -> None:
 
 
 # ---------------------------------------------------------------------------------------------- apply (the gate)
-def test_w2_point_rows_block_until_charged_at_the_record() -> None:
+def test_w2_point_rows_block_until_charged_at_the_record(fx: tuple) -> None:
+    rec, _, spread = fx
     lab = _labels()
     meta = _meta(lab)
     assert meta["gate_eligible"] is False and any("(D-3)" in b for b in meta["gate_block"])
-    rt = CR.charge_floor(lab, _rec()) + 1.0
-    out, m2 = _apply(lab, meta, rt)
+    rt = CR.gold_row_bp(lab, rec, spread)
+    out, m2 = _apply(fx, lab, meta, rt)
     assert m2["gate_eligible"] is True and m2["gate_block"] == []
-    assert (out["cost_version"] == _rec().version).all() and np.allclose(out["cost_rt_bp"], rt)
-    assert m2["cost_of_record"] == {"version": _rec().version, "content_sha256": _rec().content_sha256,
+    assert (out["cost_version"] == rec.version).all() and np.allclose(out["cost_rt_bp"], rt)
+    assert m2["cost_of_record"] == {"version": rec.version, "content_sha256": rec.content_sha256,
                                     "measured": ["XAUUSD"], "rows_charged": len(lab), "rows_prior": 0}
     assert (lab["cost_version"] == "w2-point").all()              # the caller's frame is not mutated
 
 
-def test_f1_a_charge_below_the_records_own_terms_is_refused() -> None:
-    lab = _labels(tf="15m", start=LONDON, entry=1200.0)          # icm london 15m: ECR ub95 USD 1.49 -> ~12 bp
-    with pytest.raises(CR.CostRecordRefused, match="below"):
-        _apply(lab, _meta(lab), np.full(len(lab), DC.RT_BP))
-    floor = CR.charge_floor(lab, _rec())
-    assert (floor > 10).all()
-    with pytest.raises(CR.CostRecordRefused):
-        _apply(lab, _meta(lab), floor - 1e-3)
+def test_r1_only_the_records_exact_charge_is_stamped(fx: tuple) -> None:
+    rec, _, spread = fx
+    lab = _labels(tf="15m", start=LONDON, entry=1200.0)
+    exact = CR.gold_row_bp(lab, rec, spread)
+    floor = CR.charge_floor(lab, rec)                              # no slip_x / era term: a diagnostic only
+    assert (exact > floor + 1).all()                               # the era term binds in this fixture
+    for bad in (np.full(len(lab), DC.RT_BP), floor, exact + 1.0, exact - 1.0):
+        with pytest.raises(CR.CostRecordRefused, match=r"rows differ.*largest gap"):
+            _apply(fx, lab, _meta(lab), bad)
 
 
-def test_f1_apply_verifies_version_and_files_itself() -> None:
+def test_r1_apply_hashes_the_files_itself(fx: tuple, tmp_path: Path) -> None:
+    rec, paths, spread = fx
     lab = _labels()
-    rec = _rec()
-    rt = CR.charge_floor(lab, rec) + 1.0
+    rt = CR.gold_row_bp(lab, rec, spread)
     with pytest.raises(CR.CostRecordRefused, match="not recorded"):
-        CR.apply(lab, _meta(lab), SUPERSEDED, dict(rec.files), rt_bp=rt, spec=FROZEN_SPEC)
-    with pytest.raises(CR.CostRecordRefused, match="cost_table"):
-        CR.apply(lab, _meta(lab), rec.version, {**rec.files, "cost_table": "f" * 64}, rt_bp=rt, spec=FROZEN_SPEC)
+        CR.apply(lab, _meta(lab), SUPERSEDED, paths, rt_bp=rt, spec=FROZEN_SPEC)
+    forged = tmp_path / "forged_spread.parquet"
+    _spread(pd.period_range("2014-01", "2015-02", freq="M"), 0.1).to_parquet(forged, index=False)
+    with pytest.raises(CR.CostRecordRefused, match="gold_spread_table"):
+        CR.apply(lab, _meta(lab), rec.version, {**paths, "gold_spread_table": forged}, rt_bp=rt, spec=FROZEN_SPEC)
 
 
-def test_f2_every_prior_class_row_stays_blocked_whatever_its_cost_version() -> None:
-    fx = _labels("EURUSD").assign(cost_version="srv3-cost-old")
-    lab = pd.concat([_labels("XAUUSD"), fx], ignore_index=True)
-    meta = _meta(lab)
-    out, m2 = _apply(lab, meta)
+def test_f2_every_prior_class_row_stays_blocked_whatever_its_cost_version(fx: tuple) -> None:
+    other = _labels("EURUSD").assign(cost_version="srv3-cost-old")
+    lab = pd.concat([_labels("XAUUSD"), other], ignore_index=True)
+    out, m2 = _apply(fx, lab, _meta(lab))
     assert m2["gate_eligible"] is False
     assert any("EURUSD" in b and "prior" in b for b in m2["gate_block"])
     assert (out.loc[out["instrument"] == "EURUSD", "cost_version"] == "srv3-cost-old").all()
@@ -179,37 +213,33 @@ def test_f2_every_prior_class_row_stays_blocked_whatever_its_cost_version() -> N
 
 
 @pytest.mark.parametrize("tf", ["1m", "5m"])
-def test_f3_gold_1m_5m_stay_blocked_until_the_d15_wait_cost_is_pinned(tf: str) -> None:
+def test_f3_gold_1m_5m_stay_blocked_until_the_d15_wait_cost_is_pinned(fx: tuple, tf: str) -> None:
     lab = _labels(tf=tf)
-    _, m2 = _apply(lab, _meta(lab))
+    _, m2 = _apply(fx, lab, _meta(lab))
     assert m2["gate_eligible"] is False
-    assert f"XAUUSD {tf}: decision-to-fill wait cost not in {_rec().version} (D-15)" in m2["gate_block"]
-    rec = _rec().model_copy(update={"wait_charged_tfs": (tf,)})
-    with pytest.raises(CR.CostRecordRefused):                    # a record edited in memory is not the record
-        CR.apply(lab, _meta(lab), rec.version, {**rec.files, "cost_table": "e" * 64},
-                 rt_bp=CR.charge_floor(lab, rec) + 1, spec=FROZEN_SPEC)
+    assert f"XAUUSD {tf}: decision-to-fill wait cost not in {fx[0].version} (D-15)" in m2["gate_block"]
 
 
-def test_d4_block_stays_when_only_the_cost_is_frozen() -> None:
+def test_d4_block_stays_when_only_the_cost_is_frozen(fx: tuple) -> None:
     lab = _labels()
-    _, m2 = _apply(lab, _meta(lab, D.SPEC), spec=D.SPEC)
+    _, m2 = _apply(fx, lab, _meta(lab, D.SPEC), spec=D.SPEC)
     assert m2["gate_eligible"] is False
     assert not any("(D-3)" in b for b in m2["gate_block"]) and sum("(D-4)" in b for b in m2["gate_block"]) == 1
 
 
-def test_f5_every_other_existing_block_survives_apply() -> None:
+def test_f5_every_other_existing_block_survives_apply(fx: tuple) -> None:
     lab = _labels()
     meta = _meta(lab)
     meta["gate_block"] = [*meta["gate_block"], "tiers: something else blocks this read"]
-    _, m2 = _apply(lab, {**meta, "gate_eligible": False})
+    _, m2 = _apply(fx, lab, {**meta, "gate_eligible": False})
     assert m2["gate_eligible"] is False and m2["gate_block"] == ["tiers: something else blocks this read"]
 
 
 @pytest.mark.parametrize("bad", [np.full(4, np.nan), np.full(3, 30.0)])
-def test_apply_refuses_a_malformed_charge(bad: np.ndarray) -> None:
+def test_apply_refuses_a_malformed_charge(fx: tuple, bad: np.ndarray) -> None:
     lab = _labels()
     with pytest.raises((ValueError, CR.CostRecordRefused)):
-        _apply(lab, _meta(lab), bad)
+        _apply(fx, lab, _meta(lab), bad)
 
 
 def test_check_cells_matches_the_builders_table_and_names_any_drift() -> None:
