@@ -27,6 +27,8 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      from its own entry value, so with a constant spread it equals the mid move. The spread is charged once, in
      cost(x).
    - d0 = Wilder ATR14 of the tf's mid bars at the decision, x sqrt(H/h_ref), with **h_ref = H until D-4 freezes it**.
+     D-4 froze it on 2026-11-27 (sr-v3 rev 10, `xt-v1`): h_ref = H of the tf, so the factor is 1 and no value
+     changes; `LabelSpec.h_ref` is the per-tf seconds map and `gate_status` checks `exit_freeze_hash`.
      d0 is floored at 1.5 x the median 1m true range over the 1,440 minutes up to the decision.
    - R is the template's own initial stop (T0: d0).
    - Fills are conservative:
