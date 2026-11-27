@@ -4,12 +4,15 @@
                  or it trained on 0 labels with features ("learning must never be silently off": memory
                  learning-never-silently-off, verify-learning-outputs). Also WARN, judged by output (S5, plan
                  2026-11-25 W1-C; `extra_warnings`): the newest run started more than its max_late_hours after its
-                 slot (11-24: 40.9 h late against 6 h, reported ok), it trained on under MIN_LABEL_USE of its labels
+                 slot (11-24: 40.9 h late against 6 h, reported ok) and is still recent (LATE_WARN_FOR: a late run
+                 is news for a day, after that the WARN read as "self_retrain stopped", SRE 11-27), it trained on under MIN_LABEL_USE of its labels
                  (11-20: 812 of 9,289), a broker had 0 labels (vantage), or 0 models are active (nothing it learnt
                  reaches a decision). WARN only, never FAIL: an honest gate that activates nothing must not be pushed
                  to loosen (statistical gates are not limits); a run that stops altogether FAILs through
                  learning:self_retrain. The reason names the run it comes from; these WARNs are expected until the
                  label unlock (#451, plan W1-D) and sr-v3 (W3-2) land. Otherwise ok, with the label, feature, arm, weight and active-model counts.
+                 While the job is on, every reason leads with "next run <slot> UTC" (scheduler.self_retrain), so
+                 a WARN about an old run is never read as a stopped job.
 
 Present once the job has stored a run, or whenever the job is switched off; before the first run, job:self_retrain
 (the scheduler's check, `run_if_never_run`) says whether the job ran. Reads aux.db read-only. No order path.
@@ -30,6 +33,7 @@ if TYPE_CHECKING:
 
 NAME = "self_retrain"
 MIN_LABEL_USE = 0.5     # SRE plan item 1: "labels-used/labels-available is under 50%" warns
+LATE_WARN_FOR = pd.Timedelta(days=1)   # SRE 11-27: a late start WARNs only while the run is this recent
 
 
 def _brain(ctx: HealthContext) -> bool:
@@ -57,21 +61,28 @@ def check_self_retrain(ctx: HealthContext) -> Check | None:
         return None
     status, reason = sr.health(runs, ctx.now, enabled=enabled)
     sch = getattr(ctx.settings.scheduler, "self_retrain", None)
-    extra = extra_warnings(runs, max_late_h=float(sch.max_late_hours) if sch is not None else 6.0) if enabled else []
+    head = ""
+    if enabled and sch is not None:
+        from goldbot.ops.scheduler import schedule_of
+        head = f"next run {schedule_of(sch).next_slot(ctx.now):%Y-%m-%d %H:%M} UTC; "
+    extra = (extra_warnings(runs, max_late_h=float(sch.max_late_hours) if sch is not None else 6.0, now=ctx.now)
+             if enabled else [])
     if extra:          # dated (SRE review of #456 M4): the run they come from, so a stale WARN reads as one
         run = pd.Timestamp(max(int(r["run_ns"]) for r in runs), unit="ns", tz="UTC")
         return Check(name=NAME, status="warn",
-                     reason=(f"run of {run:%Y-%m-%d}: " + "; ".join(extra) + f"; {reason}")[:900])
-    return Check(name=NAME, status="ok" if status == "ok" else "warn", reason=reason[:600])
+                     reason=(head + f"run of {run:%Y-%m-%d}: " + "; ".join(extra) + f"; {reason}")[:900])
+    return Check(name=NAME, status="ok" if status == "ok" else "warn", reason=(head + reason)[:650])
 
 
-def extra_warnings(runs: Sequence[Mapping[str, Any]], *, max_late_h: float) -> list[str]:
-    """The output rules of the newest run (module docstring), each a short reason; [] when none applies."""
+def extra_warnings(runs: Sequence[Mapping[str, Any]], *, max_late_h: float, now: pd.Timestamp) -> list[str]:
+    """The output rules of the newest run (module docstring), each a short reason; [] when none applies. The late
+    start counts only while the newest run is within LATE_WARN_FOR of `now`."""
     if not runs:
         return []
     out: list[str] = []
     late_h = max((int(r["run_ns"]) - int(r["slot_ns"])) / 3.6e12 for r in runs)
-    if late_h > max_late_h:
+    recent = int(now.value) - max(int(r["run_ns"]) for r in runs) <= LATE_WARN_FOR.value
+    if recent and late_h > max_late_h:
         out.append(f"newest run started {late_h:.1f} h late (> {max_late_h:g} h)")
     labels = sum(int(r.get("n_labels") or 0) for r in runs)
     used = sum(int(r.get("n_with_features") or 0) for r in runs)

@@ -30,6 +30,8 @@ switch failing on any one of them):
                    and a FAIL would push to loosen it (statistical gates are not limits). Also from the database (ADR
                    0101, trading-safety F5 of #463): the eligible candidates (an arm with a served self-retrain model,
                    decided after its cutoff) and how many carry a score; WARN below MIN_ELIGIBLE_SCORED of them.
+                   The reason names the active/shadow models shadow scoring refuses for missing provenance (no
+                   model_sha256 or feature_versions: trained before migration 45), so 0 % scored says why (SRE 11-27).
 
 Reads aux.db read-only (`mode=ro`), the watcher files, state/deploys.jsonl and git ancestry (read-only, cached). No
 order path, no write.
@@ -155,6 +157,11 @@ class Influence(FrozenRecord):
     # those that carry a score. eligible - eligible_scored are the ones lost (a full queue, an expired job, a restart)
     eligible: int = 0
     eligible_scored: int = 0
+    # SRE 11-27: active or shadow self-retrain models with recorded provenance (model_sha256 and feature_versions)
+    # and those without, which shadow scoring refuses (goldbot/engine/shadow_scoring.py `_provenance_problem`): rows
+    # trained before migration 45. The reason names them so "learning reaches nothing" says why
+    served: int = 0
+    refused_no_provenance: int = 0
 
     @property
     def scored_pct(self) -> float:
@@ -242,8 +249,16 @@ def influence(con: sqlite3.Connection, *, since: pd.Timestamp, until: pd.Timesta
             "AND m.model_sha256 IS NOT NULL AND m.cutoff_ns < o.decision_ns)",
             (int(since.value), int(until.value))).fetchone()
         eligible, eligible_scored = int(got[0] or 0), int(got[1] or 0)
+        prov = con.execute(
+            "SELECT SUM(CASE WHEN model_sha256 IS NOT NULL AND feature_versions IS NOT NULL "
+            "AND feature_versions NOT IN ('', '[]') THEN 1 ELSE 0 END), COUNT(*) FROM self_retrain_models "
+            "WHERE status IN ('active', 'shadow')").fetchone()
+        served = int(prov[0] or 0)
+        refused = int(prov[1] or 0) - served
+    else:
+        served = refused = 0
     return Influence(n=int(row[0] or 0), scored=int(row[1] or 0), changed=int(row[2] or 0), eligible=eligible,
-                     eligible_scored=eligible_scored)
+                     eligible_scored=eligible_scored, served=served, refused_no_provenance=refused)
 
 
 def _contains_change(to: str, repo: Path) -> bool | None:
@@ -460,6 +475,9 @@ def check_model_influence(ctx: HealthContext) -> Check:
     line = (f"{inf.scored} of {inf.n} candidates in {win} scored by a model ({inf.scored_pct:.1f} % scored), "
             f"{inf.changed} changed ({inf.changed_pct:.1f} %); {inf.eligible_scored} of {inf.eligible} eligible "
             "(an arm with a served model, decided after its cutoff) scored")
+    if inf.refused_no_provenance:
+        line += (f"; {inf.served} served: {inf.refused_no_provenance} rows refused (no provenance, trained before "
+                 "migration 45)")
     if inf.scored == 0:
         return Check(name="model_influence", status="warn",
                      reason=f"{line}: no model touches a decision (learning reaches nothing)")

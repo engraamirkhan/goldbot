@@ -215,6 +215,16 @@ def test_influence_counts_scored_and_changed_decisions(tmp_path):
     assert c.status == "ok"
 
 
+def test_influence_names_the_models_refused_for_missing_provenance(tmp_path):
+    # the 11-24 self_retrain_models rows predate migration 45: no model_sha256/feature_versions, so shadow scoring
+    # refuses them (goldbot/engine/shadow_scoring.py) and "learning reaches nothing" must say why
+    _seed_today(tmp_path)                   # one shadow model, m1, without provenance
+    _obs(_aux(tmp_path), 40, TODAY)
+    c = health.check_model_influence(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
+    assert c.status == "warn"
+    assert "0 served: 1 rows refused (no provenance, trained before migration 45)" in c.reason
+
+
 def test_influence_is_read_at_most_every_15_minutes(tmp_path):
     db = _aux(tmp_path)
     _obs(db, 10, TODAY)
@@ -238,7 +248,7 @@ def test_self_retrain_warns_on_a_late_run_low_label_use_a_broker_with_no_rows_an
     _seed_today(tmp_path)
     c = health.check_self_retrain(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
     assert c is not None and c.status == "warn"
-    assert c.reason.startswith("run of 2026-11-24: ")
+    assert c.reason.startswith("next run 2026-11-29 15:00 UTC; run of 2026-11-24: ")
     assert "40.9 h late" in c.reason
     assert "8.7 % of labels" in c.reason
     assert "vantage: 0 labels" in c.reason
@@ -249,7 +259,35 @@ def test_self_retrain_extra_rules_stay_quiet_on_a_clean_run():
     slot = pd.Timestamp("2026-11-29 15:00", tz="UTC")
     run = {"broker": "icm", "status": "ok", "slot_ns": _ns(slot), "run_ns": _ns(slot + pd.Timedelta(minutes=20)),
            "n_labels": 1000, "n_with_features": 900, "n_active": 1}
-    assert sr_check.extra_warnings([run], max_late_h=6.0) == []
+    assert sr_check.extra_warnings([run], max_late_h=6.0, now=slot + pd.Timedelta(hours=1)) == []
+
+
+def test_a_late_first_run_stops_warning_after_a_day_and_the_reason_names_the_next_run(tmp_path):
+    # SRE 11-27: the 11-24 run (slot 11-22, run_if_never_run) read "40.9 h late" every day, and the 4 h cycle report
+    # took it for "self_retrain stopped"; the next slot is Sun 11-29 15:00 UTC
+    _seed_today(tmp_path)
+    now = pd.Timestamp("2026-11-27 09:00", tz="UTC")
+    c = health.check_self_retrain(make_ctx(tmp_path, now=now, settings=_today_settings()))
+    assert c is not None
+    assert c.reason.startswith("next run 2026-11-29 15:00 UTC; ")
+    assert "late" not in c.reason
+
+
+def test_an_ok_self_retrain_reason_leads_with_the_next_run(tmp_path):
+    slot = pd.Timestamp("2026-11-29 15:00", tz="UTC")
+    db = _aux(tmp_path)
+    with db.write() as c:
+        c.execute("INSERT INTO self_retrain_runs (run_id, broker, spec_version, slot_ns, cutoff_ns, run_ns, status, "
+                  "n_labels, n_with_features, n_features, n_weights, n_arms, n_active, n_shadow, n_demoted, detail) "
+                  "VALUES ('r1', 'icm', 'sr-v2', ?, ?, ?, 'ok', 1000, 900, 40, 41, 1, 1, 0, 0, '{}')",
+                  (_ns(slot), _ns(slot) - 10 * NS, _ns(slot + pd.Timedelta(minutes=20))))
+        c.execute("INSERT INTO self_retrain_models (model_version, run_id, broker, arm_id, spec_version, status, "
+                  "status_reason, gate_pass, cutoff_ns, activation_ns, n_train, n_features, n_weights, model, oos, "
+                  "recorded_ns, status_ns) VALUES ('m1', 'r1', 'icm', 'RBR15', 'sr-v2', 'active', 'gate', 1, ?, ?, "
+                  "132, 40, 41, '{}', '{}', ?, ?)", (_ns(slot) - 10 * NS, _ns(slot) + 10 * NS, _ns(slot), _ns(slot)))
+    chk = health.check_self_retrain(make_ctx(tmp_path, now=slot + pd.Timedelta(hours=2), settings=_today_settings()))
+    assert chk is not None and chk.status == "ok"
+    assert chk.reason.startswith("next run 2026-12-06 15:00 UTC; last run 2026-11-29 15:20 UTC")
 
 
 # ---------------------------------------------------------------------------------------------- stop coverage
