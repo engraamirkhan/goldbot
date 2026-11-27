@@ -186,10 +186,12 @@ class StoreData:
         return Path(self.weights or Path(self.labels) / "_weights") / instrument / f"{tf}.parquet"
 
     def _weights(self, instrument: str, tf: str) -> pd.DataFrame:
+        from goldbot.data import holdout_guard
         from goldbot.research import dense_labels as D
         p = self._weights_path(instrument, tf)
         self.used.setdefault("weights", {})[f"{instrument}:{tf}"] = V.file_sha256(p)
-        return D._typed(pd.read_parquet(p))[["phase", "decision_utc", "u_tf", "w"]]
+        w = D._typed(pd.read_parquet(p))[["phase", "decision_utc", "u_tf", "w"]]
+        return holdout_guard.cut(w, what=f"sr-v3 weights {instrument} {tf}", col="decision_utc")
 
     def events(self, instrument: str, tf: str, years: Sequence[int]) -> pd.DataFrame:
         """Stage 0's label-blind events: the skeleton's T2 long rows (one per bar), with u, the label window's
