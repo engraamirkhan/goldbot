@@ -83,8 +83,9 @@ def test_a_tiny_live_engine_never_takes_the_exception(tmp_path, phase_file):
     assert live.risk_per_trade == s.risk.risk_per_trade_tiny_live and live.min_lot_risk_cap is None
     eng = Engine(EngineConfig(account_id="icm-live", broker_name="icm", state_dir=str(tmp_path)), PaperBroker(), [], {},
                  limits=live)
-    # £10,000 at tiny-live: the 0.01 lot (0.08%) is above 1.2 x 0.1% x 0.25 but inside a 1% cap; still refused
-    d = eng.gate.check(_gbp_intent(mult=0.25), _state(10_000.0))
+    # £10,000 at tiny-live: the 0.01 lot (0.08%) is above 1.2 x 0.1% x 0.25 but inside a 1% cap; still refused.
+    # A live account is real money (ADR 0106), which needs the open risk known: none open
+    d = eng.gate.check(_gbp_intent(mult=0.25), _state(10_000.0, open_risk=0.0))
     assert not d.allowed and d.reasons == ["min_lot_exceeds_risk"]
     assert engine_limits(s, _acc("demo")).min_lot_risk_cap == 0.01        # the demo (normal risk) keeps it
 

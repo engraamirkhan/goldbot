@@ -313,6 +313,23 @@ REASONS: dict[str, Reason] = {
                             f"{NOTHING}: refused here by design.", "wait"),
     "pilot_lot_unavailable": _r("The broker's smallest trade is larger than the pilot's lot",
                                 "Check the symbol's minimum lot in the MT5 terminal.", "act"),
+    # ADR 0106 decision 2: the owner's real-money limits (goldbot/risk/real_money.py), real money only
+    "rm_daily_stop": _r("Real money: today's loss reached 2%, no new trades for the rest of the day",
+                        f"{NOTHING}: it resets at the start of the next day, even if prices recover; open trades keep "
+                        "their exits.", "wait"),
+    "rm_day_start_unknown": _r("Real money: today's starting balance isn't known, so the 2% daily stop can't be checked",
+                               "Usually clears at the next account reading; check the Health tab if it lasts.", "act"),
+    "rm_drawdown_halt": _r("Real money: 15% below the account's high, trading stopped",
+                           "The 15% review starts (ADR 0106); open trades keep their exits.", "act"),
+    "rm_risk_per_trade": _r("Real money: this trade would risk more than 1% of the balance",
+                            f"{NOTHING}: refused here by design (a tighter stop or a larger balance fits).", "wait"),
+    "rm_daily_projected": _r("Real money: even the smallest trade could take the day past its 2% loss stop",
+                             f"{NOTHING}: a new entry is possible once open risk falls; it resets the next day.",
+                             "wait"),
+    "rm_volume": _r("Real money: this trade is larger than 1% of the market's daily volume",
+                    f"{NOTHING}: refused here by design.", "wait"),
+    "rm_volume_unknown": _r("Real money: the market's daily volume isn't on record, so its trades are refused",
+                            "The data team fills config/data/adv_reference.yaml (value, source, date).", "act"),
 }
 _ORDER = {code: i for i, code in enumerate(REASONS)}
 # BACKLOG 43 (ui-ux review 2026-10-16): a strategy's last refused trade (`entry_refusals`, gate.PER_TRADE_REFUSALS) is
@@ -331,6 +348,10 @@ REFUSAL_TEXT: dict[str, str] = {
     "pilot_stop_above_cap": "its stop would be wider than the pilot's $4",
     "pilot_trade_risk_above_cap": "it would risk more than the pilot's per-trade cap",
     "pilot_stop_projected": "this trade could take the pilot past its total loss limit",
+    "rm_risk_per_trade": "it would risk more than 1% of the balance (real money)",
+    "rm_daily_projected": "even the smallest trade could take the day past its 2% loss stop (real money)",
+    "rm_volume": "it is larger than 1% of the market's daily volume (real money)",
+    "rm_volume_unknown": "the market's daily volume isn't on record (real money)",
 }
 # the reason in a card refused at approval (the Telegram line and the dashboard note, docs/ux/order-not-confirmed.md):
 # a per-trade refusal's words, or an account reason's own; any other code in plain words, never the raw code
@@ -346,7 +367,8 @@ API_ONLY = frozenset({"engine_not_reporting", "status_unknown", "entry_reasons_m
 WINDOW_CODES = frozenset({"tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable"})
 # worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
 FUTURE = frozenset({"bridge_incompatible"})
-RESETS_DAILY = frozenset({"combined_daily_cap", "combined_daily_loss_abs", "daily_cap", "daily_loss_limit_abs"})
+RESETS_DAILY = frozenset({"combined_daily_cap", "combined_daily_loss_abs", "daily_cap", "daily_loss_limit_abs",
+                          "rm_daily_stop"})
 RESETS_WEEKLY = frozenset({"combined_weekly_cap", "weekly_cap"})
 _SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
 

@@ -607,6 +607,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/autodisc_register.py", "journal", "Registration"):
         "strict: the hash-chained arm registration journal (ADR 0058); a row that does not read must refuse",
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/risk/real_money.py", "load_adv_reference", "AdvReference"):
+        "strict: config/data/adv_reference.yaml, versioned config (ADR 0106); an entry that does not validate gives no "
+        "reference, so real-money entries are refused rm_volume_unknown (fail closed)",
     ("goldbot/research/run_manifest.py", "load", "RunManifest"):
         "strict: a content-addressed run manifest (ADR 0109); manifest_id is the hash of the body, so dropping an "
         "unknown key would change what was recorded and a manifest that does not read must refuse serving",

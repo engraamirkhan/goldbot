@@ -55,11 +55,13 @@ from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import RiskSettings
 from goldbot.data.timeutil import opportunity_day
 from goldbot.instruments import GOLD, spec_of
+from goldbot.risk.real_money import (  # ADR 0106 decision 2's four limits, from the one module that sets them
+    RM_DAILY_STOP,
+    RM_DD_HALT,
+    RM_MAX_ADV_SHARE,
+    RM_MAX_RISK_PER_TRADE,
+)
 
-RM_MAX_RISK_PER_TRADE: Final = 0.01      # "risk per trade <= 1 % of equity"
-RM_DAILY_STOP: Final = 0.02              # "daily loss limit 2 % of equity then stop for the day"
-RM_DD_HALT: Final = 0.15                 # "max drawdown halt at 15 %"
-RM_MAX_ADV_SHARE: Final = 0.01           # "order size <= about 1 % of the asset's daily volume"
 EPS: Final = 1e-12
 
 class AsIfLimits(FrozenRecord):
