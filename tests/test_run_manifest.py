@@ -758,3 +758,19 @@ def test_the_engine_shadow_set_returns_within_its_bound_while_another_process_ho
         holder.wait()
     out = rule_shadow_set(tmp_path / "models", tmp_path / "population.json")     # lock free: challengers created
     assert out and all(isinstance(m, RuleModel) for _, m in out.values())
+
+
+def test_a_long_lived_registry_entries_list_follows_a_rollback_in_another_process(tmp_path: Path) -> None:
+    """PR #494 round 3 code review: jobs read `ctx.models.entries` directly (recalibrate, drift_watch, limits); it now
+    re-reads registry.json when another writer changed it, as the query methods do."""
+    root = tmp_path / "models"
+    reg = ModelRegistry(root)
+    t0 = pd.Timestamp("2026-11-01", tz="UTC")
+    a = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0)
+    reg.promote(a.version, now=t0)
+    b = reg.add_challenger(RuleModel(rule="box"), family="box", agent_id="ag", backtest={}, now=t0 + pd.Timedelta(days=1))
+    reg.promote(b.version, now=t0)
+    scheduler = ModelRegistry(root)
+    assert [e.version for e in scheduler.entries if e.status == "champion"] == [b.version]
+    assert rollback_main(["ag", "--models", str(root)]) == 0
+    assert [e.version for e in scheduler.entries if e.status == "champion"] == [a.version]

@@ -88,9 +88,16 @@ class ModelRegistry:
         self.path = self.root / "registry.json"
         self.manifests = self.root / "manifests"
         self._held = False                # this process holds registry.lock (inside `locked` or `_write`)
-        self.entries: list[ModelEntry] = []
+        self._entries: list[ModelEntry] = []      # read through `entries`, which re-reads a changed file
         self._sig: tuple[int, int, int] | None = None
         self._load()
+
+    @property
+    def entries(self) -> list[ModelEntry]:
+        """Every entry, as registry.json holds it now (re-read when another writer changed it). Inside a change
+        (`_write`) the list being changed. PR #494 round 3: jobs read this list directly."""
+        self._fresh()
+        return self._entries
 
     def _stat(self) -> tuple[int, int, int] | None:
         try:
@@ -102,7 +109,7 @@ class ModelRegistry:
     def _load(self) -> None:
         sig = self._stat()
         raw = json.loads(self.path.read_text()) if sig is not None else []
-        self.entries = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
+        self._entries = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
         self._sig = sig
 
     def _fresh(self) -> None:
@@ -161,7 +168,7 @@ class ModelRegistry:
     # ------------------------------------------------------------------ queries
     def by_agent(self, agent_id: str, status: Status | None = None) -> list[ModelEntry]:
         self._fresh()
-        return [e for e in self.entries if e.agent_id == agent_id and (status is None or e.status == status)]
+        return [e for e in self._entries if e.agent_id == agent_id and (status is None or e.status == status)]
 
     def champion(self, agent_id: str) -> ModelEntry | None:
         ch = self.by_agent(agent_id, "champion")
@@ -169,11 +176,11 @@ class ModelRegistry:
 
     def agent_ids(self) -> list[str]:
         self._fresh()
-        return sorted({e.agent_id for e in self.entries})
+        return sorted({e.agent_id for e in self._entries})
 
     def get(self, version: str) -> ModelEntry:
         self._fresh()
-        for e in self.entries:
+        for e in self._entries:
             if e.version == version:
                 return e
         raise KeyError(version)
@@ -240,7 +247,7 @@ class ModelRegistry:
         """version -> (agent_id, model) for every champion and challenger the serving rule admits: what the shadow
         book paper-trades."""
         self._fresh()
-        live = [e for e in self.entries if e.status in ("champion", "challenger")]
+        live = [e for e in self._entries if e.status in ("champion", "challenger")]
         served = self._served(live)
         return {e.version: (e.agent_id, served[e.version]) for e in live if e.version in served}
 
@@ -272,7 +279,7 @@ class ModelRegistry:
             now = now or pd.Timestamp.now("UTC")
             version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
             n = 1
-            while any(e.version == version for e in self.entries):     # two trainings in one second
+            while any(e.version == version for e in self._entries):     # two trainings in one second
                 version, n = f"{agent_id}-{now:%Y%m%dT%H%M%S}-{n}", n + 1
             rel = Path(family) / f"{version}.pkl"
             (self.root / family).mkdir(parents=True, exist_ok=True)
@@ -282,7 +289,7 @@ class ModelRegistry:
                            artefact=str(rel), sha256=hashlib.sha256(data).hexdigest(), backtest=backtest, notes=notes or [],
                            manifest_id=manifest.manifest_id if manifest else None,
                            model_family=manifest.family if manifest else None)
-            self.entries.append(e)
+            self._entries.append(e)
             return e
 
     def promote(self, version: str, now: UtcTimestamp | None = None, note: str = "") -> ModelEntry:
@@ -354,14 +361,14 @@ class ModelRegistry:
         """End of an agent's life: called when a retired member's six months of shadow trading are over (population
         retirement itself only stops live trading; its champion keeps shadow-trading so the record stays unbiased)."""
         with self._write():
-            for e in self.entries:
+            for e in self._entries:
                 if e.agent_id == agent_id and e.status in ("champion", "challenger", "previous"):
                     e.status = "retired"
                     e.notes.append(reason)
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps([e.model_dump(mode="json") for e in self.entries], indent=1))
+        tmp.write_text(json.dumps([e.model_dump(mode="json") for e in self._entries], indent=1))
         tmp.replace(self.path)
         self._sig = self._stat()
 

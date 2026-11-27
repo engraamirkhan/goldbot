@@ -1134,7 +1134,12 @@ def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         n_taken = int(sum(t.taken for t in sample))
         record = {"ts": slot.isoformat(), **fit.model_dump(), "n_taken": n_taken, "n_not_taken": len(sample) - n_taken,
                   "window_from": since.isoformat()}
-        entry = ctx.models.recalibrate(e.version, model, record)
+        try:
+            entry = ctx.models.recalibrate(e.version, model, record)
+        except Exception as exc:   # noqa: BLE001 - one model (e.g. retired by a rollback meanwhile) never stops the job
+            log.error("recalibrate: %s not recalibrated: %s", e.version, exc)
+            out[e.version] = {"action": "error", "reason": f"{type(exc).__name__}: {exc}"}
+            continue
         with open(ctx.state_dir / "recalibration.jsonl", "a") as f:
             f.write(json.dumps({"version": e.version, "agent_id": e.agent_id, "status": entry.status, **record}) + "\n")
         out[e.version] = {"action": "recalibrated", "minor": len(entry.recalibrations), "n": fit.n, "n_taken": n_taken,
