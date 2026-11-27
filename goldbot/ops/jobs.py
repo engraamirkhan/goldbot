@@ -852,9 +852,11 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
 
 
 def _walk_forward_seeds(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int,
-                        seeds: Sequence[int]) -> tuple[list[ResearchResult], pd.DataFrame] | None:
+                        seeds: Sequence[int]) -> tuple[list[ResearchResult], pd.DataFrame,
+                                                       dict[str, pd.DataFrame]] | None:
     """The Saturday retrain's walk-forward, once per seed (LightGBM `random_state`; bagging and feature fraction
-    draw from it) on one set of features and labels: the results in `seeds` order and the decision bars read.
+    draw from it) on one set of features and labels: the results in `seeds` order, the decision bars and the context
+    bars read.
     model_quality (quant Q1): "Every seed fitted is recorded, and `seed_stability` covers all of them"."""
     got = _wf_inputs(ctx, spec, end, months)
     if got is None:
@@ -863,7 +865,7 @@ def _walk_forward_seeds(ctx: JobContext, spec: Specialist, end: pd.Timestamp, mo
     extra = live_extra_cost_usd(ctx)
     prep = prepare(spec, dec, context, extra_cost_usd=extra, swap=live_swap(ctx))
     return [_wf_metrics(ctx, evaluate(prep, extra_cost_usd=extra, model_params={"random_state": int(s)}), years)
-            for s in seeds], dec
+            for s in seeds], dec, context
 
 
 def backtest_stats(res: ResearchResult) -> PerfStats | None:
@@ -979,8 +981,18 @@ def _net_edge(res: ResearchResult) -> float:
     return float(np.mean(np.where(rows["taken"].to_numpy(dtype=bool), r, 0.0)))
 
 
+def _data_version(timeframe: str, dec: pd.DataFrame, context: dict[str, pd.DataFrame]) -> str:
+    """The bars a refit read: sha256 over the decision bars, then each context frame in sorted label order."""
+    h = hashlib.sha256()
+    for frame in (dec, *(context[k] for k in sorted(context))):
+        h.update(pd.util.hash_pandas_object(frame, index=False).to_numpy().tobytes())
+        h.update(b"|")
+    return f"store:bars_{'+'.join([timeframe, *sorted(context)])}:{h.hexdigest()}"
+
+
 def _register_retrain(ctx: JobContext, agent_id: str, family: str, timeframe: str, slot: pd.Timestamp, key: str,
-                      months: int, results: list[ResearchResult], dec: pd.DataFrame) -> dict[str, Any] | str:
+                      months: int, results: list[ResearchResult], dec: pd.DataFrame,
+                      context: dict[str, pd.DataFrame]) -> dict[str, Any] | str:
     """Record the run manifest of one Saturday refit and register seed 0's model as a challenger with it (ADR 0109:
     "A fitted registry model created at or after MANIFEST_REQUIRED_FROM serves only with a run manifest"; PR #494
     safety HIGH-1). Seeds are `seed_list(key)`, served is seed index 0, declared here before any result is read; the
@@ -1001,11 +1013,13 @@ def _register_retrain(ctx: JobContext, agent_id: str, family: str, timeframe: st
         "walkforward": res.metrics.get("walkforward"), "params": {**DEFAULT_PARAMS},
         "extra_cost_usd": res.metrics.get("extra_cost_usd"), "cost_source": res.metrics.get("cost_source"),
         "swap": res.metrics.get("swap")}, default=str))
-    bars_sha = hashlib.sha256(pd.util.hash_pandas_object(dec, index=False).to_numpy().tobytes()).hexdigest()
     try:
         man = rm.record(model=f"saturday_retrain:{family}:{timeframe}", family=BASELINE_FAMILY,
-                        artifact=pickle.dumps(res.model), data_version=f"store:bars_{timeframe}:{bars_sha}",
+                        artifact=pickle.dumps(res.model), data_version=_data_version(timeframe, dec, context),
                         settings=settings, manifest_key=key, served="seed0", seeds=seeds, train_end=train_end,
+                        # no fitted transform reads features past the last decision instant: the calibrator is fit
+                        # on OOF scores at decision times <= train_end; the outcomes it learns from resolve by
+                        # label_end_max, which the manifest records separately (quant Q4)
                         scaler_fit_end=train_end,
                         label_end_max=pd.Timestamp(pd.to_datetime(labels["ts_exit"], utc=True).max()),
                         unit=agent_id, fold_keys=[f"{k}:{n}" for k, n in

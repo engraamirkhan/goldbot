@@ -213,9 +213,9 @@ def _registry_retrain_ctx(tmp_path: Path, monkeypatch: Any, edges: list[float]) 
     bars = pd.DataFrame({"ts_utc": pd.date_range("2026-09-01", periods=8, freq="1D", tz="UTC"), "close": 1.0})
     seen: list[list[int]] = []
 
-    def seeded(ctx: Any, spec: Any, end: Any, months: int, seeds: list[int]) -> tuple[list[Any], pd.DataFrame]:
+    def seeded(ctx: Any, spec: Any, end: Any, months: int, seeds: list[int]) -> tuple[list[Any], pd.DataFrame, dict]:
         seen.append(list(seeds))
-        return _seeded_results(edges), bars
+        return _seeded_results(edges), bars, {"d1": bars.iloc[:2]}
     monkeypatch.setattr(jobs, "_walk_forward_seeds", seeded)
     ctx = _retrain_ctx(tmp_path, enabled=True)
     ctx.models = ModelRegistry(tmp_path / "models")
@@ -257,3 +257,26 @@ def test_a_saturday_retrain_that_cannot_record_its_manifest_says_so(tmp_path, mo
     out = jobs.saturday_retrain(ctx, SAT_AFTER_CUTOFF)["tsmom-1h"]["retrain"]
     assert out.startswith("no challenger: the run manifest could not be recorded")
     assert ctx.models.entries == []
+
+
+def test_the_retrain_edge_counts_untaken_rows_as_zero():
+    """Quant LOW (round 3): mean net R per scored OOF row, 0 where the model does not trade."""
+    from goldbot.research.pipeline import ResearchResult
+    oof = pd.DataFrame({"p_raw": [0.6, 0.6, 0.4, 0.4], "taken": [True, True, False, False],
+                        "ret": [0.01, 0.01, -0.01, -0.01], "risk": [0.01] * 4})
+    res = ResearchResult(agent_id="a", n_candidates=4, n_folds=1, oof=oof, metrics={}, feature_version="fv",
+                         importance=None)
+    assert jobs._net_edge(res) == pytest.approx(0.5)
+
+
+def test_the_retrain_data_version_covers_the_context_bars_in_a_fixed_order():
+    """Quant LOW (round 3): the fit reads the decision bars and its context timeframes; all of them are hashed."""
+    ts = pd.date_range("2026-09-01", periods=4, freq="1h", tz="UTC")
+    dec = pd.DataFrame({"ts_utc": ts, "close": [1.0, 2.0, 3.0, 4.0]})
+    h4 = pd.DataFrame({"ts_utc": ts[:2], "close": [1.0, 2.0]})
+    d1 = pd.DataFrame({"ts_utc": ts[:1], "close": [1.0]})
+    v = jobs._data_version("1h", dec, {"h4": h4, "d1": d1})
+    assert v.startswith("store:bars_1h+d1+h4:")
+    assert v == jobs._data_version("1h", dec, {"d1": d1, "h4": h4})                 # key order does not matter
+    assert v != jobs._data_version("1h", dec, {"h4": h4, "d1": d1.assign(close=[9.0])})
+    assert v != jobs._data_version("1h", dec, {"h4": h4})
