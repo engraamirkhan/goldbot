@@ -149,10 +149,10 @@ def _minutes(hole: tuple[pd.Timestamp, pd.Timestamp] = HOLE, end: pd.Timestamp =
     return ts[(ts < hole[0]) | (ts >= hole[1])]
 
 
-def _refuse(eng: Engine, ts: pd.DatetimeIndex, close: pd.Timestamp) -> list[dict] | None:
+def _refuse(eng: Engine, ts: pd.DatetimeIndex, close: pd.Timestamp, tf: str = "1h") -> list[dict] | None:
     gaps = history.window_gaps(eng, pd.DataFrame({"ts_utc": ts}))
     fr = SimpleNamespace(dec=pd.DataFrame({"ts_utc": [ts[0], ts[-1]]}))
-    return history.refuse(eng, "1h", fr, gaps, [], close)
+    return history.refuse(eng, tf, fr, gaps, [], close)
 
 
 def test_the_dst_gap_week_hole_older_than_the_fill_floor_no_longer_refuses_1h_closes(tmp_path, caplog):
@@ -190,3 +190,27 @@ def test_an_old_hole_longer_than_the_cap_is_still_refused(tmp_path):
     eng = _engine(tmp_path)
     hole = (pd.Timestamp("2026-10-20 08:00", tz="UTC"), pd.Timestamp("2026-10-20 14:00", tz="UTC"))   # 360 open min
     assert _refuse(eng, _minutes(hole), LATE) is not None
+
+
+def _cut(ts: pd.DatetimeIndex, *holes: tuple[pd.Timestamp, pd.Timestamp]) -> pd.DatetimeIndex:
+    for lo, hi in holes:
+        ts = ts[(ts < lo) | (ts >= hi)]
+    return ts
+
+
+H200A = (pd.Timestamp("2026-10-20 08:00", tz="UTC"), pd.Timestamp("2026-10-20 11:20", tz="UTC"))   # 200 open min
+H200B = (pd.Timestamp("2026-10-21 08:00", tz="UTC"), pd.Timestamp("2026-10-21 11:20", tz="UTC"))
+
+
+def test_one_old_200_minute_hole_in_a_4h_window_is_allowed(tmp_path):
+    ts = _cut(_minutes((HOLE[1], HOLE[1])), H200A)
+    assert _refuse(_engine(tmp_path), ts, LATE, "4h") is None
+
+
+def test_old_holes_summing_past_the_cap_inside_one_window_are_refused(tmp_path):
+    """Quant hardening on #508: each old hole is under the cap, but the cleared minutes the window decides on add up
+    to more than history_stale_gap_max_min (2 x 200 > 240): refused."""
+    eng = _engine(tmp_path)
+    ts = _cut(_minutes((HOLE[1], HOLE[1])), H200A, H200B)
+    assert _refuse(eng, ts, LATE, "4h") is not None
+    assert eng.history.gaps["4h"]["open_min"] == 200

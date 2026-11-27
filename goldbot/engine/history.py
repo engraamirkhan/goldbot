@@ -23,7 +23,7 @@ Design rules (trading-safety and quant reviews of 9525b5b8):
   and a restart starts with them (`load_closures`), so a closure stays one after the hole is older than the fill
   reaches. A hole wholly older than the fill floor (backfill_max_days) that no pull covered, with at most
   `history_stale_gap_max_min` open minutes, is a closure for the refusal (`stale`, logged once per hole): no fill can
-  ever reach it again. Off with either at 0; a hole inside the fill window is judged as before (fail closed).
+  ever reach it again; the old holes inside one decision frame together may hold at most that many (quant review). Off with either at 0; a hole inside the fill window is judged as before (fail closed).
 - A hole before the cut-over that the release cannot fill moves the cut-over back to the hole (`rebase`; vantage-demo
   2026-10-26..11-03: the release lacked the 10-11 Sunday open, the account's own minutes began 10-19, and every close
   refused for eight days). The broker's 1m bars from the hole to the old cut-over replace the release minutes there,
@@ -1041,7 +1041,11 @@ def refuse(eng: Engine, tf: str, fr: Any, gaps: list[HistoryGap], agents: list[S
         _age_shadow(eng, tf, fr)
         return [eng._record(a, close_ts, 0.0, 0.0, f"{held}:{tf}") for a in agents]
     first = pd.Timestamp(fr.dec["ts_utc"].iloc[0])
-    hit = [g for g in gaps if g.end > first and not stale(eng, g, close_ts)]
+    inside = [g for g in gaps if g.end > first]
+    hit = [g for g in inside if not stale(eng, g, close_ts)]
+    # quant review of #508: the old holes cleared one by one must not add up to more than the cap in one window
+    if sum(g.open_min for g in inside if g not in hit) > eng.cfg.history_stale_gap_max_min:
+        hit = inside
     if not hit:
         eng.history.gaps.pop(tf, None)
         return None
