@@ -400,7 +400,8 @@ def test_promotion_counts_independent_clusters_one_per_agent_per_session_day_not
     assert st.n_trades == 60 and st.n_clusters == 20 and st.t_stat is not None
     bt = PerfStats(n_trades=300, sharpe_ann=1.0, hit_rate=0.6, max_dd=0.5, trades_per_week=10.0)
     dec = evaluate_promotion(bt, st)
-    assert not dec.ready and dec.failed == ["shadow_length"]   # 60 trades but 20 clusters after 5 weeks: not ready
+    # 60 trades but 20 clusters after 5 weeks: not ready (nor without the ADR 0106 paired and as-if reads)
+    assert not dec.ready and dec.failed[0] == "shadow_length"
     assert "20 independent clusters" in dec.checks[0].detail
     # a shadow record without a cluster count (written before clustering) is never ready: fail closed
     assert not evaluate_promotion(bt, st.model_copy(update={"n_clusters": None, "weeks": 9.0})).ready
