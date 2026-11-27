@@ -9,8 +9,9 @@ The label (`LabelSpec`, id dl-v1; a change is a new spec id and re-keys the cach
   move of that exit-side quote from its own value at entry, in units of the template's initial risk. With a constant
   spread it is the mid move exactly; the spread is charged once in cost(x), never in the label.
 - Base distance d0 = ATR14 (Wilder, mid, the tf's decision bars, known at the decision bar's close) x sqrt(H / h_ref)
-  with h_ref = H until D-4 freezes it (factor 1), floored at 1.5 x the median 1m true range of the 1,440 minutes up
-  to the decision ("session-median TR").
+  (the W2-2 formula), floored at 1.5 x the median 1m true range of the 1,440 minutes up to the decision
+  ("session-median TR"). D-4 froze h_ref = H per tf (record xt-v1, `EXIT_FREEZE`): the factor is exactly 1, so k is
+  the ATR14_tf multiple the card's table states.
 - Templates: stop / target / trail in units of d0; R = the template's own initial stop distance (T0 has none: R = d0).
   A stop order (initial, break-even or trailed) is `barrier_hit` "stop" (`stop_moved` marks a moved one); a gapped
   stop fills at the minute's open (adverse); a gapped target fills at the target (never a gap gain); a minute that
@@ -121,7 +122,7 @@ class LabelSpec(FrozenRecord):
     h_by_tf: dict[str, int]
     clip_r: float
     atr_n: int
-    h_ref: str                      # "H": sqrt(H / h_ref) = 1 until D-4 freezes the W2-2 h_ref
+    h_ref: dict[str, int]           # W2-2 reference hold per tf, seconds: d0 = ATR14 x sqrt(H / h_ref) (D-4: = H)
     floor_tr_mult: float
     floor_window_min: int
     sides: tuple[int, ...]
@@ -132,14 +133,51 @@ class LabelSpec(FrozenRecord):
     feature_spec: str               # the fs-v1 spec hash the rows come from
 
 
-SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=10.0, atr_n=14, h_ref="H",
+SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=10.0, atr_n=14, h_ref=dict(H_BY_TF),
                  floor_tr_mult=1.5, floor_window_min=1_440, sides=(1, -1), judged_head="T2", lookback_bars=100,
                  ctx_lookback_days=140, rho_day=0.25, feature_spec=F.spec_hash())
 
 # Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. A member
 # must appear in full on an ADR 0085 recording line (test). Recorded 2026-11-26 (quant R-b on PR #472): the D-1 served
 # file tiers_served_r11-v2.1.csv. It unseals learn-window reads only: confirm and test_old need a booked read id (C-1),
-# and w2-point / h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+# and w2-point rows are not gate reads until D-3 freezes the ub95 cost of record (D-4 froze the exits: xt-v1).
+
+
+class ExitFreeze(FrozenRecord):
+    """sr-v3 D-4 (card 2.1 "Templates T0-T7", work item D-4; W3-1 / RL-1, one definition repo-wide): the exit
+    geometry every dense label and the RL-1 exit bandit share. Frozen label-blind from the card's own table, before any
+    label value was read for a choice: no outcome, return or barrier statistic informed it."""
+    freeze_id: str
+    templates: tuple[Template, ...]
+    h_by_tf: dict[str, int]
+    h_ref: dict[str, int]
+    atr_n: int
+    floor_tr_mult: float
+    floor_window_min: int
+    clip_r: float
+
+
+def exit_freeze(spec: LabelSpec = SPEC) -> ExitFreeze:
+    """The exit geometry a label spec carries, as an `ExitFreeze` record named xt-v1."""
+    return ExitFreeze(freeze_id="xt-v1", templates=spec.templates, h_by_tf=spec.h_by_tf, h_ref=spec.h_ref,
+                      atr_n=spec.atr_n, floor_tr_mult=spec.floor_tr_mult, floor_window_min=spec.floor_window_min,
+                      clip_r=spec.clip_r)
+
+
+def exit_freeze_hash(spec: LabelSpec = SPEC) -> str:
+    """sha256 of the canonical JSON of the spec's exit geometry. A spec built with a malformed field (`model_copy`
+    does not validate) hashes its raw fields, so it can never match the frozen value."""
+    raw = {k: getattr(spec, k) for k in ("templates", "h_by_tf", "h_ref", "atr_n", "floor_tr_mult",
+                                          "floor_window_min", "clip_r")}
+    raw["templates"] = [t.model_dump(mode="json") if isinstance(t, Template) else t for t in raw["templates"]]
+    return hashlib.sha256(json.dumps({"freeze_id": "xt-v1", **raw}, sort_keys=True, default=str).encode()).hexdigest()
+
+
+EXIT_FREEZE: ExitFreeze = exit_freeze(SPEC)
+# D-4, 2026-11-27 (card rev 10 amendment): the sha256 of xt-v1. A gate read needs a spec whose exit geometry hashes to
+# it (`gate_status`); the card records the same value, so the freeze changes only with a card amendment and a new id.
+EXIT_FREEZE_SHA256 = "7924ed2cf26f8191ae9bc018c7bc8aeceef34be8ac0f8359555e1494cbf3af7c"
+
 RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
     "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",   # tiers_served_r11-v2.1.csv (D-1, #467)
 })
@@ -373,6 +411,8 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     atr = np.where(bi >= 0, bars["atr"].to_numpy()[np.clip(bi, 0, None)], np.nan)
     eh = entry_and_horizon(m, rows, tf, bars["close_ns"].to_numpy(), spec)
     floor = m.floor_at(dec)
+    # W2-2: ATR14 x sqrt(H / h_ref), then the floor (card 2.1); xt-v1 has h_ref = H, so the factor is exactly 1
+    atr = atr * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf]))
     d0 = np.fmax(atr, floor)                                     # fmax: a NaN floor (warm-up) leaves the ATR
     ok = eh["ok"] & np.isfinite(d0) & (d0 > 0) & np.isfinite(atr)
     e, z = eh["e"], eh["z"]
@@ -932,12 +972,15 @@ def load_labels(cache: Path, *, procedure: str, ledger: Path, instrument: str, t
 def gate_status(labels: pd.DataFrame, spec: LabelSpec = SPEC) -> dict[str, Any]:
     """Quant A4 on PR #482 (verbatim): "`load_labels` sets `meta['gate_eligible'] = False` whenever any returned row
     has `cost_version == 'w2-point'` or the spec's `h_ref == 'H'`, with `meta['gate_block']` naming why. Any gate or
-    evaluator read refuses `gate_eligible` False." (ADR 0085 A4: not gate reads until D-3 and D-4 freeze.)"""
+    evaluator read refuses `gate_eligible` False." (ADR 0085 A4: not gate reads until D-3 and D-4 freeze.)
+    D-4 froze the exits as xt-v1 (2026-11-27): the D-4 condition is now "the spec's exit geometry is not xt-v1"
+    (`exit_freeze_hash` != `EXIT_FREEZE_SHA256`), which the old h_ref = H placeholder also fails."""
     block = []
     if len(labels) and (labels["cost_version"].astype(str) == "w2-point").any():
         block.append("cost_version w2-point: the ub95 cost of record per cell is not frozen (D-3)")
-    if spec.h_ref == "H":
-        block.append("h_ref = H: the exit templates' h_ref is not frozen (D-4)")
+    if exit_freeze_hash(spec) != EXIT_FREEZE_SHA256:
+        block.append(f"exit templates / h_ref are not the D-4 freeze xt-v1 (sha256 {EXIT_FREEZE_SHA256[:12]}): "
+                     "not a frozen exit geometry (D-4)")
     return {"gate_eligible": not block, "gate_block": block}
 
 
@@ -947,7 +990,7 @@ def require_gate_eligible(meta: Mapping[str, Any]) -> None:
         raise PermissionError(f"dense labels are not a gate read: {meta.get('gate_block') or 'no gate status'}")
 
 
-__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
+__all__ = ["EXIT_FREEZE", "EXIT_FREEZE_SHA256", "ExitFreeze", "exit_freeze", "exit_freeze_hash", "CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
            "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
            "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "close_only", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",
