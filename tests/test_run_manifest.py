@@ -303,9 +303,41 @@ def test_a_fitted_model_trained_after_the_cutoff_without_a_manifest_is_refused_f
     with pytest.raises(mq.ModelRefused, match="no run manifest"):
         reg.load_for_serving(e)
     assert reg.shadow_models() == {}
-    reg.promote(e.version, now=FIT_AT)
-    assert reg.champion_models() == {}
     assert isinstance(reg.load(e), MetaLabelModel)            # the plain checksummed load (backups, recalibration) still works
+
+
+def test_promote_refuses_a_challenger_the_serving_rule_refuses_and_keeps_the_champion(tmp_path: Path) -> None:
+    """PR #494 safety MEDIUM-3(a): promoting a refused challenger would demote a serving champion for a model the
+    engine never loads, leaving the agent's open trades with no model to re-score them."""
+    reg = ModelRegistry(tmp_path / "models")
+    before = mq.MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)
+    old = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={},
+                             now=before)
+    reg.promote(old.version, now=before)
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
+    with pytest.raises(mq.ModelRefused, match="no run manifest"):
+        reg.promote(e.version, now=FIT_AT)
+    assert reg.get(e.version).status == "challenger" and reg.champion("bb").version == old.version  # type: ignore[union-attr]
+    assert ModelRegistry(tmp_path / "models").champion("bb").version == old.version             # type: ignore[union-attr]
+    assert set(reg.champion_models()) == {"bb"}
+
+
+def test_the_saturday_job_does_not_promote_a_refused_challenger_and_reports_it(tmp_path: Path,
+                                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from goldbot.ops import jobs
+    from goldbot.research.promotion import PromotionDecision
+    reg = ModelRegistry(tmp_path / "models")
+    e = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={"n": 1},
+                           now=FIT_AT)
+    monkeypatch.setattr(jobs, "_backtest_stats", lambda entry: object())
+    monkeypatch.setattr(jobs, "shadow_stats", lambda ctx, entry: SimpleNamespace(n_trades=60, n_clusters=60))
+    monkeypatch.setattr(jobs, "evaluate_promotion",
+                        lambda bt, sh, champ: PromotionDecision(promote=True, ready=True, checks=[]))
+    out = jobs._decide_challengers(SimpleNamespace(models=reg, state_dir=tmp_path), "bb", FIT_AT)
+    assert out[0]["action"] == "promotion_refused" and "no run manifest" in out[0]["refused"]
+    assert reg.get(e.version).status == "challenger" and reg.champion("bb") is None
 
 
 def test_a_legacy_fitted_entry_from_before_the_cutoff_still_serves(tmp_path: Path) -> None:
@@ -375,10 +407,13 @@ def test_rollback_model_refuses_an_agent_without_a_previous_champion(tmp_path: P
 
 
 def test_rollback_model_refuses_a_previous_champion_that_would_not_serve(tmp_path: Path,
-                                                                         capsys: pytest.CaptureFixture[str]) -> None:
+                                                                         capsys: pytest.CaptureFixture[str],
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     reg = ModelRegistry(tmp_path / "models")
     old = reg.add_challenger(MetaLabelModel(feature_names=["x"]), family="box_break", agent_id="bb", backtest={}, now=FIT_AT)
-    reg.promote(old.version, now=FIT_AT)
+    with monkeypatch.context() as mp:     # promoted while it served (its refusal arises later): promote checks it
+        mp.setattr(reg, "serving_refusal", lambda e: None)
+        reg.promote(old.version, now=FIT_AT)
     new = reg.add_challenger(RuleModel(rule="box_break"), family="box_break", agent_id="bb", backtest={},
                              now=FIT_AT + pd.Timedelta(days=1))
     reg.promote(new.version, now=FIT_AT + pd.Timedelta(days=1))
@@ -586,14 +621,17 @@ def test_monthly_trainers_are_refused_until_they_run_in_a_bounded_child() -> Non
         ModelQualitySettings(monthly_trainers=["goldbot.research.sr_v3_train:monthly"])
 
 
-def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_path: Path) -> None:
+def test_a_cusum_alarm_never_restores_a_previous_model_that_would_not_serve(tmp_path: Path,
+                                                                             monkeypatch: pytest.MonkeyPatch) -> None:
     from goldbot.ops.checks.feeds import check_model_watch
     from goldbot.ops.health import HealthContext
     from goldbot.ops.jobs import model_watch
     from tests.test_shadow import _promote_pair, _shadow_rets, _watch_ctx
     ctx = _watch_ctx(tmp_path)
     t = FIT_AT                                        # both fitted after the cutoff, without a manifest
-    a, b = _promote_pair(ctx, t)
+    with monkeypatch.context() as mp:     # promoted while they served (the refusal arises later): promote checks it
+        mp.setattr(ctx.models, "serving_refusal", lambda e: None)
+        a, b = _promote_pair(ctx, t)
     promoted = t + pd.Timedelta(days=30)
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     out = model_watch(ctx, promoted + pd.Timedelta(days=6))

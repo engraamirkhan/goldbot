@@ -367,3 +367,13 @@ def test_the_decision_time_index_is_additive_so_a_rollback_still_opens_aux_db(tm
     finally:
         con.close()
     assert "exploration_obs_decision" in plan
+
+
+def test_an_open_position_whose_agent_has_no_served_model_warns(tmp_path):
+    """PR #494 safety MEDIUM-3: the engine publishes open positions whose agent has no served model (no blackout
+    re-score possible); health warns while any is open. Exits are untouched: broker stop and target and the policy."""
+    engine(tmp_path, 60, open_without_model=[4711])
+    c = health.check_engine(make_ctx(tmp_path), "icm-demo")
+    assert c.status == "warn" and "4711" in c.reason and "no served model" in c.reason
+    engine(tmp_path, 60, open_without_model=[])
+    assert "no served model" not in health.check_engine(make_ctx(tmp_path), "icm-demo").reason

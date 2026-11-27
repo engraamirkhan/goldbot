@@ -43,6 +43,7 @@ from goldbot.data.timeutil import feature_day, floor_tf, server_wall
 from goldbot.engine import (
     auto_entry,
     below_floor,
+    blackout,
     books,
     broker_bars,
     capital_flows,
@@ -1718,35 +1719,13 @@ class Engine:
             return
         for pid, tr in list(self.open.items()):
             try:
-                self._blackout_rescore(pid, tr, complete, close_ts, frames, ev)
+                blackout.rescore(self, pid, tr, complete, close_ts, frames, ev)
             except Exception as e:                        # one position never stops the loop
                 # the trade keeps its server stop and target and is re-scored again at the next base bar close
                 log.exception("blackout re-score failed for position %s; the position is kept", pid)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "blackout_rescore_failed",
                                        "position": pid, "error": repr(e)})
         self._save_orders()
-
-    def _blackout_rescore(self, pid: int, tr: OpenTrade, complete: pd.DataFrame, close_ts: pd.Timestamp,
-                          frames: dict[str, _Frame], ev: dict) -> None:
-        agent = self.agents.get(tr.agent_id)
-        model = None if agent is None else (self.models.get(agent.agent_id) or self.models.get(agent.family))
-        if agent is None or model is None:
-            return
-        fr = frames.get(agent.timeframe)
-        if fr is None:
-            fr = self._frame(complete, agent.timeframe, close_ts)
-            if fr is None:
-                return
-            frames[agent.timeframe] = fr
-        Xm = self._scoring_frame(fr, model)
-        if Xm is None:
-            return                                        # a model only scores the frame version it was trained on
-        feats = Xm.drop(columns=["ts_utc"]).iloc[[len(Xm) - 1]].replace([np.inf, -np.inf], np.nan)
-        feats["side"] = tr.side
-        cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-        p = float(model.predict(feats[cols])[0])
-        if p < 0.5:
-            self._policy_close(pid, tr, "blackout_close", p=round(p, 4), event=ev.get("title"))
 
     def _own(self, magic: int) -> bool:
         return self.cfg.magic_base <= magic < self.cfg.magic_base + 100
@@ -3014,6 +2993,7 @@ class Engine:
                                 | ({"contract_unknown"} if self._contract is None and self._contract_tried else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
+            "open_without_model": blackout.open_without_model(self),     # PR #494 MEDIUM-3: health warns
             "terminal_account_changed": self.terminal.mismatch,     # R1: why not on this account (health FAILs)
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],

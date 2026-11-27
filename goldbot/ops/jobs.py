@@ -896,6 +896,11 @@ def _decide_challengers(ctx: JobContext, agent_id: str, slot: pd.Timestamp) -> l
         sh = shadow_stats(ctx, ch)
         if bt is not None and sh is not None:
             d = evaluate_promotion(bt, sh, champ_turnover)
+            refused = ctx.models.serving_refusal(ch) if d.promote else None
+            if refused is not None:      # PR #494 safety MEDIUM-3: never promote what the engine will not load
+                log.error("challenger %s passed the gates but the serving rule refuses it: %s", ch.version, refused)
+                out.append({"version": ch.version, "action": "promotion_refused", "refused": refused})
+                continue
             if d.promote:
                 ctx.models.promote(ch.version, now=slot, note="all promotion gates passed")
                 out.append({"version": ch.version, "action": "promoted"})

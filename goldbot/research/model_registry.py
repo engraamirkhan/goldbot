@@ -215,9 +215,15 @@ class ModelRegistry:
         return e
 
     def promote(self, version: str, now: UtcTimestamp | None = None, note: str = "") -> ModelEntry:
+        """The challenger becomes champion; ModelRefused (nothing changed) when the serving rule refuses it (PR #494
+        safety MEDIUM-3: a refused champion is never loaded, so promoting it would leave the agent, and its open
+        trades, with no model while a serving champion is demoted)."""
         e = self.get(version)
         if e.status != "challenger":
             raise ValueError(f"{version} is {e.status}, only a challenger can be promoted")
+        why = self.serving_refusal(e)
+        if why is not None:
+            raise ModelRefused(f"{version} not promoted: {why}")
         live_feature_check(list(e.feature_names))
         for old in self.by_agent(e.agent_id, "previous"):
             old.status = "retired"
