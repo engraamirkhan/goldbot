@@ -427,3 +427,80 @@ def test_an_open_position_whose_agent_has_no_served_model_warns(tmp_path):
     assert c.status == "warn" and "4711" in c.reason and "no served model" in c.reason
     engine(tmp_path, 60, open_without_model=[])
     assert "no served model" not in health.check_engine(make_ctx(tmp_path), "icm-demo").reason
+
+
+# ---------------------------------------------------------------------------------------------- fill-gated cost cells
+FIT = pd.Timestamp("2026-11-27 22:00", tz="UTC")                  # the icm london cell's last fit (its through)
+FILL_DAY = "2026-12-02"                                           # a Wednesday opportunity day
+FILL_HOSTS = {"icm-demo": "icm", "vantage-demo": "vantage"}
+
+
+def _seed_fills(tmp_path: Path, n: int, *, start: pd.Timestamp = pd.Timestamp("2026-12-02 09:00", tz="UTC")) -> None:
+    """Today's brain, the icm london cell fitted at FIT and `n` icm london entry fills after it (none on vantage)."""
+    from goldbot.research import daily_review as dr
+    from tests.test_daily_review import _trade
+    _seed_today(tmp_path)
+    db = _aux(tmp_path)
+    dr.write_cell(db, broker="icm", session="london", day="2026-11-27", slippage_usd=0.3, fills=200, through=FIT,
+                  now=FIT + pd.Timedelta(hours=8))
+    for i in range(n):
+        _trade(db, f"f{i}", host="icm-demo", sent=start + pd.Timedelta(seconds=30 * i))
+
+
+def _gated(tmp_path: Path, now: pd.Timestamp) -> Any:
+    learning._FILL_CACHE.clear()
+    ctx = make_ctx(tmp_path, now=now, settings=_today_settings(), learning_hosts=FILL_HOSTS)
+    return {c.name: c for c in health.check_learning_liveness(ctx)}["learning:cost_cells"]
+
+
+def _review_ran(tmp_path: Path, day: str, at: pd.Timestamp) -> None:
+    from goldbot.research import daily_review as dr
+    write(dr.review_path(tmp_path, day), {"day": day, "generated_utc": at.isoformat(), "dry_run": False})
+
+
+def test_a_cost_cell_starved_of_fills_reads_ok_with_its_count_however_long_since_its_last_row(tmp_path):
+    _seed_fills(tmp_path, 40)
+    now = pd.Timestamp("2026-12-06 12:00", tz="UTC")              # 8.2 days without a row: FAIL by the wall clock
+    c = _gated(tmp_path, now)
+    assert c.status == "ok", c.reason
+    assert "waiting on fills: most-filled cell icm london 40/200 since its fit 8.2 d ago" in c.reason
+    assert "at 0: vantage" in c.reason
+
+
+def test_a_cost_cell_at_200_fills_warns_once_a_daily_review_ran_without_a_row_then_fails_48_hours_later(tmp_path):
+    _seed_fills(tmp_path, 200)
+    ran = pd.Timestamp("2026-12-03 06:16", tz="UTC")              # the review of FILL_DAY, whose fills crossed 200
+    before = _gated(tmp_path, ran - pd.Timedelta(hours=2))
+    assert before.status == "ok" and "icm london 200/200" in before.reason and "next daily_review" in before.reason
+    _review_ran(tmp_path, FILL_DAY, ran)
+    warn = _gated(tmp_path, ran + pd.Timedelta(hours=1))
+    assert warn.status == "warn", warn.reason
+    assert "icm london 200/200" in warn.reason and f"daily_review of {FILL_DAY}" in warn.reason
+    assert _gated(tmp_path, ran + pd.Timedelta(hours=47)).status == "warn"
+    assert _gated(tmp_path, ran + pd.Timedelta(hours=49)).status == "fail"
+
+
+def test_a_cost_cell_refit_after_its_200_fills_reads_ok_again(tmp_path):
+    from goldbot.research import daily_review as dr
+    _seed_fills(tmp_path, 200)
+    ran = pd.Timestamp("2026-12-03 06:16", tz="UTC")
+    _review_ran(tmp_path, FILL_DAY, ran)
+    _, hi = dr.day_bounds(FILL_DAY)
+    dr.write_cell(_aux(tmp_path), broker="icm", session="london", day=FILL_DAY, slippage_usd=0.3, fills=200,
+                  through=hi, now=ran)
+    c = _gated(tmp_path, ran + pd.Timedelta(hours=60))
+    assert c.status == "ok" and "waiting on fills" in c.reason, c.reason
+
+
+def test_a_ledger_row_the_fill_gate_cannot_parse_leaves_cost_cells_to_the_clock_rule(tmp_path):
+    from tests.test_daily_review import _bad_row
+    _seed_fills(tmp_path, 40)
+    _bad_row(_aux(tmp_path), "torn", host="icm-demo", sent=pd.Timestamp("2026-12-02 10:00", tz="UTC"))
+    c = _gated(tmp_path, pd.Timestamp("2026-12-06 12:00", tz="UTC"))
+    assert c.status == "fail" and "no output for 8.2 d" in c.reason, c.reason    # the clock: 8.2 d is past 84 h + 48 h
+
+
+def test_arm_lifecycle_verdicts_are_candidate_driven_not_fill_gated():
+    by = {x.name: x for x in learning.LEARNERS}
+    assert by["cost_cells"].fill_gate is True
+    assert by["arm_lifecycle_verdicts"].fill_gate is False

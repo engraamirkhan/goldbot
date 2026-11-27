@@ -15,6 +15,17 @@ switch failing on any one of them):
                    silent). Output computed but not applied (the nightly weights under `allocator: equal`) reads ok and
                    names the allocator: that choice is model_influence's to report. Fill-driven learners
                    (cost_cells, arm_lifecycle_verdicts) have a FILL_DRIVEN_CADENCE_H cadence, so a weekend is no gap.
+                   A fill-GATED learner (`fill_gate`: cost_cells, which daily_review refits only once a (broker,
+                   session) cell has `daily_review.refit_min_fills` eligible entry fills since its fit) is judged by
+                   its input, not the clock (incident 2026-11-27: 9 days without a row at ~40 fills a day read as a
+                   dead learner): every cell below the threshold reads ok, "waiting on fills", with the most-filled
+                   cell's count and the brokers at 0; a cell at the threshold whose daily_review (the run whose day
+                   holds the crossing fill) has run with no new row WARNs, then FAILs FAIL_AFTER_H after that run.
+                   The count is daily_review's own (`pending_trades`: same filter, exclusions and session labels),
+                   over the learning hosts (HealthContext.learning_hosts), read at most every FILL_CACHE_S; with no
+                   host or an unreadable ledger the clock judges as before. arm_lifecycle_verdicts is not fill-gated:
+                   it writes one verdict per settled candidate of a discovered arm (hundreds a day), with no count
+                   threshold, so the clock with its 72 h floor stays right for it.
   learning:<name>  a RETIRED learner (name, date, reason) reads ok with its retirement: deleted from judgement with a
                    reason, as the plan asks ("each dead table revived or deleted with a reason").
   watch:<name>     a watcher by the subjects it must cover: drift_watch every self-retrain model in shadow or active
@@ -65,6 +76,7 @@ FILL_DRIVEN_CADENCE_H = 72.0       # SRE review M5: a learner fed by fills write
 INFLUENCE_WINDOW_H = 24.0          # SRE plan item 1: "model-influence % is 0 over 24 h"
 MIN_ELIGIBLE_SCORED = 0.9          # ADR 0101: below this share of eligible candidates scored, shadow scoring WARNs
 INFLUENCE_CACHE_S = 900.0          # SRE review M1: the 24 h count is read at most every 15 min per host
+FILL_CACHE_S = 900.0               # the fill gate's ledger read, likewise at most every 15 min per host
 MODEL_BLOCK_PREFIXES = ("model_", "meta_")   # a candidate's block reason that a model, not a rule or a cap, gave
 WATCH_STATUSES = ("active", "shadow")        # self_retrain models drift_watch must cover (plan: "every shadow and
                                              # active model")
@@ -83,6 +95,7 @@ class Learner(FrozenRecord):
     slack_h: float = 6.0
     switch: str | None = None            # dotted Settings path of the bool that turns it on; None: always on
     applied: tuple[str, str] | None = None   # (dotted Settings path, value) under which its output reaches a decision
+    fill_gate: bool = False              # writes only once a cell has refit_min_fills new fills: judged by its input
     why: str                             # what it learns and what an empty table means: the reason in the WARN
 
 
@@ -108,7 +121,7 @@ LEARNERS: tuple[Learner, ...] = (
     Learner(name="arm_lifecycle_verdicts", table="arm_lifecycle_verdicts", ts_col="recorded_ns", job="arm_lifecycle",
             cadence_h=FILL_DRIVEN_CADENCE_H, why="judged reads of demo arms (build 2)"),
     Learner(name="cost_cells", table="exploration_cost_cells", ts_col="fitted_ns", job="daily_review",
-            cadence_h=FILL_DRIVEN_CADENCE_H,
+            cadence_h=FILL_DRIVEN_CADENCE_H, fill_gate=True,
             why="nightly slippage per broker x session (the measured cost the replay labels use)"),
 )
 
@@ -136,6 +149,25 @@ class LearnerRead(FrozenRecord):
     rows: int | None = None              # None: the table cannot be read (`error`)
     last: UtcTimestamp | None = None
     error: str | None = None
+
+
+class FillCell(FrozenRecord):
+    """One (broker, session) cost cell as the fill gate reads it."""
+
+    broker: str
+    session: str
+    fills: int                           # eligible entry fills since its last fit (daily_review.pending_trades)
+    fitted: UtcTimestamp | None = None   # its last fit (None: never fitted)
+    crossed: UtcTimestamp | None = None  # the send time of its refit_min_fills-th pending fill (None: below it)
+    reviewed: UtcTimestamp | None = None  # the first daily_review run whose day holds `crossed` (None: not run yet)
+    reviewed_day: str | None = None
+
+
+class FillRead(FrozenRecord):
+    """The fill gate's input: every cell of every learning host's broker and the threshold."""
+
+    min_fills: int
+    cells: tuple[FillCell, ...] = ()
 
 
 class WatcherReport(FrozenRecord):
@@ -219,6 +251,35 @@ def read_learner(con: sqlite3.Connection, spec: Learner) -> LearnerRead:
     except sqlite3.Error as exc:
         return LearnerRead(name=spec.name, error=type(exc).__name__)
     return LearnerRead(name=spec.name, rows=n, last=last)
+
+
+def fill_read(con: sqlite3.Connection, state_dir: Path, hosts: Mapping[str, str], *, min_fills: int,
+              now: pd.Timestamp) -> FillRead:
+    """Each cost cell's pending fills by daily_review's own rule (`pending_trades`), when it crossed `min_fills` and
+    the first daily_review run that should have refit it (the review of the opportunity day holding the crossing
+    fill, or a later one: each reads every fill before its day's end)."""
+    from goldbot.ops.report_days import day_bounds
+    from goldbot.research import daily_review as dr
+    fits = {b: dr.last_fits(con, b) for b in sorted(set(hosts.values()))}
+    cells: list[FillCell] = []
+    for (broker, session), sel in dr.pending_trades(con, hosts, now).items():
+        fit = fits[broker].get(session)
+        crossed = sorted(t.sent_utc for t in sel)[min_fills - 1] if len(sel) >= min_fills else None
+        reviewed, rday = None, None
+        if crossed is not None:
+            day = (crossed + pd.Timedelta(days=1)).normalize()
+            while day_bounds(f"{day:%Y-%m-%d}")[0] > crossed:      # the opportunity day holding the crossing fill
+                day -= pd.Timedelta(days=1)
+            while day <= now:
+                at = dr.reviewed_at(state_dir, f"{day:%Y-%m-%d}")
+                if at is not None:
+                    reviewed, rday = at, f"{day:%Y-%m-%d}"
+                    break
+                day += pd.Timedelta(days=1)
+        cells.append(FillCell(broker=broker, session=session, fills=len(sel), crossed=crossed, reviewed=reviewed,
+                              reviewed_day=rday,
+                              fitted=pd.Timestamp(fit[2], unit="ns", tz="UTC") if fit is not None else None))
+    return FillRead(min_fills=min_fills, cells=tuple(cells))
 
 
 def sr_models(con: sqlite3.Connection) -> dict[str, pd.Timestamp]:
@@ -328,11 +389,49 @@ def _over(now: pd.Timestamp, since: pd.Timestamp, grace: pd.Timestamp) -> bool:
     return (now - max(since, grace)).total_seconds() / 3600 >= FAIL_AFTER_H
 
 
+def judge_fill_gate(spec: Learner, fills: FillRead, *, now: pd.Timestamp, grace: pd.Timestamp = LIVENESS_FROM) -> Check:
+    """A fill-gated learner (module docstring): ok while every cell waits on fills or on its next daily_review; a cell
+    at the threshold that a daily_review run passed without a new row WARNs, then FAILs FAIL_AFTER_H after that run."""
+    name, n = f"learning:{spec.name}", fills.min_fills
+
+    def since_fit(c: FillCell) -> str:
+        return f"since its fit {_age((now - c.fitted).total_seconds())} ago" if c.fitted is not None else \
+            "with no fit yet"
+
+    missed = sorted((c for c in fills.cells if c.reviewed is not None), key=lambda c: c.reviewed or now)
+    if missed:
+        c = missed[0]
+        assert c.reviewed is not None
+        status: Status = "fail" if _over(now, c.reviewed, grace) else "warn"
+        return Check(name=name, status=status,
+                     reason=f"{c.broker} {c.session} {c.fills}/{n} fills {since_fit(c)}, the daily_review of "
+                            f"{c.reviewed_day} ran {_age((now - c.reviewed).total_seconds())} ago and wrote no "
+                            f"row: {spec.why}")
+    by_broker: dict[str, int] = {}
+    for c in fills.cells:
+        by_broker[c.broker] = by_broker.get(c.broker, 0) + c.fills
+    zero = sorted(b for b, k in by_broker.items() if k == 0)
+    tail = f"; at 0: {', '.join(zero)}" if zero else ""
+    due = [c for c in fills.cells if c.crossed is not None]
+    if due:
+        c = due[0]
+        return Check(name=name, status="ok",
+                     reason=f"{c.broker} {c.session} {c.fills}/{n} fills {since_fit(c)}: refit due at the next "
+                            f"daily_review{tail}")
+    top = max(fills.cells, key=lambda c: c.fills, default=None)
+    if top is None or top.fills == 0:
+        return Check(name=name, status="ok", reason=f"waiting on fills: no eligible fill since any cell's fit{tail}")
+    return Check(name=name, status="ok",
+                 reason=f"waiting on fills: most-filled cell {top.broker} {top.session} {top.fills}/{n} "
+                        f"{since_fit(top)}{tail}")
+
+
 def judge_learner(spec: Learner, read: LearnerRead, *, enabled: bool, applied: bool, now: pd.Timestamp,
                   cadence_h: float | None = None, slack_h: float | None = None,
-                  grace: pd.Timestamp = LIVENESS_FROM) -> Check:
+                  grace: pd.Timestamp = LIVENESS_FROM, fills: FillRead | None = None) -> Check:
     """`learning:<name>` (module docstring): off WARNs, never FAILs; on with no output in its cadence WARNs, then
-    FAILs once that has held FAIL_AFTER_H past the grace start; computed but not applied reads ok, named."""
+    FAILs once that has held FAIL_AFTER_H past the grace start; computed but not applied reads ok, named. A
+    fill-gated learner with its `fills` read is judged by them instead of the clock (`judge_fill_gate`)."""
     name = f"learning:{spec.name}"
     cad = spec.cadence_h if cadence_h is None else cadence_h
     slack = spec.slack_h if slack_h is None else slack_h
@@ -341,6 +440,8 @@ def judge_learner(spec: Learner, read: LearnerRead, *, enabled: bool, applied: b
     if not enabled:
         return Check(name=name, status="warn",
                      reason=f"switched off ({spec.switch}), {read.rows or 0} rows: {spec.why}")
+    if spec.fill_gate and fills is not None:
+        return judge_fill_gate(spec, fills, now=now, grace=grace)
     if not read.rows or read.last is None:
         status: Status = "fail" if _over(now, grace, grace) else "warn"
         return Check(name=name, status=status, reason=f"0 rows in {spec.table}: {spec.why}")
@@ -390,7 +491,7 @@ def judge_watcher(rep: WatcherReport, *, must_cover: Mapping[str, pd.Timestamp],
 def judge_all(reads: Mapping[str, LearnerRead], *, settings: Any, now: pd.Timestamp,
               watchers: Iterable[WatcherReport], models: Mapping[str, pd.Timestamp],
               retired_rows: Mapping[str, int | None] | None = None,
-              grace: pd.Timestamp = LIVENESS_FROM) -> list[Check]:
+              grace: pd.Timestamp = LIVENESS_FROM, fills: FillRead | None = None) -> list[Check]:
     """Every learner's, retired learner's and watcher's check, in that order."""
     out: list[Check] = []
     for spec in LEARNERS:
@@ -398,7 +499,8 @@ def judge_all(reads: Mapping[str, LearnerRead], *, settings: Any, now: pd.Timest
         applied = True if spec.applied is None else str(setting(settings, spec.applied[0])) == spec.applied[1]
         cad, slack = cadence(spec, settings)
         out.append(judge_learner(spec, reads.get(spec.name, LearnerRead(name=spec.name, rows=0)), enabled=enabled,
-                                 applied=applied, now=now, cadence_h=cad, slack_h=slack, grace=grace))
+                                 applied=applied, now=now, cadence_h=cad, slack_h=slack, grace=grace,
+                                 fills=fills if spec.fill_gate else None))
     out += [judge_retired(r, (retired_rows or {}).get(r.name)) for r in RETIRED]
     for rep in watchers:
         out.append(judge_watcher(rep, must_cover=models if rep.name in MUST_COVER_SR else {}, now=now, grace=grace))
@@ -462,12 +564,34 @@ def check_learning_liveness(ctx: HealthContext) -> list[Check]:
                 except sqlite3.Error:
                     retired[r.name] = None
             models = sr_models(con)
+            fills = _fills(ctx, con)
         finally:
             con.close()
     except sqlite3.Error as exc:
         return [Check(name="learning:aux", status="warn", reason=f"aux.db unreadable: {type(exc).__name__}")]
     return judge_all(reads, settings=ctx.settings, now=ctx.now, watchers=watcher_reports(ctx.state_dir, ctx.settings),
-                     models=models, retired_rows=retired, grace=grace_start(ctx.state_dir))
+                     models=models, retired_rows=retired, grace=grace_start(ctx.state_dir), fills=fills)
+
+
+_FILL_CACHE: dict[str, tuple[pd.Timestamp, FillRead | None]] = {}
+
+
+def _fills(ctx: HealthContext, con: sqlite3.Connection) -> FillRead | None:
+    """The fill gate's read on the check's read-only connection, at most every FILL_CACHE_S per host; None (the clock
+    judges) without a learning host or with an unreadable ledger (sqlite, or a row that does not parse)."""
+    if not ctx.learning_hosts or ctx.settings is None:
+        return None
+    key = str(ctx.state_dir)
+    hit = _FILL_CACHE.get(key)
+    if hit is not None and 0 <= (ctx.now - hit[0]).total_seconds() < FILL_CACHE_S:
+        return hit[1]
+    try:
+        got: FillRead | None = fill_read(con, ctx.state_dir, ctx.learning_hosts,
+                                         min_fills=ctx.settings.daily_review.refit_min_fills, now=ctx.now)
+    except (sqlite3.Error, ValueError):      # ValueError: a ledger row that does not parse (pydantic ValidationError)
+        got = None
+    _FILL_CACHE[key] = (ctx.now, got)
+    return got
 
 
 _INFLUENCE_CACHE: dict[str, tuple[pd.Timestamp, Influence]] = {}
