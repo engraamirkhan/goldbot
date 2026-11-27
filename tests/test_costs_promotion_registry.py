@@ -145,11 +145,13 @@ def test_registry_lifecycle_and_restore(tmp_path):
 
 
 def test_tampered_artefact_is_refused_for_serving_and_other_champions_still_serve(tmp_path):
-    """ADR 0109 / PR #494 safety H1: one bad artefact refuses only its own model; serving never raises."""
+    """ADR 0109 / PR #494 safety H1: one bad artefact refuses only its own model; serving never raises. Fitted before
+    MANIFEST_REQUIRED_FROM (a fixed instant), so the result does not depend on the date the suite runs."""
     reg = ModelRegistry(tmp_path)
-    e = reg.add_challenger(_model("a"), family="session_open", agent_id="x", backtest={})
+    t0 = pd.Timestamp("2026-10-03 06:00", tz="UTC")
+    e = reg.add_challenger(_model("a"), family="session_open", agent_id="x", backtest={}, now=t0)
     reg.promote(e.version)
-    ok = reg.add_challenger(_model("b"), family="session_open", agent_id="y", backtest={})
+    ok = reg.add_challenger(_model("b"), family="session_open", agent_id="y", backtest={}, now=t0)
     reg.promote(ok.version)
     (tmp_path / e.artefact).write_bytes(b"not the model")
     with pytest.raises(ValueError, match="checksum"):
