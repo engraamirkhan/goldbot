@@ -426,3 +426,30 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, {**meta, "gate_eligible": True, "gate_block": []}))
     store.frame("EURUSD", "4h", 2013)
     assert store.gate_status()["gate_eligible"] is False, "one blocked load blocks the unit"
+
+
+# ---------------------------------------------------------------------------------------------- H4: one ledger
+def _cli() -> object:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypatch: pytest.MonkeyPatch,
+                                                                         tmp_path: Path) -> None:
+    """Quant H4 on #488: a worktree has no raw/ or state/ of its own; the read-once / consumption ledger must be the
+    one beside the research registry (`default_registry().with_name(READS_LEDGER)`), which the X6 legitimacy guard
+    reads (tests/test_price_action_x6.py `_ledgers()[0]`), never <worktree>/state/."""
+    from goldbot.research.catalogue.run import default_registry
+    from tests.test_price_action_x6 import _ledgers
+    monkeypatch.delenv("GOLDBOT_REGISTRY", raising=False)
+    monkeypatch.delenv("GOLDBOT_READ_LEDGERS", raising=False)
+    want = default_registry().with_name(T.WN.READS_LEDGER)
+    assert want == _ledgers()[0]
+    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
+    assert Path(_cli().parser().parse_args([]).ledger) == want   # type: ignore[attr-defined]
+    monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
+    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]

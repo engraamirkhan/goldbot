@@ -166,7 +166,7 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
             "artifacts": res.report.get("artifacts")}           # never a read statistic on stdout (quant H3)
 
 
-def main() -> int:
+def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--units", default=",".join(V.UNITS))
     ap.add_argument("--members", default=",".join(V.POOLED_MEMBERS))
@@ -174,14 +174,19 @@ def main() -> int:
     ap.add_argument("--features", default=str(Path.home() / "tmp" / "feature-store"))
     ap.add_argument("--tiers", default=str(ROOT / "raw" / "tiers" / "tiers_served_r11-v2.1.csv"))
     ap.add_argument("--rho", default=str(RHO))
-    ap.add_argument("--ledger", default=str(ROOT / "state" / "window_reads.jsonl"),
-                    help="the read-once / consumption ledger load_labels appends to (#482)")
+    ap.add_argument("--ledger", default=str(T.default_ledger()),
+                    help="the read-once / consumption ledger load_labels appends to (#482); default beside the "
+                         "research registry, the file the X6 guard reads (quant H4 on #488)")
     ap.add_argument("--out", default=str(T.OUT))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage0-only", action="store_true")
     ap.add_argument("--read", action="store_true",
                     help="compute the read statistics (refused unless the label read is gate_eligible at ub95)")
-    a = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    a = parser().parse_args()
     refuse_before_x6()
     units = [u for u in a.units.split(",") if u]
     bad = [u for u in units if u not in V.UNITS]

@@ -1187,6 +1187,13 @@ def record_unit(res: UnitResult, plan: UnitPlan, *, seeds: Sequence[int], source
     return out
 
 # ---------------------------------------------------------------------------------------------- the stores
+def default_ledger() -> Path:
+    """`windows.READS_LEDGER` beside the research registry (`catalogue.run.default_registry`, GOLDBOT_REGISTRY or the
+    main checkout's state/): the one ledger every sr-v3 label read and booking is written to."""
+    from goldbot.research.catalogue.run import default_registry
+    return default_registry().with_name(WN.READS_LEDGER)
+
+
 @dataclass
 class StoreData:
     """The local dl-v1 label store, the fs-v1 feature store and the uniqueness weights (scripts/research/
@@ -1199,7 +1206,9 @@ class StoreData:
     features: Path
     tiers_path: Path
     weights: Path | None = None
-    ledger: Path = ROOT / "state" / WN.READS_LEDGER       # the read-once / consumption ledger (#482: load_labels' ledger)
+    # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
+    # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
+    ledger: Path = field(default_factory=lambda: default_ledger())
     used: dict[str, Any] = field(default_factory=dict)
     _cache: dict[tuple[str, str, tuple[int, ...]], pd.DataFrame] = field(default_factory=dict, repr=False)
 
