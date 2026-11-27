@@ -34,13 +34,10 @@ read.
    - L-cw and HB are fitted from additive moments over every row.
    - G-cw and D-40 are fitted on a deterministic Horvitz-Thompson sample of at most 2,000,000 rows (weights / π).
    - cost(x) per fold is affine in that fold's p_stop and night share, so it is exact per fold.
-   - The gap before a test year is the card's R-B rule, per unit (quant M1 on #488): max(1 d, max H over the unit's
-     tfs, max `dense_labels.input_lookback` over P30 and the served columns). P30's lookback is pinned in
-     `sr_v3.P30_LOOKBACK_S` (atr_ratio_14_100, 810 bars, sets it): about 129 days for 1m-2h, 189 days for 4h, and
-     5,670 days for 1d+1w (1w's 810 weekly bars), which leaves the 1d+1w unit no OOF fold on learn 2010-17. A fold
-     the gap leaves without training rows is skipped and listed in the report (`folds_without_training_rows`).
-     **For the quant:** with expanding forward folds no training row follows its test block, so the lookback term
-     only removes training rows; a ruling on whether 1d+1w keeps it is needed before that unit can fit.
+   - The gap before a test year is per unit: max(1 d, max H over the unit's tfs) (`windows.label_embargo`); 5 d for
+     4h, 20 d for 1d+1w. Quant ruling (1) on #488 withdrew the input-lookback term (M1) as a label-blind
+     clarification of card R-B, K 0: expanding forward folds with a full-horizon purge carry no future information,
+     and the lookback term (810 bars of atr_ratio_14_100) left 1d+1w no OOF fold.
    - Inputs are imputed with the medians of the 2010-11 fold and standardised per fold on training rows only.
 5. **D-40** feeds G-cw only. It is cross-fitted forward: a row of year y takes the fold-y dense fit, and rows before the
    first OOF year are NaN. The L-cw body stays the card's prefix, and HB shares one column set (P30 minus

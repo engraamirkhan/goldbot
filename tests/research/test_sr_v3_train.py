@@ -72,12 +72,12 @@ def _plan(cols: tuple[str, ...] = V.CORE_6, members: tuple[str, ...] = ("XAUUSD"
 # ---------------------------------------------------------------------------------------------- folds
 def test_a_training_row_ends_before_the_test_year_minus_the_gap() -> None:
     g = T.gap("4h")
-    assert g == max(pd.Timedelta(days=5), D.input_lookback("4h", V.P30))
+    assert g == pd.Timedelta(days=5)
     start = pd.Timestamp("2014-01-01", tz="UTC")
     f = pd.DataFrame({"tf": "4h", "horizon_end_utc": [start - g - pd.Timedelta(seconds=1), start - g,
                                                       start - pd.Timedelta(days=1)]})
     assert T.train_mask(f, 2014).tolist() == [True, False, False]
-    assert T.gap("1m") == max(pd.Timedelta(days=1), D.input_lookback("1m", V.P30))
+    assert T.gap("1m") == pd.Timedelta(days=1)
 
 
 def test_fold_moments_hold_only_rows_labelled_before_the_gap() -> None:
@@ -662,27 +662,19 @@ def test_the_data_teams_cost_manifest_loads_when_present() -> None:
 
 
 # ---------------------------------------------------------------------------------------------- M1: embargo
-def test_the_gap_covers_the_longest_input_lookback_of_the_unit() -> None:
-    """Quant M1 on #488 (card R-B): gap(unit) = max(1 d, max H over the unit's tfs, max input_lookback over P30 and
-    the served columns), so no training row's inputs reach into the judged year."""
-    assert T.gap("1h") >= D.input_lookback("1h", ["rv_ratio"])
+def test_the_gap_is_max_of_a_day_and_the_units_longest_hold() -> None:
+    """Quant ruling (1) on #488, a label-blind clarification of card R-B (K 0): gap(unit) = max(1 d, max H over the
+    unit's tfs); no lookback term (expanding forward folds with a full-horizon purge carry no future information)."""
+    assert T.gap("1d") == T.gap("1w") == pd.Timedelta(days=20)
+    assert T.gap("4h") == pd.Timedelta(days=5)
+    assert T.gap("1h") == pd.Timedelta(days=1) and T.gap("1m") == pd.Timedelta(days=1)
     for unit, tfs in V.UNITS.items():
-        want = max([pd.Timedelta(days=1)] + [pd.Timedelta(seconds=V.H_S[t]) for t in tfs]
-                   + [D.input_lookback(t, V.P30) for t in tfs])
+        want = max([pd.Timedelta(days=1)] + [pd.Timedelta(seconds=V.H_S[t]) for t in tfs])
         assert all(T.gap(t) == want for t in tfs), unit
-    assert T.gap("1d") == T.gap("1w"), "1d+1w is one unit with one gap"
-    extra = pd.Timedelta(days=400)
-    assert T.gap("1h", extra_s=extra.total_seconds()) == extra, "a served column's longer lookback widens the gap"
-
-
-def test_the_pinned_p30_lookbacks_equal_dense_labels_input_lookback() -> None:
-    """sr_v3.P30_LOOKBACK_S is a constant (the fit path may not import dense_labels); pinned here."""
-    for tf in V.H_S:
-        assert V.P30_LOOKBACK_S[tf] == D.input_lookback(tf, V.P30).total_seconds(), tf
 
 
 def test_a_fold_with_no_training_row_under_the_gap_is_skipped_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(V.P30_LOOKBACK_S, "4h", (4 * 365 + 30) * 86_400)     # 2014's cut falls before 2010
+    monkeypatch.setattr(T, "gap", lambda tf: pd.Timedelta(days=4 * 365 + 30))     # 2014's cut falls before 2010
     data, plan = _data(readable=False), _plan()
     res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1])
     assert res.report["folds_without_training_rows"] == [2012, 2013, 2014]

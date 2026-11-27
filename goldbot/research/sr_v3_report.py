@@ -251,7 +251,7 @@ def harness(col: Collected, plan: UnitPlan, *, seeds: Sequence[int], learners: S
     if len(s) > max_rows:
         s = s[_hash_u(s, seeds[0]) < max_rows / len(s)].reset_index(drop=True)
     yr = pd.DatetimeIndex(pd.to_datetime(s["decision_utc"], utc=True)).year.to_numpy()
-    tr = s[train_mask(s, Y, extra_s=plan.extra_lookback_s)].reset_index(drop=True)
+    tr = s[train_mask(s, Y)].reset_index(drop=True)
     te = s[(yr == Y) & (s["phase"] == 0)].reset_index(drop=True)
     out: dict[str, Any] = {"fold": Y, "train_rows": len(tr), "test_rows": len(te)}
     if len(tr) < 1_000 or len(te) < 200:

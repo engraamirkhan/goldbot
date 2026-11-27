@@ -17,7 +17,7 @@ Per judged unit (1m, 5m, 15m, 30m, 1h, 2h, 4h, and 1d+1w pooled), on learn 2010-
    body and the pooled body, on fold 2010-11 (2010-13 under remedy (b)). No label value is read (card test 18 (iv)).
 2. **Folds** (card 5.3 Stage L, R-B; ADR 0106 "a gap between train, validation and test"): expanding yearly folds,
    OOF years `first_oof`..2017. A training row of test year Y has its label horizon end before Y's start minus the
-   unit's gap (`gap`: max(1 d, max H, max input lookback)). The AVG calibrator ("validation") uses only OOF rows of
+   unit's gap (`gap`: max(1 d, max H over the unit's tfs)). The AVG calibrator ("validation") uses only OOF rows of
    earlier years under the same gap. Inputs are imputed with the smallest fold's medians and standardised with each
    fold's own training rows.
 3. **Fit**: L-cw and HB from additive moments over every row (streamed by year), G-cw and the D-40 dense prior on a
@@ -237,28 +237,26 @@ def unit_of(tf: str) -> tuple[str, ...]:
     return next(tfs for tfs in V.UNITS.values() if tf in tfs)
 
 
-def gap(tf: str, *, extra_s: float = 0.0) -> pd.Timedelta:
-    """The purge/embargo before a test year, per unit (quant M1 on #488; card R-B "embargo max(1 d, max hold, longest
-    lookback)"): max(1 d, max H over the unit's tfs, max input_lookback over P30 and the served columns) over every
-    tf of the unit. `extra_s`: the served columns' lookback beyond P30 (`UnitPlan.extra_lookback_s`, admitted blocks)."""
-    tfs = unit_of(tf)
-    hold = WN.label_embargo(pd.Timedelta(seconds=max(V.H_S[t] for t in tfs)))
-    look = max(max(V.P30_LOOKBACK_S[t] for t in tfs), float(extra_s))
-    return max(hold, pd.Timedelta(seconds=look))
+def gap(tf: str) -> pd.Timedelta:
+    """The purge/embargo before a test year, per unit: max(1 d, max H over the unit's tfs) (`windows.label_embargo`).
+    Quant ruling (1) on #488, a label-blind clarification of card R-B (K 0): no input-lookback term, because the
+    folds expand forward and purge every label whose horizon reaches the cut, so a training row carries no future
+    information (the M1 lookback term was withdrawn)."""
+    return WN.label_embargo(pd.Timedelta(seconds=max(V.H_S[t] for t in unit_of(tf))))
 
 
 def year_start(y: int) -> pd.Timestamp:
     return pd.Timestamp(f"{y}-01-01", tz="UTC")
 
 
-def train_mask(f: pd.DataFrame, test_year: int, *, extra_s: float = 0.0) -> np.ndarray:
+def train_mask(f: pd.DataFrame, test_year: int) -> np.ndarray:
     """Rows that may train for test year `test_year`: labelled before its start minus the gap. The v0 fold (the year
     after learn) has no test block after it: every row labelled by the learn end trains (load_labels' own cut)."""
     if not len(f):
         return np.zeros(0, bool)
     if test_year > V.LEARN_YEARS[-1]:
         return _ns(f["horizon_end_utc"]) <= WN.SPANS[WN.Window.LEARN][1].value
-    cuts = {t: (year_start(test_year) - gap(t, extra_s=extra_s)).value for t in f["tf"].astype(str).unique()}
+    cuts = {t: (year_start(test_year) - gap(t)).value for t in f["tf"].astype(str).unique()}
     cut = np.array([cuts[t] for t in f["tf"].astype(str)])
     return _ns(f["horizon_end_utc"]) < cut
 
@@ -374,7 +372,6 @@ class UnitPlan:
     lam_a: float
     design_effect: float
     stage0: dict[str, Any]
-    extra_lookback_s: float = 0.0      # served columns' input lookback beyond P30 (admitted blocks), in the gap (M1)
 
     @property
     def oof_years(self) -> tuple[int, ...]:
@@ -475,7 +472,7 @@ def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int]
         zero = np.zeros(len(f))
         full = _td(f, V.P30, zero, design_effect=plan.design_effect)
         for Y in folds:
-            m = train_mask(f, Y, extra_s=plan.extra_lookback_s)
+            m = train_mask(f, Y)
             if not m.any():
                 continue
             pri[Y].add(f[m])
@@ -546,7 +543,7 @@ def fit_fold(Y: int, col: Collected, plan: UnitPlan, *, hb: L.HbArtifact | None,
     b8 = L.lcw_from_moments({k: _drop_columns(v) for k, v in col.lcw[Y].items()}, np.zeros(0), (), lam=V.LAMBDA_ROWS,
                             lam_a=plan.lam_a, design_effect=plan.design_effect)
     s = col.sample
-    m = train_mask(s, Y, extra_s=plan.extra_lookback_s)
+    m = train_mask(s, Y)
     dense = None
     gcw: dict[int, L.GcwArtifact] = {}
     if m.sum() >= 2 * L.DENSE_PARAMS["min_data_in_leaf"]:
@@ -649,8 +646,7 @@ def settings() -> dict[str, Any]:
             "clip_r": V.CLIP_R, "first_oof": [V.FIRST_OOF, V.FIRST_OOF_B], "max_tree_rows": MAX_TREE_ROWS,
             "gcw": L.GCW_PARAMS, "dense": L.DENSE_PARAMS, "gbt_threads": L.GBT_THREADS, "seeds": list(SEEDS),
             "hb_columns": list(HB_COLUMNS), "p30": list(V.P30),
-            "gap": "per unit: max(1 d, max H, max input_lookback over P30 and served columns)",
-            "p30_lookback_s": dict(V.P30_LOOKBACK_S)}
+            "gap": "per unit: max(1 d, max H over the unit's tfs)"}
 
 
 @dataclass
@@ -717,7 +713,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
         sc["year"] = Y
         earlier = pd.concat(oof_parts, ignore_index=True) if oof_parts else sc.iloc[:0]
         if len(earlier):        # validation rows: labelled before the test year's start minus the gap
-            earlier = earlier[train_mask(earlier, Y, extra_s=plan.extra_lookback_s)]
+            earlier = earlier[train_mask(earlier, Y)]
         sc, av = add_avg(sc, earlier, {"L-cw": L.artifact_sha(fm.lcw), "G-cw": L.artifact_sha(fm.gcw[seeds[0]])
                                         if fm.gcw else "", "HB": L.artifact_sha(fm.hb) if fm.hb else ""})
         if av is not None:
@@ -752,7 +748,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
     report["folds_without_training_rows"] = no_train
-    report["gap_days"] = {t: gap(t, extra_s=plan.extra_lookback_s).total_seconds() / 86_400 for t in plan.tfs}
+    report["gap_days"] = {t: gap(t).total_seconds() / 86_400 for t in plan.tfs}
     report["train_end"] = col.train_end.isoformat() if col.train_end is not None else None
     report["label_end_max"] = col.label_end_max.isoformat() if col.label_end_max is not None else None
     return UnitResult(report=report, artifacts=arts, oof=sealed_scores(oof), full=oof, v0=v0, col=col)
@@ -776,14 +772,13 @@ def fit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected) -> dict[str, A
 def plan_dict(plan: UnitPlan) -> dict[str, Any]:
     return {"unit": plan.unit, "tfs": list(plan.tfs), "members": list(plan.members),
             "lcw_columns": list(plan.lcw_columns), "first_oof": plan.first_oof, "lam_a": plan.lam_a,
-            "design_effect": plan.design_effect, "stage0": plan.stage0, "extra_lookback_s": plan.extra_lookback_s}
+            "design_effect": plan.design_effect, "stage0": plan.stage0}
 
 
 def plan_of(d: Mapping[str, Any]) -> UnitPlan:
     return UnitPlan(unit=str(d["unit"]), tfs=tuple(d["tfs"]), members=tuple(d["members"]),
                     lcw_columns=tuple(d["lcw_columns"]), first_oof=int(d["first_oof"]), lam_a=float(d["lam_a"]),
-                    design_effect=float(d["design_effect"]), stage0=dict(d.get("stage0") or {}),
-                    extra_lookback_s=float(d.get("extra_lookback_s") or 0.0))
+                    design_effect=float(d["design_effect"]), stage0=dict(d.get("stage0") or {}))
 
 
 def hb_from_plans(data: UnitData, plans: Sequence[UnitPlan], *, seed: int) -> dict[int, L.HbArtifact]:
