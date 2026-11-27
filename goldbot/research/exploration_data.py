@@ -131,19 +131,19 @@ BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
-# A label replayed while a stale refit cost cell of its broker (older than daily_review.CELL_MAX_AGE at the slot) was
-# set aside AND would have raised the cost charged carries this in its cost_model_version (r1's cost; r2 inherits it).
+# A label whose r1 slippage was set by a refit cell older than daily_review.CELL_MAX_AGE at the slot (its broker's last
+# measurement, carried forward) carries this in its cost_model_version (r1's cost; r2 inherits it).
 STALE_CELLS_TAG = "+cells-stale:"
 
 
 def cost_cells_stale(version: object) -> bool:
-    """True when a label's cost_model_version records a stale refit cell set aside (`STALE_CELLS_TAG`)."""
+    """True when a label's r1 slippage was a stale refit cell carried forward (STALE_CELLS_TAG)."""
     return isinstance(version, str) and STALE_CELLS_TAG in version
 
 
 def drop_stale_cost_labels(obs: pd.DataFrame) -> pd.DataFrame:
-    """`obs` without the labels costed while a refit cell was stale: for reads that pool labels ACROSS brokers, where
-    a stale host (vantage-demo, replay-only) would otherwise mix in labels on a cost basis nobody measures any more."""
+    """`obs` without labels whose cost is a carried-forward stale cell: reads that pool brokers keep only freshly
+    measured cost bases."""
     if obs.empty or "cost_model_version" not in obs.columns:
         return obs
     return obs[~obs["cost_model_version"].map(cost_cells_stale)].reset_index(drop=True)

@@ -502,7 +502,8 @@ def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: R
     `daily_review.CELL_MAX_AGE` at `slot` (slot - through_ns) is stale but is still the broker's last measurement, so
     it keeps charging (quant #507: a host that stopped filling has not shown cheaper slippage; H-60 "never credited").
     When a stale cell is what sets the charge the version records `+cells-stale:<newest stale day>`
-    (`exploration_data.cost_cells_stale`), so reads can tell a measured-fresh cost from a carried-forward one."""
+    (`exploration_data.cost_cells_stale`), so reads can tell a measured-fresh cost from a carried-forward one, and
+    `effective_utc` moves to that cell's fitted time (provenance of the charge)."""
     from goldbot.research.daily_review import replay_cells
     cells = replay_cells(state_dir, broker, slot)
     if cells is None:
@@ -513,9 +514,10 @@ def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: R
         out = out.model_copy(update={"slippage_usd": fresh, "version": f"{out.version}+cells:{cells.day}",
                                      "effective_utc": max(out.effective_utc, effective)})
     if (cells.stale_day is not None and cells.stale_slippage_usd is not None
-            and cells.stale_slippage_usd > out.slippage_usd):
+            and cells.stale_effective_utc is not None and cells.stale_slippage_usd > out.slippage_usd):
         out = out.model_copy(update={"slippage_usd": cells.stale_slippage_usd,
-                                     "version": f"{out.version}{STALE_CELLS_TAG}{cells.stale_day}"})
+                                     "version": f"{out.version}{STALE_CELLS_TAG}{cells.stale_day}",
+                                     "effective_utc": max(out.effective_utc, cells.stale_effective_utc)})
     return out
 
 

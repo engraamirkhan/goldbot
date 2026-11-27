@@ -448,11 +448,13 @@ def write_cell(db: Database, *, broker: str, session: str, day: str, slippage_us
 
 
 def _cells(conn: sqlite3.Connection, broker: str, as_of: pd.Timestamp) -> dict[str, tuple[float, str, int, int]]:
-    """session -> (slippage, day, fitted_ns, through_ns) of the latest fit effective at `as_of`."""
+    """session -> (slippage, day, fitted_ns, through_ns) of the latest fit effective at `as_of`: fitted at or before
+    `as_of` on fills through `as_of` at the latest (quant #507: a cell resting on fills after the slot is never read)."""
     out: dict[str, tuple[float, str, int, int]] = {}
+    at = int(pd.Timestamp(as_of).value)
     for session, slip, day, fitted, through in conn.execute(
             "SELECT session, slippage_usd, day, fitted_ns, through_ns FROM exploration_cost_cells "
-            "WHERE broker = ? AND fitted_ns <= ? ORDER BY day", (broker, int(pd.Timestamp(as_of).value))):
+            "WHERE broker = ? AND fitted_ns <= ? AND through_ns <= ? ORDER BY day", (broker, at, at)):
         out[str(session)] = (float(slip), str(day), int(fitted), int(through))
     return out
 
@@ -474,20 +476,22 @@ CELL_MAX_AGE = pd.Timedelta(days=14)
 @dataclass(frozen=True)
 class ReplayCells:
     """The refit cells of a broker in effect at a slot: the dearest FRESH one (None when every cell is stale), the
-    newest fresh fit day and when it took effect; the newest stale fit day set aside and the dearest stale value (None
-    when none was)."""
+    newest fresh fit day and when it took effect; the newest stale fit day (still charged when dearest), the dearest
+    stale value and when the newest stale fit took effect (None when no cell was stale)."""
     slippage_usd: float | None
     day: str | None
     effective_utc: pd.Timestamp | None
     stale_day: str | None
     stale_slippage_usd: float | None = None
+    stale_effective_utc: pd.Timestamp | None = None
 
 
 def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
                  max_age: pd.Timedelta = CELL_MAX_AGE) -> ReplayCells | None:
     """For the label replay (jobs.exploration_costs): the refit cells of `broker` in effect at `as_of` (fitted_ns <=
-    as_of, the latest per session), split into fresh (as_of - through_ns <= `max_age`) and stale; None without any, without
-    aux.db or before migration 18. Read only."""
+    as_of and through_ns <= as_of, the latest per session; a cell resting on fills after the slot is never read), split
+    into fresh (as_of - through_ns <= `max_age`) and stale; None without any, without aux.db or before migration 18.
+    Read only."""
     p = db_path(state_dir, "aux")
     if not p.exists():
         return None
@@ -502,17 +506,15 @@ def replay_cells(state_dir: str | Path, broker: str, as_of: pd.Timestamp,
     if not cells:
         return None
     oldest_ok = int(pd.Timestamp(as_of).value) - int(max_age.value)
-    now_ns = int(pd.Timestamp(as_of).value)
-    # fresh: slot - through_ns <= max_age, judged only on fills up to the slot (a same-day refit can move through_ns
-    # past an earlier slot; quant #507 item 2)
-    fresh = [v for v in cells.values() if oldest_ok <= v[3] <= now_ns]
-    stale = [v for v in cells.values() if not oldest_ok <= v[3] <= now_ns]
+    fresh = [v for v in cells.values() if v[3] >= oldest_ok]          # slot - through_ns <= max_age
+    stale = [v for v in cells.values() if v[3] < oldest_ok]
     return ReplayCells(
         slippage_usd=max(v[0] for v in fresh) if fresh else None,
         day=max(v[1] for v in fresh) if fresh else None,
         effective_utc=pd.Timestamp(max(v[2] for v in fresh), unit="ns", tz="UTC") if fresh else None,
         stale_day=max(v[1] for v in stale) if stale else None,
-        stale_slippage_usd=max(v[0] for v in stale) if stale else None)
+        stale_slippage_usd=max(v[0] for v in stale) if stale else None,
+        stale_effective_utc=pd.Timestamp(max(v[2] for v in stale), unit="ns", tz="UTC") if stale else None)
 
 
 def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Timestamp, min_fills: int,

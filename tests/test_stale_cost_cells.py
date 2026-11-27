@@ -1,7 +1,7 @@
-"""A refit cost cell (aux.db exploration_cost_cells) older than CELL_MAX_AGE at the label's slot is stale: it no longer
-raises the replay cost, the label's cost_model_version records `+cells-stale:<day>`, and a stale-flagged label is left
-out of the one cross-broker read (autodisc discovery priors). As-of semantics unchanged: a cell fitted after the slot
-is never read."""
+"""A refit cost cell (aux.db exploration_cost_cells) older than CELL_MAX_AGE at the label's slot is stale: it keeps
+charging its last measurement, the label's cost_model_version records `+cells-stale:<day>` when it sets the charge, and
+a stale-flagged label is left out of the one cross-broker read (autodisc discovery priors). As of the slot: a cell
+fitted, or resting on fills, after the slot is never read."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +40,7 @@ def test_a_stale_cell_keeps_charging_its_last_measurement_and_is_flagged(tmp_pat
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(days=20), BASE)
     assert c.slippage_usd == pytest.approx(0.60)       # the 11-06 cell still charges: never credited (quant #507)
     assert c.version == "settings-priors:vantage+cells-stale:2026-11-06"
-    assert c.effective_utc == BASE.effective_utc
+    assert c.effective_utc == FIT                      # provenance: the stale cell's own fitted time
     assert ex.cost_cells_stale(c.version)
 
 
@@ -127,10 +127,9 @@ def test_a_cheaper_stale_cell_never_lowers_a_fresh_charge_and_is_not_tagged(tmp_
     assert "+cells:2026-11-20" in c.version and "+cells-stale:" not in c.version
 
 
-def test_freshness_is_judged_only_on_fills_up_to_the_slot(tmp_path):
+def test_a_cell_resting_on_fills_after_the_slot_is_never_read(tmp_path):
     db = Database.open(tmp_path, "aux")                     # fitted before the slot on fills that run past it
     dr.write_cell(db, broker="vantage", session="london", day="2026-11-06", slippage_usd=0.60, fills=200,
                   through=FIT + pd.Timedelta(days=1), now=FIT)
     c = jobs._with_refit_cells(tmp_path, "vantage", FIT + pd.Timedelta(hours=12), BASE)
-    assert c.slippage_usd == pytest.approx(0.60)            # still charged, never credited
-    assert "+cells-stale:2026-11-06" in c.version and "+cells:" not in c.version
+    assert c == BASE                                        # look-ahead: its fills postdate the slot (quant #507)
