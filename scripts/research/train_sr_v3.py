@@ -29,6 +29,7 @@ Refusals, by design:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -71,6 +72,14 @@ def _store(a: argparse.Namespace, unit: str | None = None, key: str | None = Non
                         read=key is not None)
 
 
+def freeze(plan: T.UnitPlan, a: argparse.Namespace) -> dict[str, Any]:
+    """Rev 9 D1 "Freeze": the served column list, the tiers sha256 and the COLUMN_LOOKBACKS hash, recorded in the
+    read-once ref before the read (a later regrade or lookback change never alters a booked read)."""
+    from goldbot.features.registry import COLUMN_LOOKBACKS
+    lb = hashlib.sha256(json.dumps(COLUMN_LOOKBACKS, sort_keys=True).encode()).hexdigest()
+    return {"columns": list(plan.lcw_columns), "tiers_sha256": V.file_sha256(a.tiers), "column_lookbacks_sha256": lb}
+
+
 def frozen_fit(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     """The frozen fit-only run a read is keyed on (its report: artifact shas and the sealed OOF scores sha)."""
     p = Path(a.out) / unit / "report.json"
@@ -110,6 +119,8 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if a.stage0_only or s0.status != "fit":
         return {"unit": unit, "status": s0.status, "level": s0.level, "body": s0.body}
     plan = T.plan_from_stage0(s0)
+    if isinstance(store, ST.StoreData):     # rev 9 C3: the one label load names the unit's served columns
+        store.columns = tuple(plan.lcw_columns)
     col = T.collect(store, plan, seed=T.SEEDS[0])
     save_collected(col, out)
     (out / "plan.json").write_text(json.dumps(plan.__dict__, indent=1, default=str))
@@ -182,11 +193,14 @@ def phase3(unit: str, a: argparse.Namespace) -> dict[str, Any]:
         return {"unit": unit, "status": "skipped"}
     hb = {int(p.stem.split("_")[1]): L.load_artifact(p.read_text()) for p in sorted((Path(a.out) / "_hb").glob("*.json"))}
     key = None
+    plan = _plan(out)
     if a.read:            # quant N1 on #488: the read books sr-v3:<unit> once, keyed on the frozen fit-only run
         frozen = frozen_fit(unit, a)
         key = ST.read_key(frozen)
-        ST.book_learn_read(Path(a.ledger), unit, key)
-    store, plan = _store(a, unit, key), _plan(out)
+        ST.book_learn_read(Path(a.ledger), unit, key, freeze=freeze(plan, a))
+    store = _store(a, unit, key)
+    if isinstance(store, ST.StoreData):
+        store.columns = tuple(plan.lcw_columns)
     res = R.fit_unit(store, plan, hb_by_fold=hb, col=load_collected(out), read=a.read,     # type: ignore[arg-type]
                      trial_id=a.trial_id)
     if a.read and (res.report["artifacts"] != frozen["artifacts"]

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from goldbot.research import decision_cost as DC
@@ -76,7 +77,7 @@ def learn_family(unit: str) -> str:
     return f"sr-v3:{unit}"
 
 
-def book_learn_read(ledger: Path | str, unit: str, key: str) -> None:
+def book_learn_read(ledger: Path | str, unit: str, key: str, *, freeze: Mapping[str, Any] | None = None) -> None:
     """Quant N1 on #488: a READ books the unit's learn read (`windows.record_read_once`, family `sr-v3:<unit>`) at the
     start of phase 3, before its first label read, keyed on the frozen fit (`read_key`). Once per unit: a second read,
     under any key, raises `AlreadyRead`. A fit-only run never books (its label loads are ledgered by load_labels'
@@ -84,7 +85,7 @@ def book_learn_read(ledger: Path | str, unit: str, key: str) -> None:
     from goldbot.research import dense_labels as D
     WN.record_read_once(ledger, learn_family(unit), WN.Window.LEARN,
                         ref={"procedure": V.SPEC_VERSION, "unit": unit, "manifest_key": MANIFEST_KEY, "read_key": key,
-                             "label_spec_hash": D.spec_hash()})
+                             "label_spec_hash": D.spec_hash(), **dict(freeze or {})})   # rev 9 D1 "Freeze"
 
 
 def read_key(frozen: Mapping[str, Any]) -> str:
@@ -104,6 +105,31 @@ def require_booked(ledger: Path | str, unit: str | None, key: str | None) -> Non
             and (r.get("ref") or {}).get("read_key") == key for r in WN.read_ledger(ledger)):
         raise ReadNotBooked(f"refused the read's label load: unit {unit!r} read {key!r} has no learn booking in "
                             f"{ledger} (book_learn_read at the start of phase 3; quant N1 on #488)")
+
+
+def _tier_free(rows: pd.DataFrame) -> pd.DataFrame:
+    return rows.drop(columns=[c for c in ("tier", "usable") if c in rows.columns])
+
+
+def prefix_usability(rows: pd.DataFrame, tiers: Any, columns: Sequence[str] = V.P30) -> pd.DataFrame:
+    """Rev 9 D1 (label-blind): `usable` = the label window alone (`attach_tiers(columns=["side"])`, side reads no
+    history) and `ok:<column>` = that column's own span, per column of `columns`. A row is usable under a column set
+    iff `usable` and every `ok:` of the set (`sr_v3_train.usable_under`): attach_tiers' conjunction over columns
+    (ADR 0104 4), so every ladder prefix is masked without a label value."""
+    from goldbot.research import dense_labels as D
+    base = _tier_free(rows)
+    out = base.assign(usable=D.attach_tiers(base, tiers, columns=["side"])["usable"].to_numpy(bool))
+    for c in columns:
+        if c != "side":
+            out[f"ok:{c}"] = D.attach_tiers(base, tiers, columns=[c])["usable"].to_numpy(bool)
+    return out
+
+
+def p30_mask(rows: pd.DataFrame, tiers: Any) -> np.ndarray:
+    """Rev 9 quant C3: the P30 mask of HB, G-cw and AVG, by `attach_tiers(columns=P30)` on rows already loaded under
+    the served columns, never by a second label load."""
+    from goldbot.research import dense_labels as D
+    return D.attach_tiers(_tier_free(rows), tiers, columns=V.P30)["usable"].to_numpy(bool)
 
 
 def default_ledger() -> Path:
@@ -130,6 +156,9 @@ class StoreData:
     unit: str | None = None                              # the unit and read whose learn read is booked (N1)
     read_key: str | None = None
     read: bool = False                                   # a read's store: every label load needs the booking
+    # rev 9 quant C3: the unit's narrowest served column set, the ONE column set load_labels is called with
+    # (() = intercept-only: the label window alone); set from the Stage 0 plan before any label load
+    columns: tuple[str, ...] | None = None
     # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
     # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
     ledger: Path = field(default_factory=lambda: default_ledger())
@@ -163,7 +192,8 @@ class StoreData:
         return D._typed(pd.read_parquet(p))[["phase", "decision_utc", "u_tf", "w"]]
 
     def events(self, instrument: str, tf: str, years: Sequence[int]) -> pd.DataFrame:
-        """Stage 0's label-blind events: the skeleton's T2 long rows (one per bar), tier-usable under P30, with u.
+        """Stage 0's label-blind events: the skeleton's T2 long rows (one per bar), with u, the label window's
+        usability and each P30 column's (`prefix_usability`, rev 9 D1).
         Refused while `sequencing_gaps` is not empty (no Stage 0 statistic before the quant sequencing holds)."""
         from goldbot.research import dense_labels as D
         refuse_unsequenced(f"Stage 0 events {instrument} {tf}")
@@ -172,12 +202,13 @@ class StoreData:
             return pd.DataFrame(columns=["instrument", "tf", "phase", "decision_utc", "usable", "u"])
         sk = D.skeleton(self.labels, instrument=instrument, tf=tf, years=sorted(y for y, _ in ks), keys=ks)
         sk = sk[(sk["template"] == V.JUDGED_HEAD) & (sk["side"] == 1)].reset_index(drop=True)
-        sk = D.attach_tiers(sk.drop(columns=["tier", "usable"]), self._tiers(instrument), columns=V.P30)
+        sk = prefix_usability(sk, self._tiers(instrument))
         w = self._weights(instrument, tf)
         ev = sk.merge(w, on=["phase", "decision_utc"], how="left")
         self.used.setdefault("stage0_keys", {})[f"{instrument}:{tf}"] = {f"{y}:{p}": k for (y, p), k in ks.items()}
+        ok = [c for c in ev.columns if str(c).startswith("ok:")]
         return ev.assign(u=ev["u_tf"].fillna(0.0), usable=ev["usable"] & ev["label_ok"])[
-            ["instrument", "tf", "phase", "decision_utc", "usable", "u"]]
+            ["instrument", "tf", "phase", "decision_utc", "usable", "u", *ok]]
 
     def frame(self, instrument: str, tf: str, year: int, *, phases: Sequence[int] = (0,)) -> pd.DataFrame:
         """One year of the instrument x tf's learn rows. The labels are loaded ONCE per (instrument, tf, phases) for
@@ -204,11 +235,14 @@ class StoreData:
               if (k := self.keys(instrument, tf, y, int(p))) is not None}
         if not ks:
             return pd.DataFrame(columns=list(ROW_COLS))
+        if self.columns is None:
+            raise ValueError("StoreData.columns is unset: the label load names the unit's served columns (rev 9 C3)")
         tiers = self._tiers(instrument)
         years = sorted({y for y, _ in ks})
         # #482 (quant L1): every load is a ledgered consumption row with procedure "sr-v3", which the X6 guard reads
         lab, meta = D.load_labels(self.labels, procedure=V.SPEC_VERSION, ledger=self.ledger, instrument=instrument,
-                                  tf=tf, years=years, tiers=tiers, columns=V.P30, keys={k: v[0] for k, v in ks.items()},
+                                  tf=tf, years=years, tiers=tiers, columns=list(self.columns) or ["side"],
+                                  keys={k: v[0] for k, v in ks.items()},
                                   window=WN.SPANS[WN.Window.LEARN], purpose="train", phases=list(phases),
                                   templates=("T0", V.JUDGED_HEAD))
         feats, fmeta = F.load(self.features, instrument=instrument, tf=tf, years=years, tiers=tiers,
@@ -219,6 +253,7 @@ class StoreData:
             # quant A4 on #482: load_labels' gate status of this read, kept for the report and every manifest
             "gate_eligible": meta.get("gate_eligible") is True, "gate_block": list(meta.get("gate_block") or [])}
         t2 = lab[lab["template"] == V.JUDGED_HEAD]
+        t2 = t2.assign(p30_ok=p30_mask(t2, tiers) if len(t2) else np.zeros(0, bool))
         t0 = lab[lab["template"] == "T0"][["phase", "decision_utc", "side", "gross_r_raw"]].rename(
             columns={"gross_r_raw": "t0_gross"})
         rows = t2.merge(t0, on=["phase", "decision_utc", "side"], how="inner")
@@ -239,7 +274,8 @@ class StoreData:
                             "gross": rows["gross_r_raw"].to_numpy(float), "t0_gross": rows["t0_gross"].to_numpy(float),
                             "stop": DC.is_stop(rows), "nights_held": DC.nights_held(rows),
                             "w": rows["w"].to_numpy(float), "entry": rows["entry"].to_numpy(float),
-                            "base_dist": rows["base_dist"].to_numpy(float)})
+                            "base_dist": rows["base_dist"].to_numpy(float),
+                            "p30_ok": rows["p30_ok"].to_numpy(bool)})
         out = pd.concat([out, parts.reset_index(drop=True), X[[c for c in V.P30 if c != "side"]].reset_index(drop=True)], axis=1)
         return out[list(ROW_COLS)]
 
@@ -276,5 +312,5 @@ class StoreData:
                 "tiers_sha256": V.file_sha256(self.tiers_path), "used": self.used}
 
 
-__all__ = ["ReadNotBooked", "SequencingRefused", "StoreData", "book_learn_read", "default_ledger", "learn_family",
+__all__ = ["p30_mask", "prefix_usability", "ReadNotBooked", "SequencingRefused", "StoreData", "book_learn_read", "default_ledger", "learn_family",
            "read_key", "refuse_unsequenced", "require_booked", "sequencing_gaps"]

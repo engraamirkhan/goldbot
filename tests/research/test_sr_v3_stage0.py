@@ -170,3 +170,34 @@ def test_x6_price_action_is_the_last_block_of_the_served_order() -> None:
     served = V.served_body(counts, rho, body="gold", admitted=[("X6", V.X6_COLUMNS), ("X3", ("x3a",))])
     assert served[:15] == (*V.CORE_6, "x3a", *V.X6_COLUMNS), "X6 enters after every earlier admitted block, whole"
     assert V.served_body(counts, rho, body="gold") == V.served_body(counts, rho, body="gold", admitted=())
+
+
+# ---------------------------------------------------------------------------------------------- rev 9 (D1, D2)
+def test_each_ladder_prefix_is_charged_in_full_on_its_own_usable_rows() -> None:
+    """Rev 9 D1 and quant C1: the n_eff charged for prefix k is counted on rows usable under prefix k's columns; every
+    prefix is charged in full on its own rows (never incrementally); the level is the longest prefix that fits."""
+    rho = V.rev3_inputs()
+    rich, poor = _big(8_000.0), _big(200.0)
+
+    def counts_of(cols: tuple[str, ...]) -> list[V.InstCounts]:
+        return rich if len(cols) <= 6 else poor        # columns past core-6 read a C month: few usable rows
+    lad = V.prefix_ladder(counts_of, V.level_order(), rho, body="gold")
+    assert lad.prefix == 6 and lad.level == "L3" and lad.order == V.level_order()
+    want = V.ladder(rich, V.level_order()[:6], rho, body="gold")
+    assert lad.fixed == want.fixed and lad.columns == want.columns, "charged on core-6's own rows"
+    assert V.ladder(rich, V.level_order(), rho, body="gold").prefix > 6, "one row set for all would admit more"
+    assert V.served_body(counts_of, rho, body="gold") == V.CORE_6
+
+
+def test_decide_unit_tries_remedy_b_when_fold_a_has_no_usable_gold_row() -> None:
+    """Rev 9 D2: no usable gold row on (a) tries (b) 2010-13 before NOT STARTED (data)."""
+    rho = {"gold": V.rev3_inputs(), "pooled": V.rev3_inputs()}
+    av = {"gold": V.P30, "pooled": V.P30}
+    none: dict[str, V.Counts] = {"gold": lambda cols: [], "pooled": lambda cols: []}
+    some: dict[str, V.Counts] = {"gold": lambda cols: _big(4_000.0) if len(cols) <= 6 else [], "pooled": lambda cols: []}
+    u = V.decide_unit("15m", ["15m"], counts_a=none, counts_b=some, rho=rho, available=av)
+    assert u.status == "fit" and u.remedy_b and u.first_oof == V.FIRST_OOF_B and u.fold == (2010, 2011, 2012, 2013)
+    assert u.level == "L3" and u.served == V.CORE_6
+    assert u.prefix_rows["gold"][:7] == [u.prefix_rows["gold"][0]] * 7 and u.prefix_rows["gold"][7] == 0
+    n = V.decide_unit("15m", ["15m"], counts_a=none, counts_b=none, rho=rho, available=av)
+    assert n.status == "not_started_data"

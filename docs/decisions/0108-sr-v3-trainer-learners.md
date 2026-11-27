@@ -83,6 +83,14 @@ read.
     brokers (icm, vantage), the conservative reading. Quant ruling (2) on #488 accepts it: serving charges the
     account's own broker cell, and every read states "S at the worse-broker cost" (report, report.md and each
     learner's read, `sr_v3_report.WORSE_BROKER_STATEMENT`).
+13. **Usability per column set** (card rev 9 D1-D2, quant C1/C3; PR #513): Stage 0 counts rows usable under each
+    ladder prefix (`sr_v3_store.prefix_usability`: the label window plus each column's own span by `attach_tiers`,
+    whose conjunction is ADR 0104 4's rule) and charges every prefix in full on its own rows (`sr_v3.prefix_ladder`);
+    `decide_unit` tries remedy (b) before NOT STARTED. The label load names the unit's served columns (one load);
+    the P30 mask of HB, D-40 / G-cw and AVG is `attach_tiers(columns=P30)` on the loaded rows (`p30_ok`). L-cw, B8,
+    the fold cost priors and every judged read use the served population; AVG and paired D use the intersection of
+    usable rows, with the count reported. The read-once booking records the served columns, the tiers sha and the
+    COLUMN_LOOKBACKS hash. Fold boundaries are `sr_v3.FOLD_A` / `FOLD_B` with `FIRST_OOF` / `FIRST_OOF_B`.
 
 ## Consequences
 - The first real run needs A4 recorded (#482), X6 merged (#484), the dl-v1 and fs-v1 stores built under the current

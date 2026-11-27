@@ -44,7 +44,7 @@ def _frame(inst: str, year: int, *, tf: str = "4h", seed: int = 0, signal: float
                       "horizon_end_utc": dec + pd.Timedelta(seconds=V.H_S[tf]), "side": side, "gross": gross,
                       "t0_gross": gross * 0.8 + rng.normal(0, 0.3, 2 * n), "stop": rng.random(2 * n) < 0.4,
                       "nights_held": np.floor(full * rng.random(2 * n)), "w": rng.uniform(0.1, 0.3, 2 * n),
-                      "entry": 1_500.0 + year, "base_dist": 12.0, "cost_rt_bp": 0.575})
+                      "entry": 1_500.0 + year, "base_dist": 12.0, "cost_rt_bp": 0.575, "p30_ok": True})
     f = pd.concat([f, parts[["cost_a", "cost_b", "cost_c", "nights_full"]]], axis=1)
     for j, c in enumerate(V.P30):
         if c != "side":
@@ -132,7 +132,7 @@ def test_stage0_reads_no_label_column() -> None:
     rng = np.random.default_rng(3)
     dec = pd.date_range("2010-01-04", "2011-12-30", freq="4h", tz="UTC")
     ev = pd.DataFrame({"instrument": "XAUUSD", "tf": "4h", "phase": 0, "decision_utc": dec, "usable": True,
-                       "u": rng.uniform(0.1, 0.3, len(dec))})
+                       "u": rng.uniform(0.1, 0.3, len(dec)), **{f"ok:{c}": True for c in V.P30}})
     with_labels = ev.assign(gross_r_raw=rng.normal(size=len(dec)), barrier_hit="stop")
     a = T.stage0_counts(ev, years=(2010, 2011))
     b = T.stage0_counts(with_labels.drop(columns=["gross_r_raw"]), years=(2010, 2011))
@@ -173,7 +173,7 @@ def test_no_label_or_stage0_read_while_x6_merged_utc_is_unset(monkeypatch: pytes
     monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
     monkeypatch.setattr(D, "load_labels", boom)
     monkeypatch.setattr(D, "skeleton", boom)
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     with pytest.raises(ST.SequencingRefused, match="X6_MERGED_UTC"):
         store.frame("XAUUSD", "4h", 2013)
@@ -201,7 +201,7 @@ def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, t
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("Stage 0 read a label")
     monkeypatch.setattr(D, "load_labels", boom)
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
     assert store.events("XAUUSD", "4h", (2010, 2011)).empty
 
 
@@ -216,12 +216,13 @@ def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: p
         raise D.SealedStore("sealed")
     _sequenced(monkeypatch)
     monkeypatch.setattr(D, "load_labels", sealed)
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     with pytest.raises(D.SealedStore):
         store.frame("XAUUSD", "4h", 2013)
     assert seen["window"] == T.WN.SPANS[T.WN.Window.LEARN] and seen["purpose"] == "train"
-    assert seen["columns"] == V.P30 and seen.get("booked_read") is None
+    assert seen["columns"] == list(V.CORE_6) and seen.get("booked_read") is None, \
+        "rev 9 C3: one label load, under the unit's narrowest served column set"
     assert seen["years"] == list(V.LEARN_YEARS), "one ledgered load per instrument x tf for every learn year (#482)"
     assert seen["procedure"] == "sr-v3", "the consumption row names sr-v3, so the X6 legitimacy guard sees it"
 
@@ -431,7 +432,7 @@ def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tm
     empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
     monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
     monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
     assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
     store.frame("XAUUSD", "4h", 2013)
@@ -463,10 +464,10 @@ def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypa
     monkeypatch.delenv("GOLDBOT_READ_LEDGERS", raising=False)
     want = default_registry().with_name(T.WN.READS_LEDGER)
     assert want == _ledgers()[0]
-    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
     assert Path(_cli().parser().parse_args([]).ledger) == want
     monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
-    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
 
 
 # ---------------------------------------------------------------------------------------------- H5: one run record
@@ -528,7 +529,7 @@ def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.Monk
     rho.write_text("{}")
     tiers.write_text("key,month,tier\n")
     monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
     v0 = store.version(["XAUUSD"], ["4h"], (0,))
     (w / "4h.parquet").write_bytes(b"two")
     v1 = store.version(["XAUUSD"], ["4h"], (0,))
@@ -648,9 +649,9 @@ def test_read_mode_refuses_w2_point_costs_even_on_a_gate_eligible_read() -> None
 
 def test_the_store_reports_its_cost_table_version(tmp_path: Path) -> None:
     table = T.CostTable.from_manifest(_cost_files(tmp_path))
-    store = ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
     assert store.cost_version() == "srv3-cost-fixture"
-    assert ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
 
 
 def test_the_data_teams_cost_manifest_loads_when_present() -> None:
@@ -826,18 +827,18 @@ def test_only_a_read_store_refuses_an_unbooked_label_read(monkeypatch: pytest.Mo
     tiers = tmp_path / "tiers.csv"
     tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
     with pytest.raises(D.SealedStore):          # fit-only: consume rows only, no booking needed
-        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led).frame("XAUUSD", "4h", 2013)
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led).frame("XAUUSD", "4h", 2013)
     assert seen == ["load"]
     for kw in ({"unit": "4h", "read_key": None}, {"unit": "4h", "read_key": "read-a"}):
         with pytest.raises(ST.ReadNotBooked):
-            ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, **kw,
+            ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, **kw,
                          read=True).frame("XAUUSD", "4h", 2013)
     ST.book_learn_read(led, "4h", "read-b")
     with pytest.raises(ST.ReadNotBooked):            # another read's booking is not this read's
-        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
                      read_key="read-a", read=True).frame("XAUUSD", "4h", 2013)
     with pytest.raises(D.SealedStore):
-        ST.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
                      read_key="read-b", read=True).frame("XAUUSD", "4h", 2013)
 
 
@@ -875,6 +876,9 @@ def test_fit_only_reruns_never_book_and_the_read_books_once(monkeypatch: pytest.
     assert out["mode"] == "read"
     rows = [r for r in T.WN.read_ledger(led) if r.get("family") == "sr-v3:4h"]
     assert len(rows) == 1 and rows[0]["ref"]["label_spec_hash"] == "f" * 64
+    ref = rows[0]["ref"]          # rev 9 D1 "Freeze": served columns, tiers sha, lookbacks hash in the booking
+    assert ref["columns"] == list(plan.lcw_columns) and len(ref["tiers_sha256"]) == 64
+    assert len(ref["column_lookbacks_sha256"]) == 64
     with pytest.raises(T.WN.AlreadyRead):
         cli.phase3("4h", a)
 
@@ -961,3 +965,85 @@ def test_a_pooled_body_read_carries_prior_costs_and_is_never_a_gate_read(fitted:
     g = R.fit_unit(gold, _plan(members=("XAUUSD",)), hb_by_fold=None, seeds=T.SEEDS[:1], read=True, trial_id=TRIAL,
                    with_harness=False).report
     assert g["cost_version"] == "fixture-ub95" and g["gate_read"] is True
+
+
+# ---------------------------------------------------------------------------------------------- rev 9: usability
+def _tiers_file(tmp_path: Path, bad: dict[str, str]) -> Path:
+    months = [str(m) for m in pd.period_range("2009-01", "2011-12", freq="M")]
+    p = tmp_path / "tiers.csv"
+    pd.DataFrame({"key": "XAUUSD", "month": months, "tier": [bad.get(m, "A") for m in months],
+                  "r11_id": "r11-test"}).to_csv(p, index=False)
+    return p
+
+
+def _skeleton(start: str, days: int, tf: str = "1h") -> pd.DataFrame:
+    d = pd.bdate_range(start, periods=days, tz="UTC")
+    dec = pd.DatetimeIndex([x + pd.Timedelta(hours=h) for x in d for h in (8, 12, 16)])
+    return pd.DataFrame({"instrument": "XAUUSD", "source": "dukascopy", "tf": tf, "template": "T2", "phase": 0,
+                         "decision_utc": dec, "horizon_end_utc": dec + pd.Timedelta(seconds=V.H_S[tf]),
+                         "label_ok": True, "u": 0.2})
+
+
+def test_stage0_counts_rows_usable_under_each_column_set(tmp_path: Path) -> None:
+    """Rev 9 D1, acceptance (i): a C month 60 days before an A month: core-6 rows > 0 and P30 rows = 0 (P30's d1
+    context reads 129 days back; core-6's longest strict lookback is days)."""
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    ev = ST.prefix_usability(_skeleton("2010-05-10", 15), tiers)
+    core6 = T.stage0_counts(ev, years=(2010,), columns=V.CORE_6)
+    p30 = T.stage0_counts(ev, years=(2010,), columns=V.P30)
+    assert core6 and core6[0].rows == len(ev) and p30 == []
+    assert T.stage0_counts(ev, years=(2010,))[0].rows == len(ev), "the label window alone"
+    assert np.array_equal(T.usable_under(ev, V.P30),
+                          D.attach_tiers(ev, tiers, columns=V.P30)["usable"].to_numpy()), "conjunction = P30 mask"
+
+
+def test_card_test_18_iv_stage0_stays_label_blind_under_per_column_usability(tmp_path: Path) -> None:
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    sk = _skeleton("2010-05-10", 15)
+    a = ST.prefix_usability(sk, tiers)
+    b = ST.prefix_usability(sk.assign(gross_r_raw=np.random.default_rng(1).normal(size=len(sk)),
+                                      barrier_hit="stop"), tiers)
+    cols = [c for c in a.columns if c == "usable" or c.startswith("ok:")]
+    assert a[cols].equals(b[cols]), "usability reads no label value"
+
+
+def test_the_p30_mask_comes_from_attach_tiers_on_the_loaded_rows_not_a_second_load(tmp_path: Path) -> None:
+    """Rev 9 quant C3, test (iv): a C month inside the P30 lookback but outside core-6's: the row is usable for
+    L-cw (core-6) and not for HB / G-cw / AVG (P30), from attach_tiers on the one label load."""
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    sk = _skeleton("2010-05-10", 10)
+    assert D.attach_tiers(sk, tiers, columns=V.CORE_6)["usable"].all()
+    assert not ST.p30_mask(sk, tiers).any()
+    late = _skeleton("2010-09-13", 10)
+    assert ST.p30_mask(late, tiers).all(), "129 days after the C month: P30-usable again"
+
+
+def test_p30_wide_learners_skip_rows_outside_the_p30_mask_and_lcw_keeps_them() -> None:
+    """Rev 9 D1: L-cw trains and scores on rows usable under the served columns; HB and G-cw stay on P30."""
+    data, plan = _data(readable=False), _plan()
+    masked = {}
+    for k, f in data.frames.items():
+        g = f.copy()
+        g["p30_ok"] = pd.DatetimeIndex(g["decision_utc"]).month > 3      # Jan-Mar of each year: not P30-usable
+        masked[k] = g
+    md = T.FrameData(masked)
+    col = T.collect(md, plan, seed=T.SEEDS[0])
+    Y = 2015
+    n_all = sum(int(T.train_mask(md.frame(i, "4h", y), Y).sum()) for i in plan.members for y in V.LEARN_YEARS)
+    n_p30 = sum(int((T.train_mask(f := md.frame(i, "4h", y), Y) & f["p30_ok"].to_numpy(bool)).sum())
+                for i in plan.members for y in V.LEARN_YEARS)
+    assert sum(m.n for m in col.lcw[Y].values()) == n_all
+    assert sum(m.n for m in col.hb[Y].values()) == n_p30 < n_all
+    hb = T.hb_from_plans(md, [plan], seed=T.SEEDS[0])
+    res = T.fit_unit(md, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:1])
+    o = res.full
+    off = ~o["p30_ok"].to_numpy(bool)
+    assert off.any() and o.loc[off, "v_L-cw"].notna().all()
+    for name in ("HB", "G-cw", "AVG"):
+        assert o.loc[off, f"v_{name}"].isna().all() and not o.loc[off, f"k_{name}"].any(), name
+        assert o.loc[~off, f"v_{name}"].notna().any(), name
+    assert res.report["rows_per_year"] and res.report["p30_rows_per_year"]
+    assert sum(res.report["p30_rows_per_year"].values()) < sum(res.report["rows_per_year"].values())

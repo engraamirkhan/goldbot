@@ -204,8 +204,12 @@ def rank_diagnostics(o: pd.DataFrame, name: str, kind: str) -> dict[str, Any]:
 def _fit_score(name: str, tr: pd.DataFrame, te: pd.DataFrame, plan: UnitPlan, pri: DC.CostPriors, impute: np.ndarray,
                *, seed: int, extra: Sequence[str] = (), shift: Mapping[str, float] | None = None,
                lam_mult: float = 1.0, lam_a_mult: float = 1.0) -> np.ndarray:
-    """Fit one learner on `tr`, return its keep on `te` (the canary, shuffle and shift harness; HB on its own rung)."""
+    """Fit one learner on `tr`, return its keep on `te` (the canary, shuffle and shift harness; HB on its own rung).
+    Rev 9 D1: HB and G-cw fit and keep on P30-usable rows only; L-cw on every row (the served population)."""
     cost_te = cost_of(te, pri)
+    ok_te = T.p30_ok(te) if name != "L-cw" else np.ones(len(te), bool)
+    if name != "L-cw":
+        tr = tr[T.p30_ok(tr)].reset_index(drop=True)
     if name in ("L-cw", "HB"):
         cols = (*plan.lcw_columns, *extra) if name == "L-cw" else (*HB_COLUMNS, *extra)
         imp = L.medians(tr[list(cols)].to_numpy(float)) if cols else np.zeros(0)
@@ -213,12 +217,12 @@ def _fit_score(name: str, tr: pd.DataFrame, te: pd.DataFrame, plan: UnitPlan, pr
         a = L.fit_lcw(td, lam=V.LAMBDA_ROWS * lam_mult, lam_a=plan.lam_a * lam_a_mult, impute=imp)
         v = a.value(te[list(cols)].to_numpy(float) if cols else np.empty((len(te), 0)),
                     te["instrument"].astype(str).to_numpy())
-        return L.keep("gross", v, cost_te)
+        return L.keep("gross", v, cost_te) & ok_te
     cols = (*V.P30, L.RANGE_TO_COST, *extra)
     trd = _with_dense(tr, None, cost_of(tr, pri))
     ted = _with_dense(te, None, cost_te)
     g = L.fit_gcw(_td(trd, cols, cost_of(tr, pri), design_effect=plan.design_effect), seed=seed, shift=shift)
-    return L.keep("p", g.value(ted[list(cols)].to_numpy(float)), cost_te)
+    return L.keep("p", g.value(ted[list(cols)].to_numpy(float)), cost_te) & ok_te
 
 
 def _s(te: pd.DataFrame, k: np.ndarray, gross: np.ndarray | None = None) -> float:

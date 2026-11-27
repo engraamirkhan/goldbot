@@ -92,7 +92,7 @@ CODE_FILES: tuple[str, ...] = ("goldbot/research/sr_v3.py", "goldbot/research/le
 
 ROW_COLS: tuple[str, ...] = ("instrument", "tf", "phase", "decision_utc", "horizon_end_utc", "side", "gross",
                              "t0_gross", "cost_a", "cost_b", "cost_c", "stop", "nights_held", "nights_full", "w",
-                             "entry", "base_dist", "cost_rt_bp", *(c for c in V.P30 if c != "side"))
+                             "entry", "base_dist", "cost_rt_bp", "p30_ok", *(c for c in V.P30 if c != "side"))
 
 
 BUILT = ("L-cw", "G-cw", "HB", "AVG")
@@ -324,10 +324,27 @@ def cost_of(f: pd.DataFrame, pri: DC.CostPriors) -> np.ndarray:
     return f["cost_a"].to_numpy(float) + f["cost_b"].to_numpy(float) * p + f["cost_c"].to_numpy(float) * ns
 
 
-def stage0_counts(events: pd.DataFrame, *, years: Sequence[int], kish_eff: float | None = None) -> list[V.InstCounts]:
-    """Label-blind counts per instrument from outcome-blind events (instrument, phase, decision_utc, usable, u): phase 0,
-    usable, decided in `years`. A frame carrying label columns gives the same counts (they are never touched)."""
-    e = events[(events["phase"].to_numpy() == 0) & events["usable"].to_numpy(bool)]
+def usable_under(events: pd.DataFrame, columns: Sequence[str]) -> np.ndarray:
+    """Rev 9 D1: a row is usable under a column set iff its label window is usable (`usable`) and every column's own
+    span is (`ok:<column>`, from `sr_v3_store.prefix_usability`: attach_tiers per column, whose conjunction is ADR
+    0104 4's "a row's usability is the conjunction over its requested columns")."""
+    m = events["usable"].to_numpy(bool).copy()
+    for c in columns:
+        if c == "side":
+            continue
+        k = f"ok:{c}"
+        if k not in events:
+            raise KeyError(f"events carry no usability for {c!r} ({k}): build them with prefix_usability")
+        m &= events[k].to_numpy(bool)
+    return m
+
+
+def stage0_counts(events: pd.DataFrame, *, years: Sequence[int], kish_eff: float | None = None,
+                  columns: Sequence[str] = ()) -> list[V.InstCounts]:
+    """Label-blind counts per instrument from outcome-blind events (instrument, phase, decision_utc, usable, u, and
+    `ok:<column>` per column): phase 0, usable under `columns` (rev 9 D1; () = the label window only), decided in
+    `years`. A frame carrying label columns gives the same counts (they are never touched)."""
+    e = events[(events["phase"].to_numpy() == 0) & usable_under(events, columns)]
     yr = pd.DatetimeIndex(pd.to_datetime(e["decision_utc"], utc=True)).year
     e = e[np.isin(yr, list(years))]
     out = []
@@ -353,12 +370,26 @@ def stage0(unit: str, tfs: Sequence[str], events: Mapping[str, pd.DataFrame], *,
     av = {"gold": tuple(available.get("gold", V.P30)) if available else V.P30,
           "pooled": tuple(available.get("pooled", HB_COLUMNS)) if available else HB_COLUMNS}
 
-    def counts(years: Sequence[int]) -> dict[str, list[V.InstCounts]]:
-        def cat(d: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
-            return pd.concat(list(d.values()), ignore_index=True) if d else pd.DataFrame(
-                columns=["instrument", "phase", "decision_utc", "usable", "u"])
-        return {"gold": stage0_counts(cat(gold_ev), years=years), "pooled": stage0_counts(cat(pooled_ev), years=years)}
-    return V.decide_unit(unit, tfs, counts_a=counts((2010, 2011)), counts_b=counts((2010, 2011, 2012, 2013)),
+    def cat(d: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+        return pd.concat(list(d.values()), ignore_index=True) if d else pd.DataFrame(
+            columns=["instrument", "phase", "decision_utc", "usable", "u"])
+
+    def counts(years: Sequence[int]) -> dict[str, V.CountsOf]:
+        """Per body, counts as a function of the column set (rev 9 D1), cached per column set."""
+        out: dict[str, V.CountsOf] = {}
+        for body, ev in (("gold", cat(gold_ev)), ("pooled", cat(pooled_ev))):
+            yr = pd.DatetimeIndex(pd.to_datetime(ev["decision_utc"], utc=True)).year
+            fold = ev[np.isin(yr, list(years))].reset_index(drop=True)
+            memo: dict[tuple[str, ...], list[V.InstCounts]] = {}
+
+            def of(cols: tuple[str, ...], fold: pd.DataFrame = fold,
+                   memo: dict[tuple[str, ...], list[V.InstCounts]] = memo) -> list[V.InstCounts]:
+                if cols not in memo:
+                    memo[cols] = stage0_counts(fold, years=years, columns=cols)
+                return memo[cols]
+            out[body] = of
+        return out
+    return V.decide_unit(unit, tfs, counts_a=counts(V.FOLD_A), counts_b=counts(V.FOLD_B),
                          rho=rho, available=av)
 
 
@@ -425,6 +456,15 @@ class Collected:
     n_rows: int
     train_end: pd.Timestamp | None = None    # the last decision instant v0 trains on (run manifest train_end)
     label_end_max: pd.Timestamp | None = None    # the latest label horizon end among v0's rows (manifest, quant Q4)
+    # rev 9 D1: rows per learn year usable under the served columns (the judged population) and under P30
+    rows_per_year: dict[int, int] = field(default_factory=dict)
+    p30_rows_per_year: dict[int, int] = field(default_factory=dict)
+
+
+def p30_ok(f: pd.DataFrame) -> np.ndarray:
+    """Rows usable under P30 (rev 9 D1: HB, D-40 / G-cw and AVG train and score only on these; a frame without the
+    column was loaded under P30 already)."""
+    return f["p30_ok"].to_numpy(bool) if "p30_ok" in f else np.ones(len(f), bool)
 
 
 def _years(data: UnitData, plan: UnitPlan, years: Sequence[int], phases: Sequence[int]) -> Iterator[pd.DataFrame]:
@@ -449,11 +489,21 @@ def collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int] 
 
 def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int], n_hint: int | None) -> Collected:
     folds = (*plan.oof_years, V.LEARN_YEARS[-1] + 1)
-    first = [f for f in _years(data, plan, (2010, 2011), phases)]
+    # rev 9 D1: L-cw imputes with the medians of the smallest training fold's rows usable under the served columns
+    # (2010-11, or 2010-13 under remedy (b)); the P30-wide learners with those of their own smallest fold with
+    # P30-usable rows (the fold's years extended one at a time until some exist; earlier folds have none and skip)
+    smallest = tuple(range(V.LEARN_YEARS[0], plan.first_oof))
+    first = [f for f in _years(data, plan, smallest, phases)]
     base = pd.concat(first, ignore_index=True) if first else pd.DataFrame(columns=list(ROW_COLS))
-    impute = L.medians(base[list(V.P30)].to_numpy(float)) if len(base) else np.zeros(len(V.P30))
     lc = list(plan.lcw_columns)
     impute_lcw = L.medians(base[lc].to_numpy(float)) if len(base) and lc else np.zeros(len(lc))
+    p30_years = list(smallest)
+    base_p = base[p30_ok(base)] if len(base) else base
+    while not len(base_p) and p30_years[-1] < V.LEARN_YEARS[-1]:
+        p30_years.append(p30_years[-1] + 1)
+        more = [f[p30_ok(f)] for f in _years(data, plan, (p30_years[-1],), phases)]
+        base_p = pd.concat([base_p, *more], ignore_index=True) if more else base_p
+    impute = L.medians(base_p[list(V.P30)].to_numpy(float)) if len(base_p) else np.zeros(len(V.P30))
     n_total = n_hint if n_hint is not None else sum(len(f) for f in _years(data, plan, V.LEARN_YEARS, phases))
     pi = min(1.0, MAX_TREE_ROWS / max(1, n_total))
     lcw: dict[int, dict[str, L.Moments]] = {y: {} for y in folds}
@@ -463,8 +513,15 @@ def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int]
     samples = []
     n_rows = 0
     last = last_dec = 0
+    per_year: dict[int, int] = {}
+    per_year_p30: dict[int, int] = {}
     for f in _years(data, plan, V.LEARN_YEARS, phases):
         n_rows += len(f)
+        ok30 = p30_ok(f)
+        yrs = pd.DatetimeIndex(pd.to_datetime(f["decision_utc"], utc=True)).year.to_numpy()
+        for y in np.unique(yrs):
+            per_year[int(y)] = per_year.get(int(y), 0) + int((yrs == y).sum())
+            per_year_p30[int(y)] = per_year_p30.get(int(y), 0) + int(((yrs == y) & ok30).sum())
         v0m = train_mask(f, V.LEARN_YEARS[-1] + 1)
         if v0m.any():
             last = max(last, int(_ns(f["horizon_end_utc"])[v0m].max()))
@@ -481,7 +538,10 @@ def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int]
             for inst, mo in L.moments(sub.subset(np.ones(m.sum(), bool), X=xl, columns=plan.lcw_columns),
                                       impute_lcw).items():
                 lcw[Y][inst] = lcw[Y][inst] + mo if inst in lcw[Y] else mo
-            hsub = sub.subset(np.ones(m.sum(), bool), X=sub.X[:, hb_idx], columns=HB_COLUMNS)
+            mp = ok30[m]                     # HB on its P30-usable training rows only (rev 9 D1)
+            if not mp.any():
+                continue
+            hsub = sub.subset(mp, X=sub.X[mp][:, hb_idx], columns=HB_COLUMNS)
             cls = np.array([V.instrument_class(i) for i in hsub.instrument])
             for c in np.unique(cls):
                 for t in np.unique(hsub.tf[cls == c]):
@@ -494,7 +554,9 @@ def _collect(data: UnitData, plan: UnitPlan, *, seed: int, phases: Sequence[int]
     sample = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame(columns=list(ROW_COLS))
     return Collected(impute=impute, impute_lcw=impute_lcw, lcw=lcw, hb=hb, priors=pri, sample=sample, pi=pi, n_rows=n_rows,
                      train_end=pd.Timestamp(last_dec, tz="UTC") if last_dec else None,
-                     label_end_max=pd.Timestamp(last, tz="UTC") if last else None)
+                     label_end_max=pd.Timestamp(last, tz="UTC") if last else None,
+                     rows_per_year=dict(sorted(per_year.items())),
+                     p30_rows_per_year=dict(sorted(per_year_p30.items())))
 
 
 def hb_fit(moms: Mapping[tuple[str, str], L.Moments], impute: Mapping[tuple[str, str], np.ndarray],
@@ -543,7 +605,7 @@ def fit_fold(Y: int, col: Collected, plan: UnitPlan, *, hb: L.HbArtifact | None,
     b8 = L.lcw_from_moments({k: _drop_columns(v) for k, v in col.lcw[Y].items()}, np.zeros(0), (), lam=V.LAMBDA_ROWS,
                             lam_a=plan.lam_a, design_effect=plan.design_effect)
     s = col.sample
-    m = train_mask(s, Y)
+    m = train_mask(s, Y) & p30_ok(s)            # D-40 and G-cw train on P30-usable rows only (rev 9 D1)
     dense = None
     gcw: dict[int, L.GcwArtifact] = {}
     if m.sum() >= 2 * L.DENSE_PARAMS["min_data_in_leaf"]:
@@ -598,11 +660,14 @@ def score_frame(f: pd.DataFrame, fm: FoldModels, seeds: Sequence[int]) -> pd.Dat
     lc = [c for c in fm.lcw.columns]
     out["v_L-cw"] = fm.lcw.value(f[lc].to_numpy(float) if lc else np.empty((len(f), 0)), inst)
     out["v_B8"] = fm.b8.value(np.empty((len(f), 0)), inst)
-    out["v_HB"] = fm.hb.value(f[list(HB_COLUMNS)].to_numpy(float), inst, out["tf"].to_numpy()) if fm.hb else np.nan
+    ok30 = p30_ok(f)                             # HB and G-cw score P30-usable rows only (rev 9 D1)
+    out["p30_ok"] = ok30
+    out["v_HB"] = np.where(ok30, fm.hb.value(f[list(HB_COLUMNS)].to_numpy(float), inst, out["tf"].to_numpy()),
+                           np.nan) if fm.hb else np.nan
     if fm.gcw:
         X = _with_dense(f, fm.dense, cost)[list(gcw_columns())].to_numpy(float)
         for sd, a in fm.gcw.items():
-            out[f"v_G-cw@{sd}"] = a.value(X)
+            out[f"v_G-cw@{sd}"] = np.where(ok30, a.value(X), np.nan)
         out["v_G-cw"] = out[f"v_G-cw@{seeds[0]}"]
     else:
         out["v_G-cw"] = np.nan
@@ -615,18 +680,28 @@ def score_frame(f: pd.DataFrame, fm: FoldModels, seeds: Sequence[int]) -> pd.Dat
 def add_avg(cur: pd.DataFrame, earlier: pd.DataFrame, shas: Mapping[str, str]) -> tuple[pd.DataFrame, L.AvgArtifact
                                                                                          | None]:
     """AVG on the test rows `cur`, calibrated on `earlier` (OOF rows of earlier years already gap-cut by the caller).
-    Needs every base present; the first OOF year has no calibration rows and stays NaN (reported)."""
-    bases = [b for b in ("L-cw", "G-cw", "HB") if cur[f"v_{b}"].notna().all() and len(earlier)
-             and earlier[f"v_{b}"].notna().all()]
+    Rev 9 quant C1: its inputs are taken only on the intersection of the bases' usable rows (L-cw on the served
+    columns, HB and G-cw on P30), in calibration and in scoring; other rows stay NaN. A base with no value at all is
+    left out; fewer than two bases, or under 100 calibration rows: NaN (reported)."""
     cur = cur.copy()
-    if len(bases) < 2 or len(earlier) < 100:
-        cur["v_AVG"], cur["k_AVG"] = np.nan, False
+    cur["v_AVG"], cur["k_AVG"] = np.nan, False
+    if not len(earlier):
+        return cur, None
+    bases = [b for b in ("L-cw", "G-cw", "HB") if cur[f"v_{b}"].notna().any() and earlier[f"v_{b}"].notna().any()]
+    if len(bases) < 2:
+        return cur, None
+    both_e = np.logical_and.reduce([earlier[f"v_{b}"].notna().to_numpy() for b in bases])
+    both_c = np.logical_and.reduce([cur[f"v_{b}"].notna().to_numpy() for b in bases])
+    e = earlier[both_e]
+    if len(e) < 100 or not both_c.any():
         return cur, None
     kinds = {b: L.LEARNERS[b].kind or "gross" for b in bases}
-    av = L.fit_avg({b: earlier[f"v_{b}"].to_numpy(float) for b in bases}, kinds, {b: shas.get(b, "") for b in bases},
-                   earlier["cost"].to_numpy(float), earlier["net"].to_numpy(float), earlier["w"].to_numpy(float))
-    v = av.value({b: cur[f"v_{b}"].to_numpy(float) for b in bases}, cur["cost"].to_numpy(float))
-    cur["v_AVG"], cur["k_AVG"] = v, L.keep("p", v, cur["cost"].to_numpy(float))
+    av = L.fit_avg({b: e[f"v_{b}"].to_numpy(float) for b in bases}, kinds, {b: shas.get(b, "") for b in bases},
+                   e["cost"].to_numpy(float), e["net"].to_numpy(float), e["w"].to_numpy(float))
+    c = cur[both_c]
+    v = av.value({b: c[f"v_{b}"].to_numpy(float) for b in bases}, c["cost"].to_numpy(float))
+    cur.loc[both_c, "v_AVG"] = v
+    cur.loc[both_c, "k_AVG"] = L.keep("p", v, c["cost"].to_numpy(float))
     return cur, av
 
 
@@ -662,7 +737,8 @@ class UnitResult:
 
 
 # the OOF columns a fit-only run keeps: row keys, the decision-time cost(x), each learner's value and keep
-SCORE_KEYS: tuple[str, ...] = ("instrument", "tf", "decision_utc", "side", "horizon_end_utc", "day", "year", "cost")
+SCORE_KEYS: tuple[str, ...] = ("instrument", "tf", "decision_utc", "side", "horizon_end_utc", "day", "year", "cost",
+                                "p30_ok")
 
 
 def sealed_scores(oof: pd.DataFrame) -> pd.DataFrame:
@@ -700,6 +776,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     dense_by_year: dict[int, L.DenseArtifact] = {}
     oof_parts: list[pd.DataFrame] = []
     avg_by_year: dict[int, str] = {}
+    avg_rows: dict[int, int] = {}
     no_train: list[int] = []
     for Y in plan.oof_years:
         if not col.priors[Y].n:          # the gap leaves this fold no training row (M1): skipped, reported
@@ -723,6 +800,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
                     alt, _ = add_avg(sc.assign(**{"v_G-cw": sc[f"v_G-cw@{sd}"]}), earlier, {})
                     sc[f"v_AVG@{sd}"] = alt["v_AVG"]
             sc[f"v_AVG@{seeds[0]}"] = sc["v_AVG"]
+        avg_rows[Y] = int(sc["v_AVG"].notna().sum())   # rev 9 C1: the intersection AVG is scored on
         oof_parts.append(sc)
     oof = pd.concat(oof_parts, ignore_index=True) if oof_parts else pd.DataFrame()
     v0 = fit_fold(V.LEARN_YEARS[-1] + 1, col, plan, hb=(hb_by_fold or {}).get(V.LEARN_YEARS[-1] + 1), seeds=seeds[:1],
@@ -735,7 +813,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     if v0.hb is not None:
         arts["HB"] = L.artifact_json(v0.hb)
     if len(oof) and oof["v_L-cw"].notna().any():
-        _, av0 = add_avg(oof.iloc[:1], oof, {"L-cw": L.artifact_sha(v0.lcw), "G-cw": L.artifact_sha(v0.gcw[seeds[0]])
+        _, av0 = add_avg(oof, oof, {"L-cw": L.artifact_sha(v0.lcw), "G-cw": L.artifact_sha(v0.gcw[seeds[0]])
                                              if v0.gcw else "", "HB": L.artifact_sha(v0.hb) if v0.hb else ""})
         if av0 is not None:
             arts["AVG"] = L.artifact_json(av0)
@@ -747,6 +825,7 @@ def _fit_unit(data: UnitData, plan: UnitPlan, *, hb_by_fold: Mapping[int, L.HbAr
     report["oof_scores_sha256"] = scores_sha(oof)
     report["artifacts"] = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in arts.items()}
     report["avg_by_year"] = avg_by_year
+    report["avg_intersection_rows_by_year"] = avg_rows
     report["folds_without_training_rows"] = no_train
     report["gap_days"] = {t: gap(t).total_seconds() / 86_400 for t in plan.tfs}
     report["train_end"] = col.train_end.isoformat() if col.train_end is not None else None
@@ -775,6 +854,9 @@ def fit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected) -> dict[str, A
                            "level": plan.stage0.get("level"), "judged": plan.stage0.get("judged"),
                            "served_lcw": list(plan.lcw_columns), "first_oof": plan.first_oof,
                            "rows_learn": col.n_rows, "tree_sample_pi": col.pi,
+                           # rev 9 D1: the judged population (rows usable under the served columns) and the P30 rows
+                           # per learn year; the mask's drops are the difference
+                           "rows_per_year": dict(col.rows_per_year), "p30_rows_per_year": dict(col.p30_rows_per_year),
                            "oof_rows": int(len(oof)), "oof_rows_per_year": {int(str(k)): int(v) for k, v in
                                                                             oof.groupby("year").size().items()}
                            if len(oof) else {},
@@ -836,4 +918,4 @@ __all__ = ["BUILT", "CODE_FILES", "MANIFEST_KEY", "MAX_TREE_ROWS", "OUT", "ROW_C
            "Collected", "CostCellMissing", "CostTable", "FrameData", "UnitData", "UnitPlan", "UnitResult", "code_version",
            "collect", "cost_of", "cost_parts", "fit_unit", "frames_file", "frames_from", "gap", "hb_fit",
            "hb_from_plans", "net_read", "plan_from_stage0", "realised_cost", "scores_sha", "sealed_scores", "settings",
-           "stage0", "stage0_counts", "train_mask"]
+           "stage0", "stage0_counts", "train_mask", "usable_under"]

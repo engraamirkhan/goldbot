@@ -35,7 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -69,6 +69,9 @@ RHO_FLOOR_LE_60M = 0.05
 RHO_INST = 0.5
 FIRST_OOF = 2012
 FIRST_OOF_B = 2014                  # remedy (b), only for a unit still below L3 after (a)
+# the smallest training folds (card 2.3, rev 9 D2): (a), and remedy (b); FIRST_OOF / FIRST_OOF_B follow them
+FOLD_A: tuple[int, ...] = (2010, 2011)
+FOLD_B: tuple[int, ...] = (2010, 2011, 2012, 2013)
 LEARN_YEARS: tuple[int, ...] = tuple(range(2010, 2018))
 MIN_LEARN_CANDIDATES = 1_500
 MIN_PER_FOLD = 60
@@ -292,6 +295,36 @@ def ladder(counts: Sequence[InstCounts], order: Sequence[str], rho: RhoInputs, *
                   level=level_name(len(cols)), budget_equal_n=float(budget), total_fixed=float(total))
 
 
+CountsOf = Callable[[tuple[str, ...]], Sequence[InstCounts]]
+Counts = Sequence[InstCounts] | CountsOf
+
+
+def counts_fn(counts: Counts) -> CountsOf:
+    """Rev 9 D1: counts as a function of the column set (rows usable under those columns). A plain list is one row set
+    for every column set (a store whose rows were all usable under every column)."""
+    if callable(counts):
+        return counts
+    fixed = list(counts)
+    return lambda cols: fixed
+
+
+def prefix_ladder(counts: Counts, order: Sequence[str], rho: RhoInputs, *, body: Body,
+                  lam: float = LAMBDA_ROWS) -> Ladder:
+    """Rev 9 D1 with quant C1 (verbatim): "Every ladder prefix and every candidate served prefix is charged in full,
+    with all its parameters, on its own usable rows; the charges are never computed incrementally on one row set."
+    Prefix k fits iff `ladder` on the rows usable under order[:k] admits all k columns; the level is the longest
+    prefix that fits (rows only shrink as k grows, so the gate is monotone in k)."""
+    cof = counts_fn(counts)
+    order = tuple(order)
+    best = ladder(cof(()), (), rho, body=body, lam=lam)
+    for k in range(1, len(order) + 1):
+        lk = ladder(cof(order[:k]), order[:k], rho, body=body, lam=lam)
+        if lk.prefix < k:
+            break
+        best = lk
+    return best.model_copy(update={"order": order})
+
+
 def level_order(available: Sequence[str] | None = None) -> tuple[str, ...]:
     """Rev 4 A: core-12 in its 3.1 order, then the rest of P30; a column a body cannot carry (`available`, e.g. the
     bid-only drop of a pooled body) is left out, never reordered."""
@@ -299,7 +332,7 @@ def level_order(available: Sequence[str] | None = None) -> tuple[str, ...]:
     return tuple(c for c in P30 if c in av)
 
 
-def served_body(counts: Sequence[InstCounts], rho: RhoInputs, *, body: Body,
+def served_body(counts: Counts, rho: RhoInputs, *, body: Body,
                 admitted: Sequence[tuple[str, Sequence[str]]] = (), available: Sequence[str] | None = None,
                 lam: float = LAMBDA_ROWS) -> tuple[str, ...]:
     """Rev 4 A: core-6; then each admitted block whole, in X1..X6 order (X6 last), the first that does not fit ending the block
@@ -308,9 +341,10 @@ def served_body(counts: Sequence[InstCounts], rho: RhoInputs, *, body: Body,
     av = set(P30 if available is None else available)
     core6 = [c for c in CORE_6 if c in av]
     blocks = sorted(admitted, key=lambda b: BLOCK_ORDER.index(b[0]))
+    cof = counts_fn(counts)
 
-    def fits(cols: Sequence[str]) -> bool:
-        return ladder(counts, cols, rho, body=body, lam=lam).prefix == len(cols)
+    def fits(cols: Sequence[str]) -> bool:          # each candidate charged in full on its own usable rows (C1)
+        return ladder(cof(tuple(cols)), cols, rho, body=body, lam=lam).prefix == len(cols)
 
     cols = list(core6)
     for _, bc in blocks:
@@ -355,53 +389,69 @@ class Stage0Unit(FrozenRecord):
     judged: bool                     # at L3 or above: Stage L may read it
     served: tuple[str, ...]          # () = intercept-only (B8)
     rho: dict[str, RhoInputs]
-    counts: dict[str, list[InstCounts]]
+    counts: dict[str, list[InstCounts]]              # per body, on the rows usable under the served columns
     note: str = ""
+    prefix_rows: dict[str, list[int]] = {}           # per body: usable rows under level_order[:k], k = 0..len (D1)
 
 
-def decide_unit(unit: str, tfs: Sequence[str], *, counts_a: Mapping[str, Sequence[InstCounts]],
-                counts_b: Mapping[str, Sequence[InstCounts]] | None, rho: Mapping[str, RhoInputs],
+def decide_unit(unit: str, tfs: Sequence[str], *, counts_a: Mapping[str, Counts],
+                counts_b: Mapping[str, Counts] | None, rho: Mapping[str, RhoInputs],
                 available: Mapping[str, Sequence[str]],
                 admitted: Sequence[tuple[str, Sequence[str]]] = ()) -> Stage0Unit:
     """(a) on fold 2010-11, both bodies, tie rule; a unit still below L3 tries (b) on fold 2010-13 (first OOF 2014).
-    No usable rows: NOT STARTED (data). Below L3 after both: intercept-only, not judged, still fitted and served."""
-    def run(counts: Mapping[str, Sequence[InstCounts]]) -> tuple[Ladder | None, Ladder | None]:
-        g = ladder(counts["gold"], level_order(available["gold"]), rho["gold"], body="gold") \
-            if any(c.sum_u > 0 for c in counts.get("gold", ())) else None
-        p = ladder(counts["pooled"], level_order(available["pooled"]), rho["pooled"], body="pooled") \
-            if "pooled" in rho and sum(c.sum_u > 0 for c in counts.get("pooled", ())) > 1 else None
+    Rev 9 D2: a unit with no usable gold row on (a) tries (b) too; NOT STARTED (data) only when gold has no usable row
+    on both folds. Below L3 after both: intercept-only, not judged, still fitted and served. Counts are per column
+    set (rev 9 D1, `prefix_ladder`); a plain list is one row set for every column set."""
+    def bodies(counts: Mapping[str, Counts]) -> dict[str, CountsOf]:
+        return {b: counts_fn(counts.get(b, ())) for b in ("gold", "pooled")}
+
+    def run(cof: Mapping[str, CountsOf]) -> tuple[Ladder | None, Ladder | None]:
+        g = prefix_ladder(cof["gold"], level_order(available["gold"]), rho["gold"], body="gold") \
+            if any(c.sum_u > 0 for c in cof["gold"](())) else None
+        p = prefix_ladder(cof["pooled"], level_order(available["pooled"]), rho["pooled"], body="pooled") \
+            if "pooled" in rho and sum(c.sum_u > 0 for c in cof["pooled"](())) > 1 else None
         return g, p
-    g, p = run(counts_a)
-    fold: tuple[int, ...] = (2010, 2011)
-    first, remedy, counts = FIRST_OOF, False, counts_a
+    fold_b: tuple[int, ...] = FOLD_B
+    ca = bodies(counts_a)
+    cb = bodies(counts_b) if counts_b is not None else None
+    g, p = run(ca)
+    fold: tuple[int, ...] = FOLD_A
+    first, remedy, cof = FIRST_OOF, False, ca
+    if g is None and cb is not None:
+        gb, pb = run(cb)
+        if gb is not None:
+            g, p, fold, first, remedy, cof = gb, pb, fold_b, FIRST_OOF_B, True, cb
     if g is None:
         return Stage0Unit(unit=unit, tfs=tuple(tfs), status="not_started_data", fold=fold, first_oof=first,
                           remedy_b=False, gold=None, pooled=p, body=None, members=(), level="below L3", judged=False,
-                          served=(), rho=dict(rho), counts={k: list(v) for k, v in counts_a.items()},
-                          note="no usable gold rows on the smallest fold (ADR 0104 4): NOT STARTED (data), 0 K")
+                          served=(), rho=dict(rho), counts={k: list(f(())) for k, f in ca.items()},
+                          note="no usable gold row on fold 2010-11 or 2010-13 (ADR 0104 4): NOT STARTED (data), 0 K")
     choice = tie_rule(g, p)
     chosen = g if choice == "gold" else p
     assert chosen is not None
-    if chosen.level == "below L3" and counts_b is not None:
-        gb, pb = run(counts_b)
+    if chosen.level == "below L3" and cb is not None and not remedy:
+        gb, pb = run(cb)
         if gb is not None:
-            cb = tie_rule(gb, pb)
-            lb = gb if cb == "gold" else pb
+            cb_choice = tie_rule(gb, pb)
+            lb = gb if cb_choice == "gold" else pb
             if lb is not None and lb.level != "below L3":
-                g, p, choice, chosen = gb, pb, cb, lb
-                fold, first, remedy, counts = (2010, 2011, 2012, 2013), FIRST_OOF_B, True, counts_b
+                g, p, choice, chosen = gb, pb, cb_choice, lb
+                fold, first, remedy, cof = fold_b, FIRST_OOF_B, True, cb
     judged = chosen.level != "below L3"
-    members = tuple(c.instrument for c in counts[choice] if c.sum_u > 0)
-    served = served_body(counts[choice], rho[choice], body=choice, admitted=admitted,
+    served = served_body(cof[choice], rho[choice], body=choice, admitted=admitted,
                          available=available[choice]) if judged else ()
+    members = tuple(c.instrument for c in cof[choice](tuple(served)) if c.sum_u > 0)
+    prefix_rows = {b: [sum(c.rows for c in cof[b](level_order(available[b])[:k]))
+                       for k in range(len(level_order(available[b])) + 1)] for b in cof if b in rho}
     return Stage0Unit(unit=unit, tfs=tuple(tfs), status="fit", fold=fold, first_oof=first, remedy_b=remedy, gold=g,
                       pooled=p, body=choice, members=members, level=chosen.level, judged=judged, served=served,
-                      rho=dict(rho), counts={k: list(v) for k, v in counts.items()},
+                      rho=dict(rho), counts={k: list(f(tuple(served))) for k, f in cof.items()},
+                      prefix_rows=prefix_rows,
                       note="" if judged else "below L3: intercept-only (B8) body, never judged, served on demo "
                                              "(a per-instrument level minus cost(x): a cost-and-level filter)")
 
 
 __all__ = ["BLOCK_ORDER", "CORE_12", "CORE_6", "FIRST_OOF", "FIRST_OOF_B", "JUDGED_HEAD", "LAMBDA_ROWS", "LEVELS",
            "P30", "RILEY_PER_PARAM", "SPEC_VERSION", "UNITS", "Charge", "InstCounts", "Ladder", "RhoInputs",
-           "Stage0Unit", "decide_unit", "hold_bucket", "inst_counts", "instrument_class", "ladder", "level_name",
+           "Stage0Unit", "counts_fn", "decide_unit", "prefix_ladder", "hold_bucket", "inst_counts", "instrument_class", "ladder", "level_name",
            "level_order", "rev3_inputs", "rho_class", "rho_inputs", "served_body", "tie_rule"]
