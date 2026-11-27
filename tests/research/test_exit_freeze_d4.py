@@ -184,3 +184,31 @@ def test_d0_implements_sqrt_h_over_h_ref_before_the_floor() -> None:
     np.testing.assert_allclose(base.loc[ok, "base_dist"], np.fmax(a, f))
     np.testing.assert_allclose(scaled.loc[ok, "base_dist"], np.fmax(2 * a, f))
     assert (scaled.loc[ok, "base_dist"] > base.loc[ok, "base_dist"]).any()
+
+
+def _drop_floor(atr, floor, tf, spec):
+    return atr * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf]))
+
+
+def _floor_before_sqrt(atr, floor, tf, spec):
+    return np.fmax(atr, floor) * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf]))
+
+
+@pytest.mark.parametrize("variant", [_drop_floor, _floor_before_sqrt])
+def test_a_changed_d0_composition_is_a_d4_block(monkeypatch: pytest.MonkeyPatch, variant) -> None:
+    """Quant re-verify B on #514: base_dist, risk_usd and gross_r_raw from `_label_core` are in the behaviour sha (with
+    an h_ref probe where the floor binds), so dropping the floor or flooring before the sqrt is not xt-v1."""
+    assert D.exit_freeze_hash(D.SPEC) == D.EXIT_FREEZE_SHA256
+    monkeypatch.setattr(D, "_base_distance", variant)
+    D._behaviour_sha.cache_clear()
+    assert D.exit_freeze_hash(D.SPEC) != D.EXIT_FREEZE_SHA256
+    g = D.gate_status(_lab(), D.SPEC)
+    assert g["gate_eligible"] is False and any("D-4" in b for b in g["gate_block"])
+
+
+def test_label_rows_is_the_core_plus_the_stamp() -> None:
+    mm, rows = D.Minutes(_minutes()), _rows15()
+    core = D._label_core(mm, rows, "15m", D.decision_bars(mm, "15m", 0), D.SPEC)
+    assert "exit_freeze_sha" not in core.columns
+    full = D.label_rows(mm, rows, "15m")
+    pd.testing.assert_frame_equal(D._typed(core.assign(exit_freeze_sha=D.EXIT_FREEZE_SHA256)[list(D.COLUMNS)]), full)
