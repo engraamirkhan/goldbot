@@ -45,7 +45,7 @@ not touched; trading-safety review is not required for this change (no engine, r
 - Unchanged from ADR 0104 and pinned by the existing tests: entry at the first minute strictly after the decision,
   side-aware quotes, a gapped stop fills at the open, a gapped target fills at the target, a both-touch minute is a
   stop, trail and break-even move the stop from the next minute, clip ±10 R.
-- Code: `goldbot.research.dense_labels.EXIT_FREEZE` (record `ExitFreeze`, id `xt-v1`).
+- Code: `goldbot.research.dense_labels.exit_freeze()` (record `ExitFreeze`, id `xt-v1`).
   **xt-v1 sha256 b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826** (`exit_freeze_hash`: canonical
   JSON of the templates, H, h_ref, atr_n 14, floor 1.5 × 1,440-minute median TR, clip 10, sides, the grid time-exit
   tfs {1d, 1w}, the close-to-close set {T0}, and `behaviour_sha`). RL-1 reads its templates from the same record: one

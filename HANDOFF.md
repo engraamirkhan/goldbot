@@ -20,7 +20,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     `provenance_problem` (now public), e.g. "0 served: 1 rows refused (no provenance, trained before migration 45)".
     No provenance backfill.
 - 2026-11-27 sr-v3 D-4 (card rev 10, label-blind, K 0): the exit templates T0-T7 are frozen as `xt-v1`
-  (`dense_labels.EXIT_FREEZE`, sha256 b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826), exactly
+  (`dense_labels.exit_freeze()`, sha256 b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826), exactly
   the card 2.1 table, with the W2-2 h_ref = H of the tf (factor 1). Reasons:
   `docs/research/prereg-amendment-2026-11-27-sr-v3-d4-exit-freeze.md`.
   - `gate_status` now blocks on `exit_freeze_hash(spec) != EXIT_FREEZE_SHA256` instead of `h_ref == "H"`; the
