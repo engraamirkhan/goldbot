@@ -65,6 +65,14 @@ if sys.platform == "win32":                # pragma: no cover - exercised on the
             except OSError:
                 time.sleep(0.01)
 
+    def _try_lock_fd(fd: int) -> bool:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
     def _unlock_fd(fd: int) -> None:
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
@@ -78,6 +86,16 @@ else:
         if fcntl is None:
             raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
         fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _try_lock_fd(fd: int) -> bool:
+        """One non-blocking attempt at the exclusive lock: True when taken."""
+        if fcntl is None:
+            raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
 
     def _unlock_fd(fd: int) -> None:
         if fcntl is not None:

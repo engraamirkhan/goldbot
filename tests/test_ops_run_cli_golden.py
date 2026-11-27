@@ -42,7 +42,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "broker-history-depth", "ruin", "m1-backfill", "findings", "monthly-report", "perf-report",
                  "sizing-feasibility", "drift-review", "bridge-smoke", "tv-ideas", "ledger",
-                 "daily-review", "repair-lost-record", "autodisc-register")
+                 "daily-review", "repair-lost-record", "autodisc-register", "rollback-model")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
 DISPATCH: dict[str, list[str]] = {
@@ -87,6 +87,7 @@ DISPATCH: dict[str, list[str]] = {
     "repair-lost-record": ["repair-lost-record", "icm-probe", "--dry-run"],
     "autodisc-register": ["autodisc-register", "0" * 64, "--account", "icm-probe", "--prereg", "x.md#a", "--dry-run"],
     "bridge-smoke": ["bridge-smoke", "icm-demo"],
+    "rollback-model": ["rollback-model", "agent-x", "--reason", "drill"],
     "no-command": [],
     "help": ["--help"],
     "unknown": ["no-such-command"],
@@ -178,7 +179,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         setup_wizard,
         smoke,
     )
-    from goldbot.research import daily_review, min_lot, owner_history, ruin
+    from goldbot.research import daily_review, min_lot, model_registry, owner_history, ruin
     out: dict[tuple[str, int, str], str] = {}
 
     def add(fn: Callable[..., Any], label: str) -> None:
@@ -189,7 +190,8 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
                perf_report.main, min_lot.main, smoke.main, tv_ideas.main, daily_review.main,
-               repair_records.main, broker_depth.main, autodisc_register.main, observe.main):
+               repair_records.main, broker_depth.main, autodisc_register.main, observe.main,
+               model_registry.rollback_main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -291,6 +293,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "daily-review": ("goldbot.research.daily_review", "main"),
     "repair-lost-record": ("goldbot.ops.repair_records", "main"),
     "autodisc-register": ("goldbot.ops.autodisc_register", "main"),
+    "rollback-model": ("goldbot.research.model_registry", "rollback_main"),
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
 # serves until stopped (api under uvicorn, bridge under serve), and the dispatcher never passed a return

@@ -195,3 +195,25 @@ def test_a_model_that_cannot_be_loaded_is_reported_and_the_others_still_run(tmp_
     (tmp_path / "models" / bad.artefact).write_bytes(b"tampered")       # checksum no longer matches
     out = recalibrate(ctx, NOW)
     assert out[bad.version]["action"] == "error" and out[good.version]["action"] == "recalibrated"
+
+
+def test_a_recalibration_that_fails_on_one_model_is_reported_and_the_others_still_run(tmp_path, monkeypatch):
+    """PR #494 round 3 code review: a stale version (retired by a rollback in another process) made
+    `ModelRegistry.recalibrate` raise and aborted the whole weekly job."""
+    ctx = _ctx(tmp_path)
+    bad = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="tsmom", agent_id="agent-x",
+                                    backtest={}, now=NOW - pd.Timedelta(days=120))
+    good = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="tsmom", agent_id="agent-y",
+                                     backtest={}, now=NOW - pd.Timedelta(days=119))
+    _record_outcomes(tmp_path, bad.version, 200, seed=4)
+    _record_outcomes(tmp_path, good.version, 200, seed=5)
+    real = ctx.models.recalibrate
+
+    def flaky(version, model, record):
+        if version == bad.version:
+            raise ValueError(f"{version} is retired; only a champion or challenger is recalibrated")
+        return real(version, model, record)
+    monkeypatch.setattr(ctx.models, "recalibrate", flaky)
+    out = recalibrate(ctx, NOW)
+    assert out[bad.version]["action"] == "error" and "retired" in out[bad.version]["reason"]
+    assert out[good.version]["action"] == "recalibrated"
