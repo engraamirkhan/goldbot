@@ -10,6 +10,7 @@ import os
 import pickle
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from goldbot.research import model_quality as mq
 from goldbot.research import monthly_walkforward as mwf
 from goldbot.research import run_manifest as rm
 from goldbot.research.model import MetaLabelModel
-from goldbot.research.model_registry import ModelRegistry, rollback_main
+from goldbot.research.model_registry import ModelRegistry, RegistryLockTimeout, rollback_main
 from goldbot.research.rule_model import RuleModel
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -702,3 +703,58 @@ def test_a_rollback_is_not_undone_by_a_save_from_a_long_lived_registry(tmp_path:
     other.retire(a.version, "test")
     disk = ModelRegistry(root)
     assert disk.champion("ag").version == b.version and disk.get(a.version).status == "retired"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------------------------- #494 round 3: lock
+def _hold_registry_lock(root: Path) -> subprocess.Popen[str]:
+    """Another process holding <root>/registry.lock (a suspended rollback-model, a scheduler stalled on disk)."""
+    root.mkdir(parents=True, exist_ok=True)
+    ready = root / "held"
+    code = ("import fcntl, os, sys, time; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
+            "fcntl.flock(fd, fcntl.LOCK_EX); open(sys.argv[2], 'w').close(); time.sleep(60)")
+    p = subprocess.Popen([sys.executable, "-c", code, str(root / "registry.lock"), str(ready)], text=True)
+    deadline = time.monotonic() + 10
+    while not ready.exists():
+        assert time.monotonic() < deadline, "the lock holder did not start"
+        time.sleep(0.02)
+    return p
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the holder uses fcntl")
+def test_a_rule_agent_that_has_an_entry_needs_no_lock_and_a_new_one_times_out(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    ModelRegistry(root).ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT)
+    holder = _hold_registry_lock(root)
+    try:
+        reg = ModelRegistry(root, lock_timeout_s=0.3)
+        t = time.monotonic()
+        assert reg.ensure_rule_challenger(family="box_break", agent_id="bb", now=FIT_AT) is None   # no lock taken
+        assert time.monotonic() - t < 0.2
+        t = time.monotonic()
+        with pytest.raises(RegistryLockTimeout):
+            reg.ensure_rule_challenger(family="box_break", agent_id="new", now=FIT_AT)
+        assert time.monotonic() - t < 2.0
+        assert set(ModelRegistry(root).agent_ids()) == {"bb"}
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the holder uses fcntl")
+def test_the_engine_shadow_set_returns_within_its_bound_while_another_process_holds_the_registry_lock(
+        tmp_path: Path) -> None:
+    """PR #494 round 3 safety MEDIUM: the engine builds its shadow set on its loop (startup and every reload); a
+    lock wait without a bound froze engine-run exits. It now skips creating rule challengers and serves what is on
+    disk."""
+    from goldbot.ops.services.engine import ENGINE_REGISTRY_LOCK_S, rule_shadow_set
+    holder = _hold_registry_lock(tmp_path / "models")
+    try:
+        t = time.monotonic()
+        out = rule_shadow_set(tmp_path / "models", tmp_path / "population.json")
+        assert time.monotonic() - t < ENGINE_REGISTRY_LOCK_S + 3.0
+        assert out == {} and ModelRegistry(tmp_path / "models").entries == []
+    finally:
+        holder.kill()
+        holder.wait()
+    out = rule_shadow_set(tmp_path / "models", tmp_path / "population.json")     # lock free: challengers created
+    assert out and all(isinstance(m, RuleModel) for _, m in out.values())

@@ -26,6 +26,7 @@ import logging
 import os
 import pickle
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,6 +45,10 @@ from goldbot.research.rule_model import RuleModel
 log = logging.getLogger("goldbot.model_registry")
 
 Status = Literal["challenger", "champion", "previous", "retired"]
+
+
+class RegistryLockTimeout(TimeoutError):
+    """registry.lock was not acquired within the instance's `lock_timeout_s`; nothing was changed."""
 
 
 class ModelEntry(Record):
@@ -74,8 +79,11 @@ class ModelRegistry:
     change is a load-modify-save under the exclusive lock on <root>/registry.lock (code review MEDIUM on #494: a
     long-lived instance's save wrote its stale list back and silently undid a rollback)."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, lock_timeout_s: float | None = None):
+        """`lock_timeout_s`: how long a change waits for registry.lock before RegistryLockTimeout; None waits as long
+        as it takes (jobs, the CLI). The engine passes a bound: its loop also runs exits (PR #494 round 3)."""
         self.root = Path(root)
+        self.lock_timeout_s = lock_timeout_s
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "registry.json"
         self.manifests = self.root / "manifests"
@@ -104,13 +112,21 @@ class ModelRegistry:
 
     @contextmanager
     def _lock(self) -> Iterator[None]:
-        from goldbot.research.windows import _lock_fd, _unlock_fd
+        from goldbot.research.windows import _lock_fd, _try_lock_fd, _unlock_fd
         if self._held:                    # re-entrant: a change made inside `locked`
             yield
             return
         fd = os.open(self.root / "registry.lock", os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            _lock_fd(fd)
+            if self.lock_timeout_s is None:
+                _lock_fd(fd)
+            else:
+                deadline = time.monotonic() + self.lock_timeout_s
+                while not _try_lock_fd(fd):
+                    if time.monotonic() >= deadline:
+                        raise RegistryLockTimeout(f"{self.root / 'registry.lock'} held by another writer for more "
+                                                  f"than {self.lock_timeout_s:g} s; nothing changed")
+                    time.sleep(0.01)
             self._held = True
             try:
                 yield
@@ -232,8 +248,10 @@ class ModelRegistry:
     def ensure_rule_challenger(self, *, family: str, agent_id: str, now: UtcTimestamp | None = None) -> ModelEntry | None:
         """ADR 0038: a `RuleModel` challenger for a rule agent with no registry entry yet (any status), so it
         shadow-trades; None (nothing written) when the agent has one. No backtest, so the weekly gate never promotes it."""
-        with self._lock():
-            if self.by_agent(agent_id):
+        if self.by_agent(agent_id):       # the usual case on every engine reload: no lock taken
+            return None
+        with self._lock():                # RegistryLockTimeout under the engine's bound
+            if self.by_agent(agent_id):   # another writer added it meanwhile
                 return None
             return self.add_challenger(RuleModel(rule=family), family=family, agent_id=agent_id, backtest={}, now=now,
                                        notes=["rule model (ADR 0038): p = rule fired, uncalibrated; shadow only"])
