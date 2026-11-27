@@ -715,7 +715,8 @@ def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
     return {c: max(RHO_FLOOR_LE_60M, v) for c, v in best.items()}
 
 
-def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | None) -> None:
+def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | None, *,
+                          gate_read: bool = False) -> None:
     """ValueError unless `path` names the pinned D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25,
     quant ruling (c) and the code review of #466). Checked at settings load, without hashing any live script (a CI
     test ties the pinned JSON's `script.sha256` to the committed script):
@@ -725,7 +726,10 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
     - `candidates` name at least two replayed families that are neither sr-v3 nor H-102;
     - `cells_file` exists with its recorded sha256;
     - `rho_day_le_60m` has every class of RHO_CLASSES, each finite, each equal to the bound recomputed from the cells;
-    - `value` is at least every class's binding."""
+    - `value` is at least every class's binding;
+    - with `gate_read` (any gate or power read, quant ruling on PR #514, D-12-xt): the file's `exit_freeze_sha` equals
+      the xt-v1 freeze (`dense_labels.EXIT_FREEZE_SHA256`). The D-12 file measured under h_ref = 1 bar has none, so it
+      stays admitted at settings load (learn-window fit-only reads) and is refused for a gate read."""
     import json
     import math
 
@@ -778,6 +782,12 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
         raise ValueError(f"rho_day_measurement bindings differ from the cells file (file, recomputed): {off}")
     if value < max(vals.values()) - 1e-12:
         raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals.values())} ({path})")
+    if gate_read:
+        from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
+        if d.get("exit_freeze_sha") != EXIT_FREEZE_SHA256:
+            raise ValueError(f"rho_day_measurement {path!r} has exit_freeze_sha {d.get('exit_freeze_sha')!r}, not the "
+                             f"xt-v1 freeze {EXIT_FREEZE_SHA256[:12]}: its rho bindings are not a gate or power read "
+                             "until D-12-xt re-runs them at xt-v1 geometry (quant ruling on #514)")
 
 
 class PowerFirstSettings(_Section):
@@ -826,6 +836,13 @@ class PowerFirstSettings(_Section):
         if self.rho_day_le_60m < RHO_DAY_PRIOR:
             check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256)
         return self
+
+    def require_gate_read_rho(self) -> None:
+        """For a gate or power read: a measured rho_day_le_60m stands only on a file measured under the xt-v1 exits
+        (quant ruling on #514, D-12-xt). The 0.25 prior reads no file and passes."""
+        if self.rho_day_le_60m < RHO_DAY_PRIOR:
+            check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256,
+                                  gate_read=True)
 
     def rho_day_for(self, hold_days: float) -> float:
         """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value."""
