@@ -814,3 +814,16 @@ def test_rebuild_refuses_a_data_file_key_that_escapes_the_data_root(tmp_path: Pa
     monkeypatch.setattr(rm, "build", lambda *a, **k: pytest.fail("built from a path outside the data root"))
     with pytest.raises(rm.RebuildRefused, match="outside the data root"):
         rm.rebuild(evil, repo=repo, data_root=tmp_path / "data")
+
+
+def test_a_dunder_or_private_builder_function_is_refused() -> None:
+    for ref in ("goldbot.research.run_manifest:__class__", "goldbot.research.run_manifest:_builder"):
+        with pytest.raises(rm.RebuildRefused, match="not an allowed builder"):
+            rm._builder(ref)
+
+
+def test_a_goldbot_module_re_exporting_a_foreign_function_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rm, "loads", json.loads, raising=False)    # as `from json import loads` would
+    with pytest.raises(rm.RebuildRefused, match="defined in json"):
+        rm._builder("goldbot.research.run_manifest:loads")
+    assert rm._builder("tests.rebuild_builders:tiny_lightgbm").__name__ == "tiny_lightgbm"

@@ -60,9 +60,9 @@ DEFAULT_ROOT = Path("models") / "manifests"        # relative to the service's w
 Schedule = Literal["adhoc", "daily", "weekly", "monthly_walkforward"]
 RUNTIME_PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "lightgbm", "torch")
 _HEX64 = r"^[0-9a-f]{64}$"
-# A builder is `module:function` under goldbot. or the test builders, nothing else (security follow-up to #494): a
-# manifest is data, and data must never choose an arbitrary module to import and call.
-_BUILDER = r"^(goldbot(\.[A-Za-z_]\w*)+|tests\.rebuild_builders):[A-Za-z_]\w*$"
+# A builder is a public `module:function` defined under goldbot. or in the test builders, nothing else (security
+# follow-up to #494): a manifest is data, and data must never choose an arbitrary module to import and call.
+_BUILDER = r"^(goldbot(\.[A-Za-z_]\w*)+|tests\.rebuild_builders):[A-Za-z]\w*$"
 
 
 class ManifestError(ValueError):
@@ -309,6 +309,10 @@ def _builder(ref: str) -> Callable[[BuildSpec], bytes]:
         raise RebuildRefused(f"builder {ref} cannot be imported: {exc}") from exc
     if not callable(f):
         raise RebuildRefused(f"builder {ref} is not callable")
+    home = getattr(f, "__module__", None) or ""
+    if not (home.startswith("goldbot.") or home == "tests.rebuild_builders"):
+        raise RebuildRefused(f"builder {ref} is defined in {home or 'an unknown module'}, not goldbot: a re-exported "
+                             "foreign function is refused")
     return f
 
 
