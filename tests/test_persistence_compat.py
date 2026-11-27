@@ -610,6 +610,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/learners.py", "load_artifact", "cls"):
         "strict: an sr-v3 / zoo-v2 learner artifact (ADR 0108, card A19 fail-closed load): a model with an unknown "
         "field must refuse, never serve with the field dropped",
+    ("goldbot/research/srv3_cost_record.py", "_load", "CostRecord"):
+        "strict: config/research/srv3_cost_record/<version>.yaml, an immutable hash-pinned record (sr-v3 D-3, ADR 0098 "
+        "R-H); a record that does not validate is not frozen and must refuse",
     ("goldbot/risk/real_money.py", "load_adv_reference", "AdvReference"):
         "strict: config/data/adv_reference.yaml, versioned config (ADR 0106); an entry that does not validate gives no "
         "reference, so real-money entries are refused rm_volume_unknown (fail closed)",
