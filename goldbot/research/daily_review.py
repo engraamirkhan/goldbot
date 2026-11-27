@@ -501,7 +501,11 @@ def pending_trades(conn: sqlite3.Connection, hosts: Mapping[str, str],
         accts = sorted(a for a, b in hosts.items() if b == broker)
         marks = ",".join("?" * len(accts))
         last = last_fits(conn, broker)
-        rows = [t for t in trades(conn, f"account_id IN ({marks}) AND ts_ns < ?", (*accts, int(hi.value)))
+        # no cell counts a fill sent at or before its own fit's through: none older than the oldest is read (ts_ns is
+        # the send time); a session never fitted reads all (-1)
+        floor = min(last[s][3] if s in last else -1 for s in SESSIONS)
+        rows = [t for t in trades(conn, f"account_id IN ({marks}) AND ts_ns > ? AND ts_ns < ?",
+                                  (*accts, floor, int(hi.value)))
                 if t.fill_price is not None and t.requested_price is not None and t.client_order_id not in void]
         labels = _sessions([t.sent_utc for t in rows])
         for session in SESSIONS:

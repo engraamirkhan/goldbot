@@ -492,6 +492,14 @@ def test_a_cost_cell_refit_after_its_200_fills_reads_ok_again(tmp_path):
     assert c.status == "ok" and "waiting on fills" in c.reason, c.reason
 
 
+def test_a_ledger_row_the_fill_gate_cannot_parse_leaves_cost_cells_to_the_clock_rule(tmp_path):
+    from tests.test_daily_review import _bad_row
+    _seed_fills(tmp_path, 40)
+    _bad_row(_aux(tmp_path), "torn", host="icm-demo", sent=pd.Timestamp("2026-12-02 10:00", tz="UTC"))
+    c = _gated(tmp_path, pd.Timestamp("2026-12-06 12:00", tz="UTC"))
+    assert c.status == "fail" and "no output for 8.2 d" in c.reason, c.reason    # the clock: 8.2 d is past 84 h + 48 h
+
+
 def test_arm_lifecycle_verdicts_are_candidate_driven_not_fill_gated():
     by = {x.name: x for x in learning.LEARNERS}
     assert by["cost_cells"].fill_gate is True

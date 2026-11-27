@@ -308,6 +308,26 @@ def test_pending_fills_counts_each_cells_eligible_entry_fills_since_its_fit_and_
     assert cell.slippage_usd == pytest.approx(0.5) and cell.previous_usd == pytest.approx(0.3)
 
 
+def _bad_row(db: Database, cid: str, *, host: str, sent: pd.Timestamp) -> None:
+    """A ledger row whose body no longer parses (an older-schema or hand-edited write)."""
+    with db.write() as conn:
+        conn.execute("INSERT INTO exploration_trades (client_order_id, account_id, arm_id, ts_ns, closed, body) "
+                     "VALUES (?, ?, 'S1A', ?, 0, '{\"side\": \"x\"}')", (cid, host, int(sent.value)))
+
+
+def test_pending_fills_reads_no_ledger_row_sent_before_the_oldest_fit_of_its_broker(tmp_path):
+    db = _db(tmp_path)
+    for session in dr.SESSIONS:
+        dr.write_cell(db, broker="icm", session=session, day=DAY, slippage_usd=0.3, fills=200, through=HI, now=NOW)
+    _trade(db, "old", sent=LONDON, requested=2000.0, fill=2000.3)          # before every icm fit: not counted
+    _bad_row(db, "torn", host="icm-probe", sent=LONDON)                     # before every icm fit: never read
+    later = HI + pd.Timedelta(hours=12)
+    _trade(db, "new", sent=later, requested=2000.0, fill=2000.3)
+    with db.connection() as conn:
+        got = dr.pending_fills(conn, HOSTS, later + pd.Timedelta(hours=1))
+    assert got[("icm", "london")] == 1 and got[("icm", "asia")] == 0
+
+
 def test_the_refit_floor_is_the_research_slippage_floor(tmp_path):
     db = _db(tmp_path)
     for i in range(200):

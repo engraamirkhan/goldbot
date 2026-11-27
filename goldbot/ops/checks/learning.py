@@ -578,7 +578,7 @@ _FILL_CACHE: dict[str, tuple[pd.Timestamp, FillRead | None]] = {}
 
 def _fills(ctx: HealthContext, con: sqlite3.Connection) -> FillRead | None:
     """The fill gate's read on the check's read-only connection, at most every FILL_CACHE_S per host; None (the clock
-    judges) without a learning host or with an unreadable ledger."""
+    judges) without a learning host or with an unreadable ledger (sqlite, or a row that does not parse)."""
     if not ctx.learning_hosts or ctx.settings is None:
         return None
     key = str(ctx.state_dir)
@@ -588,7 +588,7 @@ def _fills(ctx: HealthContext, con: sqlite3.Connection) -> FillRead | None:
     try:
         got: FillRead | None = fill_read(con, ctx.state_dir, ctx.learning_hosts,
                                          min_fills=ctx.settings.daily_review.refit_min_fills, now=ctx.now)
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError):      # ValueError: a ledger row that does not parse (pydantic ValidationError)
         got = None
     _FILL_CACHE[key] = (ctx.now, got)
     return got
