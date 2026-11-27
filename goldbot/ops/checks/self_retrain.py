@@ -11,7 +11,7 @@
                  to loosen (statistical gates are not limits); a run that stops altogether FAILs through
                  learning:self_retrain. The reason names the run it comes from; these WARNs are expected until the
                  label unlock (#451, plan W1-D) and sr-v3 (W3-2) land. Otherwise ok, with the label, feature, arm, weight and active-model counts.
-                 While the job is on, every reason leads with "next run <slot> UTC" (scheduler.self_retrain), so
+                 While the job is on, every reason leads with "next slot <slot> UTC" (computed from scheduler.self_retrain), so
                  a WARN about an old run is never read as a stopped job.
 
 Present once the job has stored a run, or whenever the job is switched off; before the first run, job:self_retrain
@@ -64,7 +64,7 @@ def check_self_retrain(ctx: HealthContext) -> Check | None:
     head = ""
     if enabled and sch is not None:
         from goldbot.ops.scheduler import schedule_of
-        head = f"next run {schedule_of(sch).next_slot(ctx.now):%Y-%m-%d %H:%M} UTC; "
+        head = f"next slot {schedule_of(sch).next_slot(ctx.now):%Y-%m-%d %H:%M} UTC; "
     extra = (extra_warnings(runs, max_late_h=float(sch.max_late_hours) if sch is not None else 6.0, now=ctx.now)
              if enabled else [])
     if extra:          # dated (SRE review of #456 M4): the run they come from, so a stale WARN reads as one

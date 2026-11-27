@@ -225,6 +225,18 @@ def test_influence_names_the_models_refused_for_missing_provenance(tmp_path):
     assert "0 served: 1 rows refused (no provenance, trained before migration 45)" in c.reason
 
 
+def test_influence_counts_a_null_feature_version_as_refused_by_the_scorers_own_rule(tmp_path):
+    # code review of #503: health and scorer share one rule; 'null' is no recorded feature version to the scorer
+    from goldbot.research import self_retrain as sr
+    _seed_today(tmp_path)
+    with _aux(tmp_path).write() as c:
+        c.execute("UPDATE self_retrain_models SET model_sha256 = ?, feature_versions = 'null'",
+                  (sr.model_sha256("{}"),))
+    _obs(_aux(tmp_path), 40, TODAY)
+    chk = health.check_model_influence(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
+    assert "0 served: 1 rows refused (no provenance, trained before migration 45)" in chk.reason
+
+
 def test_influence_is_read_at_most_every_15_minutes(tmp_path):
     db = _aux(tmp_path)
     _obs(db, 10, TODAY)
@@ -248,7 +260,7 @@ def test_self_retrain_warns_on_a_late_run_low_label_use_a_broker_with_no_rows_an
     _seed_today(tmp_path)
     c = health.check_self_retrain(make_ctx(tmp_path, now=TODAY, settings=_today_settings()))
     assert c is not None and c.status == "warn"
-    assert c.reason.startswith("next run 2026-11-29 15:00 UTC; run of 2026-11-24: ")
+    assert c.reason.startswith("next slot 2026-11-29 15:00 UTC; run of 2026-11-24: ")
     assert "40.9 h late" in c.reason
     assert "8.7 % of labels" in c.reason
     assert "vantage: 0 labels" in c.reason
@@ -262,18 +274,18 @@ def test_self_retrain_extra_rules_stay_quiet_on_a_clean_run():
     assert sr_check.extra_warnings([run], max_late_h=6.0, now=slot + pd.Timedelta(hours=1)) == []
 
 
-def test_a_late_first_run_stops_warning_after_a_day_and_the_reason_names_the_next_run(tmp_path):
+def test_a_late_first_run_stops_warning_after_a_day_and_the_reason_names_the_next_slot(tmp_path):
     # SRE 11-27: the 11-24 run (slot 11-22, run_if_never_run) read "40.9 h late" every day, and the 4 h cycle report
     # took it for "self_retrain stopped"; the next slot is Sun 11-29 15:00 UTC
     _seed_today(tmp_path)
     now = pd.Timestamp("2026-11-27 09:00", tz="UTC")
     c = health.check_self_retrain(make_ctx(tmp_path, now=now, settings=_today_settings()))
     assert c is not None
-    assert c.reason.startswith("next run 2026-11-29 15:00 UTC; ")
+    assert c.reason.startswith("next slot 2026-11-29 15:00 UTC; ")
     assert "late" not in c.reason
 
 
-def test_an_ok_self_retrain_reason_leads_with_the_next_run(tmp_path):
+def test_an_ok_self_retrain_reason_leads_with_the_next_slot(tmp_path):
     slot = pd.Timestamp("2026-11-29 15:00", tz="UTC")
     db = _aux(tmp_path)
     with db.write() as c:
@@ -287,7 +299,7 @@ def test_an_ok_self_retrain_reason_leads_with_the_next_run(tmp_path):
                   "132, 40, 41, '{}', '{}', ?, ?)", (_ns(slot) - 10 * NS, _ns(slot) + 10 * NS, _ns(slot), _ns(slot)))
     chk = health.check_self_retrain(make_ctx(tmp_path, now=slot + pd.Timedelta(hours=2), settings=_today_settings()))
     assert chk is not None and chk.status == "ok"
-    assert chk.reason.startswith("next run 2026-12-06 15:00 UTC; last run 2026-11-29 15:20 UTC")
+    assert chk.reason.startswith("next slot 2026-12-06 15:00 UTC; last run 2026-11-29 15:20 UTC")
 
 
 # ---------------------------------------------------------------------------------------------- stop coverage
