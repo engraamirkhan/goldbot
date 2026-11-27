@@ -20,7 +20,7 @@ from goldbot.research import column_lookback as CL
 from goldbot.research import dense_labels as D
 from goldbot.research import feature_store as F
 
-TFS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")
+TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 
 
 def _cases() -> list[tuple[str, str, str]]:

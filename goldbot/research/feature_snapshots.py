@@ -173,7 +173,7 @@ def _fair(keys: pd.DataFrame, limit: int) -> pd.DataFrame:
 
 def _tf_seconds(tf: str) -> int:
     from goldbot.config import TF_SECONDS
-    return int(TF_SECONDS.get(tf, {"2h": 7200}.get(tf, 0)))
+    return int(TF_SECONDS.get(tf, 0))
 
 
 def select_keys(keys: pd.DataFrame, *, quotas: Mapping[str, int] | None, limit: int) -> pd.DataFrame:
