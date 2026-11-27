@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from goldbot.research import srv3_cost_record as CR
 from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
+from goldbot.research import srv3_cost_record as CR
 
 ROOT = Path(__file__).resolve().parents[2]
 SRV3 = "srv3-cost-bb199294fe509df0"
@@ -120,6 +120,6 @@ def test_check_cells_matches_the_builders_table_and_names_any_drift() -> None:
     ct = pd.DataFrame([{"instrument": "XAUUSD", **c.model_dump(include={"broker", "session", "tf", "rt_bp",
                                                                           "ecr_ub95_usd"})} for c in rec.gold_cells])
     assert CR.check_cells(ct, rec) == []
-    ct.loc[0, "rt_bp"] += 0.01
+    ct.loc[0, "rt_bp"] = float(ct["rt_bp"].iloc[0]) + 0.01
     assert CR.check_cells(ct, rec) == [f"{ct.loc[0, 'broker']}:{ct.loc[0, 'session']}:{ct.loc[0, 'tf']}: rt_bp"]
     assert CR.check_cells(ct.iloc[1:], rec)[0].endswith("missing")
