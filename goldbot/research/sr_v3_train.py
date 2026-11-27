@@ -175,16 +175,89 @@ class FrameData:
         return str(self.manifest()["frames_sha256"])
 
 
-def cost_parts(rows: pd.DataFrame, swap: Any | None = None) -> pd.DataFrame:
+class CostCellMissing(KeyError):
+    """A row has no cell in the cost of record (instrument x session x tf) or no swap for its instrument and month."""
+
+
+@dataclass(frozen=True)
+class CostTable:
+    """The per-cell cost of record (quant H1 on #488; ADR 0098 R-H, ADR 0102 3): round trip rt_bp = max(W2, ecr ub95)
+    per instrument x broker x session x tf, and the swap of record per instrument and month (fraction of price per
+    night, broker sign: negative = paid). Delivered by the data team (`costs` in ~/tmp/sr-v3-trainsets/manifest.json,
+    market-derived, never in the repo); `from_manifest` checks each file's sha256.
+
+    A cell charges the WORSE of its brokers: a history row has no account, so the conservative broker is charged
+    (W2 stays the floor whatever the table says)."""
+    version: str
+    rt: Mapping[tuple[str, str, str], float]             # (instrument, session, tf) -> rt bp, max over brokers
+    swap: Mapping[tuple[str, str], tuple[float, float]]  # (instrument, "YYYY-MM") -> (long, short) per night
+    files: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_manifest(cls, path: Path | str) -> CostTable:
+        m = json.loads(Path(path).read_text())
+        c = m.get("costs", m)
+        f = c["files"]
+        shas = {}
+        for name in ("cost_table", "swap_table"):
+            p = Path(f[name])
+            got = hashlib.sha256(p.read_bytes()).hexdigest()
+            if got != f[f"{name}_sha256"]:
+                raise ValueError(f"{p}: sha256 {got[:12]} is not the manifest's {f[f'{name}_sha256'][:12]}: refused")
+            shas[name] = got
+        ct = pd.read_parquet(f["cost_table"])
+        rt = ct.groupby(["instrument", "session", "tf"], as_index=False)["rt_bp"].max()
+        sw = pd.read_parquet(f["swap_table"])
+        return cls(version=str(c["cost_version"]),
+                   rt={(str(r.instrument), str(r.session), str(r.tf)): float(r.rt_bp)
+                       for r in rt.itertuples()},
+                   swap={(str(i), str(mo)): (float(lp), float(sp)) for i, mo, lp, sp in zip(
+                       sw["instrument"], sw["month"], sw["long_per_night"].to_numpy(float),
+                       sw["short_per_night"].to_numpy(float), strict=True)}, files=shas)
+
+    def rt_bp(self, rows: pd.DataFrame) -> np.ndarray:
+        """max(W2, the cell's charge) per row; `CostCellMissing` names every row cell the table lacks."""
+        from goldbot.data.calendar import DEFAULT_SESSIONS
+        dec = pd.DatetimeIndex(pd.to_datetime(rows["decision_utc"], utc=True))
+        sess = np.asarray(DEFAULT_SESSIONS.session_label(dec)).astype(str) if len(dec) else np.array([], str)
+        keys = list(zip(rows["instrument"].astype(str), sess, rows["tf"].astype(str), strict=True))
+        missing = sorted({":".join(k) for k in keys if k not in self.rt})
+        if missing:
+            raise CostCellMissing(f"cost {self.version}: no cell for {missing[:5]}{' ...' if len(missing) > 5 else ''}"
+                                  " (instrument:session:tf); refused, never charged at W2")
+        return np.maximum(DC.RT_BP, np.array([self.rt[k] for k in keys], dtype=float))
+
+    def swap_rate(self, rows: pd.DataFrame) -> np.ndarray:
+        """|swap per night| as a fraction of price for the row's instrument, decision month and side (a received swap
+        is never credited, as decision_cost)."""
+        dec = pd.DatetimeIndex(pd.to_datetime(rows["decision_utc"], utc=True))
+        month = np.asarray(dec.strftime("%Y-%m")).astype(str) if len(dec) else np.array([], str)
+        keys = list(zip(rows["instrument"].astype(str), month, strict=True))
+        missing = sorted({":".join(k) for k in keys if k not in self.swap})
+        if missing:
+            raise CostCellMissing(f"cost {self.version}: no swap for {missing[:5]} (instrument:month); refused")
+        side = rows["side"].to_numpy(float)
+        return np.abs(np.array([self.swap[k][0 if sd > 0 else 1] for k, sd in zip(keys, side, strict=True)],
+                               dtype=float))
+
+
+def cost_parts(rows: pd.DataFrame, costs: CostTable | None = None, swap: Any | None = None) -> pd.DataFrame:
     """cost(x) = a + b·p_stop[arm] + c·night_share[arm] per row, from decision-time columns only (decision_cost.cost_x
-    and dense_labels.net_r's round-trip term, rearranged so one row set serves every fold's priors)."""
+    and dense_labels.net_r's round-trip term, rearranged so one row set serves every fold's priors).
+
+    With `costs` (quant H1 on #488): the round trip is the cell's max(W2, ecr ub95) and the swap is the instrument's
+    own of record (rows need instrument and tf). Without it: the row's own `cost_rt_bp` (W2, the w2-point version a
+    read refuses) and decision_cost's swap. Rollover nights are counted on decision_cost's swap calendar either way."""
     sw = swap or DC.swap_spec()
     k = DC.row_k(rows, sw)
-    rt = rows["cost_rt_bp"].to_numpy(float)
-    rate = np.abs(DC._rate_signed(rows["side"].to_numpy(float), sw))
+    if costs is None:
+        rt = rows["cost_rt_bp"].to_numpy(float)
+        rate = np.abs(DC._rate_signed(rows["side"].to_numpy(float), sw))
+    else:
+        rt, rate = costs.rt_bp(rows), costs.swap_rate(rows)
     full = DC.nights_full_hold(rows, sw)
     return pd.DataFrame({"cost_a": k * rt, "cost_b": k * DC.OVERSHOOT_BP, "cost_c": full * k * 1e4 * rate,
-                         "nights_full": full})
+                         "nights_full": full, "cost_rt_bp": rt})
 
 
 # ---------------------------------------------------------------------------------------------- folds and priors
@@ -1218,6 +1291,7 @@ class StoreData:
     tiers_path: Path
     weights: Path | None = None
     rho: Path | None = None                              # the D-12 rho file Stage 0 read (in the data version, H5)
+    costs: CostTable | None = None                       # the per-cell cost of record (H1); None = w2-point
     # the read-once / consumption ledger load_labels appends to (#482), beside the research registry: the file the X6
     # legitimacy guard reads, also from a worktree (which has no state/ of its own; quant H4 on #488)
     ledger: Path = field(default_factory=lambda: default_ledger())
@@ -1318,15 +1392,14 @@ class StoreData:
         if not len(rows):
             return pd.DataFrame(columns=list(ROW_COLS))
         X = design(rows)
-        parts = cost_parts(rows)
+        parts = cost_parts(rows.assign(instrument=instrument, tf=tf), self.costs)
         out = pd.DataFrame({"instrument": instrument, "tf": tf, "phase": rows["phase"].to_numpy(),
                             "decision_utc": rows["decision_utc"].to_numpy(),
                             "horizon_end_utc": rows["horizon_end_utc"].to_numpy(), "side": rows["side"].to_numpy(),
                             "gross": rows["gross_r_raw"].to_numpy(float), "t0_gross": rows["t0_gross"].to_numpy(float),
                             "stop": DC.is_stop(rows), "nights_held": DC.nights_held(rows),
                             "w": rows["w"].to_numpy(float), "entry": rows["entry"].to_numpy(float),
-                            "base_dist": rows["base_dist"].to_numpy(float),
-                            "cost_rt_bp": rows["cost_rt_bp"].to_numpy(float)})
+                            "base_dist": rows["base_dist"].to_numpy(float)})
         out = pd.concat([out, parts.reset_index(drop=True), X[[c for c in V.P30 if c != "side"]].reset_index(drop=True)], axis=1)
         return out[list(ROW_COLS)]
 
@@ -1341,7 +1414,7 @@ class StoreData:
         return {"gate_eligible": not block, "gate_block": block}
 
     def cost_version(self) -> str:
-        return W2_COST_VERSION
+        return self.costs.version if self.costs is not None else W2_COST_VERSION
 
     def version(self, members: Sequence[str], tfs: Sequence[str], phases: Sequence[int]) -> str:
         """The data identity a rebuild needs: label spec and code hashes, tiers sha, every partition key used, and (quant
@@ -1352,12 +1425,14 @@ class StoreData:
         wp = {f"{i}:{t}": self._weights_path(i, t) for i in members for t in tfs}
         weights = {k: V.file_sha256(p) if p.exists() else None for k, p in sorted(wp.items())}
         blob = {"spec": D.spec_hash(), "code": D.code_hash(), "tiers": V.file_sha256(self.tiers_path), "keys": keys,
-                "weights": weights, "rho": V.file_sha256(self.rho) if self.rho else None}
+                "weights": weights, "rho": V.file_sha256(self.rho) if self.rho else None,
+                "costs": {"version": self.cost_version(), **(dict(self.costs.files) if self.costs else {})}}
         return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
 
     def manifest(self) -> dict[str, Any]:
         from goldbot.research import dense_labels as D
         return {"source": "dl-v1 + fs-v1 stores", "label_spec_hash": D.spec_hash(), "label_code_hash": D.code_hash(),
+                "cost_version": self.cost_version(),
                 "tiers_sha256": V.file_sha256(self.tiers_path), "used": self.used}
 
 

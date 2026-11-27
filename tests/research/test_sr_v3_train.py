@@ -545,3 +545,102 @@ def test_closed_form_learners_record_no_seed_stability_verdict(fitted: tuple, tm
     for name in ("L-cw", "HB", "B8"):
         assert "seed_stability" not in {q.check for q in mans[name].quality}
     assert "seed_stability" in {q.check for q in mans["G-cw"].quality}
+
+
+# ---------------------------------------------------------------------------------------------- H1: cost of record
+def _cost_files(tmp_path: Path, *, gold_asia_icm: float = 1.4) -> Path:
+    """A cost manifest like the data team's (~/tmp/sr-v3-trainsets/manifest.json "costs"): per instrument x broker x
+    session x tf rt_bp = max(W2, ecr ub95), and a monthly swap table per instrument."""
+    import hashlib
+    import json
+    cells = [{"instrument": i, "broker": b, "session": s, "tf": "4h", "rt_bp": v}
+             for i in ("XAUUSD", "EURUSD") for b in ("icm", "vantage") for s in ("asia", "london", "newyork")
+             for v in [0.9 if b == "vantage" else (gold_asia_icm if (i, s) == ("XAUUSD", "asia") else 0.7)]]
+    cells.append({"instrument": "XAUUSD", "broker": "icm", "session": "london", "tf": "1h", "rt_bp": 0.3})
+    cells.append({"instrument": "XAUUSD", "broker": "vantage", "session": "london", "tf": "1h", "rt_bp": 0.2})
+    months = [f"{y}-{m:02d}" for y in range(2009, 2019) for m in range(1, 13)]
+    swap = [{"instrument": i, "month": mo, "long_per_night": lp, "short_per_night": sp}
+            for i, lp, sp in (("XAUUSD", -0.000154, 0.0), ("EURUSD", -0.00004, 0.00001)) for mo in months]
+    d = tmp_path / "costs"
+    d.mkdir(exist_ok=True)
+    pd.DataFrame(cells).to_parquet(d / "cost_table.parquet", index=False)
+    pd.DataFrame(swap).to_parquet(d / "swap_table.parquet", index=False)
+
+    def sha(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    man = {"costs": {"cost_version": "srv3-cost-fixture", "files": {
+        "cost_table": str(d / "cost_table.parquet"), "cost_table_sha256": sha(d / "cost_table.parquet"),
+        "swap_table": str(d / "swap_table.parquet"), "swap_table_sha256": sha(d / "swap_table.parquet")}}}
+    (tmp_path / "manifest.json").write_text(json.dumps(man))
+    return tmp_path / "manifest.json"
+
+
+def _cost_rows(inst: str = "XAUUSD", tf: str = "4h", hour: int = 2, n: int = 4) -> pd.DataFrame:
+    dec = pd.DatetimeIndex([pd.Timestamp(f"2013-03-0{4 + i} {hour:02d}:00", tz="UTC") for i in range(n)])
+    return pd.DataFrame({"instrument": inst, "tf": tf, "decision_utc": dec, "side": [1, -1] * (n // 2),
+                         "max_hold_s": float(V.H_S[tf]), "entry": 1_500.0, "risk_usd": 12.0, "cost_rt_bp": DC.RT_BP})
+
+
+def test_a_ub95_cell_above_w2_is_charged_at_ub95_and_the_worst_broker(tmp_path: Path) -> None:
+    """Quant H1 on #488: rt_bp per row from the per-cell table, max(W2, ecr ub95) by broker x session x tf; the run
+    charges the worse broker of the cell (conservative: the account is not known at history time)."""
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    rows = _cost_rows(hour=2)                                    # 02:00 UTC: asia
+    k = DC.row_k(rows)
+    parts = T.cost_parts(rows, table)
+    assert np.allclose(parts["cost_rt_bp"], 1.4) and np.allclose(parts["cost_a"], k * 1.4)
+    assert (parts["cost_a"].to_numpy() > k * DC.RT_BP).all()
+    assert np.allclose(T.cost_parts(_cost_rows(hour=10), table)["cost_rt_bp"], 0.9), "london: vantage 0.9 > icm 0.7"
+    assert np.allclose(T.cost_parts(_cost_rows(tf="1h", hour=10), table)["cost_rt_bp"], DC.RT_BP), "W2 floor"
+    assert table.version == "srv3-cost-fixture"
+
+
+def test_rows_with_no_cost_cell_are_refused(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    with pytest.raises(T.CostCellMissing, match="XAUUSD:asia:30m"):
+        T.cost_parts(_cost_rows(tf="30m"), table)
+    with pytest.raises(T.CostCellMissing, match="USDJPY"):
+        T.cost_parts(_cost_rows(inst="USDJPY"), table)
+    late = _cost_rows().assign(decision_utc=lambda f: f["decision_utc"] + pd.Timedelta(days=3_000))
+    with pytest.raises(T.CostCellMissing, match="swap"):
+        T.cost_parts(late, table)
+
+
+def test_swap_is_charged_per_instrument_from_the_table(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    rows = _cost_rows(inst="EURUSD", hour=10)
+    parts = T.cost_parts(rows, table)
+    full = DC.nights_full_hold(rows)
+    assert (full > 0).any()
+    want = full * DC.row_k(rows) * 1e4 * np.where(rows["side"] > 0, 0.00004, 0.00001)
+    assert np.allclose(parts["cost_c"], want), "EURUSD's own swap, never gold's"
+
+
+def test_a_tampered_cost_file_is_refused(tmp_path: Path) -> None:
+    man = _cost_files(tmp_path)
+    pd.DataFrame([{"instrument": "XAUUSD", "broker": "icm", "session": "asia", "tf": "4h", "rt_bp": 0.0}]).to_parquet(
+        tmp_path / "costs" / "cost_table.parquet", index=False)
+    with pytest.raises(ValueError, match="sha256"):
+        T.CostTable.from_manifest(man)
+
+
+def test_read_mode_refuses_w2_point_costs_even_on_a_gate_eligible_read() -> None:
+    data, plan = _data(readable=False), _plan()
+    w2 = T.FrameData(data.frames, gate=ELIGIBLE)
+    with pytest.raises(T.ReadRefused, match="w2-point"):
+        T.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+
+
+def test_the_store_reports_its_cost_table_version(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    store = T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
+    assert store.cost_version() == "srv3-cost-fixture"
+    assert T.StoreData(labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
+
+
+def test_the_data_teams_cost_manifest_loads_when_present() -> None:
+    man = Path.home() / "tmp" / "sr-v3-trainsets" / "manifest.json"
+    if not man.exists():
+        pytest.skip("no local cost manifest (market-derived, never in the repo)")
+    t = T.CostTable.from_manifest(man)
+    assert t.version.startswith("srv3-cost-") and t.rt_bp(_cost_rows()).min() >= DC.RT_BP

@@ -16,7 +16,8 @@ oof.parquet only under --read; index.json.
 
 Fit-only is the default (quant H2 on #488): artifacts and hash-sealed OOF scores, no S, kept mean, S at 2x cost, D or
 other read statistic, in the files or on stdout. `--read` raises unless every label load was gate_eligible and the
-rows are costed at the ub95 cost of record.
+rows are costed at the ub95 cost of record (--cost-manifest: rt_bp = max(W2, ecr ub95) per instrument x session x
+tf at the worse broker, the instrument's own swap; a row with no cell is refused).
 
 Refusals, by design:
 - labels are read only through dense_labels.load_labels on the learn window: a sealed store (ADR 0085 A4 not recorded,
@@ -45,6 +46,7 @@ from goldbot.research import sr_v3_train as T
 
 ROOT = Path(__file__).resolve().parents[2]
 RHO = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
+COSTS = Path.home() / "tmp" / "sr-v3-trainsets" / "manifest.json"     # the data team's cost of record (H1), local
 
 
 def refuse_before_x6() -> None:
@@ -58,7 +60,8 @@ def refuse_before_x6() -> None:
 
 def _store(a: argparse.Namespace) -> T.StoreData:
     return T.StoreData(labels=Path(a.labels), features=Path(a.features), tiers_path=Path(a.tiers),
-                       ledger=Path(a.ledger), rho=Path(a.rho))
+                       ledger=Path(a.ledger), rho=Path(a.rho),
+                       costs=T.CostTable.from_manifest(a.cost_manifest) if a.cost_manifest else None)
 
 
 def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
@@ -183,6 +186,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--ledger", default=str(T.default_ledger()),
                     help="the read-once / consumption ledger load_labels appends to (#482); default beside the "
                          "research registry, the file the X6 guard reads (quant H4 on #488)")
+    ap.add_argument("--cost-manifest", default=str(COSTS) if COSTS.exists() else None,
+                    help="manifest whose `costs` names the per-cell cost table and swap table (sha-checked); without "
+                         "it rows are costed at the W2 point and --read is refused (quant H1 on #488)")
     ap.add_argument("--out", default=str(T.OUT))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stage0-only", action="store_true")
