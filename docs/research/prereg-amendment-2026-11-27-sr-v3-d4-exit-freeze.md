@@ -46,7 +46,7 @@ not touched; trading-safety review is not required for this change (no engine, r
   side-aware quotes, a gapped stop fills at the open, a gapped target fills at the target, a both-touch minute is a
   stop, trail and break-even move the stop from the next minute, clip ±10 R.
 - Code: `goldbot.research.dense_labels.EXIT_FREEZE` (record `ExitFreeze`, id `xt-v1`).
-  **xt-v1 sha256 559739c72fc720a2d27035c14011dc7dc9a12e62da3121496bd16b270478979c** (`exit_freeze_hash`: canonical
+  **xt-v1 sha256 b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826** (`exit_freeze_hash`: canonical
   JSON of the templates, H, h_ref, atr_n 14, floor 1.5 × 1,440-minute median TR, clip 10, sides, the grid time-exit
   tfs {1d, 1w}, the close-to-close set {T0}, and `behaviour_sha`). RL-1 reads its templates from the same record: one
   definition repo-wide.
@@ -54,8 +54,11 @@ not touched; trading-safety review is not required for this change (no engine, r
   `first_passage` (all 8 templates, both sides through `_quotes`), `decision_bars` and `floor_at` (15m, 1d) and
   `entry_and_horizon` (15m, 1d) on a fixed synthetic minute set (`_FP_BLOCKS`: a both-touch minute, a gapped stop, a
   gapped target, a trail trigger, a break-even trigger, a time exit; `_path_frame`: three weeks with the weekend gaps),
-  rounded to 6 decimals, computed lazily and cached. A changed fill rule or grid rule with the same parameters is not
-  xt-v1.
+  plus (quant re-verify B) `base_dist`, `risk_usd` and `gross_r_raw` of T2 and T6, both sides, from `_label_core` (the
+  body of `label_rows` without the stamp) at 15m, under the spec and under an h_ref probe of 16 × H (factor 1/4, where
+  the floor binds), so the d0 composition (ATR × sqrt(H/h_ref), then the floor, `_base_distance`) is frozen too.
+  Rounded to 6 decimals, computed lazily and cached. A changed fill rule, grid rule or d0 composition with the same
+  parameters is not xt-v1.
 
 ## 3. Why h_ref = H (principal ruling, reasons written before any read)
 
@@ -97,11 +100,17 @@ xt-v1 does not adopt it for the reasons above.
 - ρ_u,day and ρ_u,inst bind at max(D-12 recorded, re-run) per cell. τ_a/λ_a take the re-run value only (the R units
   must match). Both are reported.
 - Learn-window fit-only reads may proceed now with the recorded values.
-- The ρ JSON gains `exit_freeze_sha`. The `rho_day_measurement` validator refuses a file without the xt-v1 sha for any
-  gate or power read: `goldbot.config.check_rho_measurement(..., gate_read=True)` and
-  `PowerFirstSettings.require_gate_read_rho()`; test
-  `tests/research/test_rho_measurement.py::test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read`.
-  Settings load (fit-only) is unchanged.
+- The ρ JSON gains `exit_freeze_sha`. Freezing `LAMBDA_INST` (τ_a) by hash also requires the xt-v1 sha in the file it
+  is taken from.
+- **One entry point (quant re-verify A):** a Stage 0, power or gate read calls
+  `goldbot.research.data_sufficiency.require_power_read_rho(cfg, power)`. It checks every ρ_u,inst file the sufficiency
+  config divides by (`measured_rho(..., gate_read=True)`, threaded through `_rho_row` and `unit_rows`, which set the
+  pooled n_eff) and the measured `rho_day_le_60m` file (`check_rho_measurement(..., gate_read=True)`). Both use
+  `goldbot.config.xt_v1_rho_refusal`. Tests: `tests/research/test_rho_measurement.py`
+  (`test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read`,
+  `test_measured_rho_inst_refuses_a_pre_xt_v1_file_for_a_gate_read`, the entry point and the rendered flag).
+- The rendered `docs/data/sufficiency.md` flags the bodies on the D-12 file ("pre-xt-v1 ρ_u,inst: fit-only, not a power
+  read"; today `fx10` and `gold_fx`). Settings load and learn-window fit-only reads are unchanged.
 
 Rejected: h_ref = one decision bar (reason 2 and 3), h_ref = a fixed clock span across tfs such as 1 h (it rescales
 every tf by a different constant and breaks the "one table" reading of 2.1), and per-tf tuning of k or h_ref (it needs
@@ -111,7 +120,7 @@ outcomes, so it is a trial with K, not a freeze).
 
 - Before: `gate_status` blocked when `spec.h_ref == "H"`.
 - After: it blocks when `exit_freeze_hash(spec) != EXIT_FREEZE_SHA256`, with the text "exit templates / h_ref are
-  not the D-4 freeze xt-v1 (sha256 559739c72fc7): not a frozen exit geometry (D-4)". The old placeholder `"H"`, any
+  not the D-4 freeze xt-v1 (sha256 b68e2f7bbce9): not a frozen exit geometry (D-4)". The old placeholder `"H"`, any
   other string, another h_ref, a changed template, ATR length or floor, and a changed fill or grid mechanic all keep
   the block. The shipped `SPEC` clears it.
 - **Provenance (quant 2 on #514).** `label_rows` stamps `exit_freeze_sha` on every row (a `SKELETON` column) and
