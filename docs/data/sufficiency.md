@@ -267,3 +267,10 @@ Counted = the card 2.2 n_eff the route adds summed over cells (learn and `:judge
 - `metals_crosses_b` (card-2.2): Metals and crosses (XAGUSD, XAUEUR, EURAUD, EURGBP, GBPAUD; B close-to-close); learn 2010-01..2017-12, judge 2018-01..2025-09.
 - `index_energy_b` (card-2.2): Index + energy (US500, USTEC, UK100, DE40, XTIUSD, USINDEX; B close-to-close, R-L windows); learn 2018-01..2021-12, judge 2022-01..2025-09.
 - `independent_new` (card-2.2): Instruments that add independent days (sr-v3 rev 3 D-13: index, energy, rates, crypto, agri, least-gold-correlated FX); pre-screened by Dimson ρ on learn and independent graded days; learn 2010-01..2017-12, judge 2018-01..2025-09.
+
+## ρ_u,inst under the exit freeze (D-12-xt, quant ruling on #514)
+
+These units and pooled bodies divide by a ρ_u,inst file that does not record the xt-v1 exit freeze. Their pooled n_eff stands for learn-window fit-only reads; a Stage 0, power or gate read refuses it (`data_sufficiency.require_power_read_rho`) until D-12-xt re-runs the grid at xt-v1 geometry.
+
+- `fx10`: pre-xt-v1 ρ_u,inst: fit-only, not a power read
+- `gold_fx`: pre-xt-v1 ρ_u,inst: fit-only, not a power read

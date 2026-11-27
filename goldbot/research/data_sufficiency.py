@@ -389,20 +389,63 @@ def hold_bucket(tf: str) -> str:
     return "le60m" if h <= 3_600 else ("1h-4h" if h <= 14_400 else "gt4h")
 
 
-def measured_rho(cfg: dict[str, Any], src: dict[str, Any]) -> dict[str, float]:
-    """tf -> binding rho_u,inst for `src` = {file, key, stat}: the D-12 value of that membership at the tf's bucket."""
+PRE_XT_V1_FLAG = "pre-xt-v1 ρ_u,inst: fit-only, not a power read"
+
+
+def _rho_json(src: dict[str, Any]) -> dict[str, Any]:
     import json
 
     from goldbot.config import ROOT
-    d = json.loads((ROOT / src["file"]).read_text())["binding"]["rho_u_inst_day_mean"]
+    out: dict[str, Any] = json.loads((ROOT / src["file"]).read_text())
+    return out
+
+
+def measured_rho(cfg: dict[str, Any], src: dict[str, Any], *, gate_read: bool = False) -> dict[str, float]:
+    """tf -> binding rho_u,inst for `src` = {file, key, stat}: the D-12 value of that membership at the tf's bucket.
+    With `gate_read` (a Stage 0, power or gate read; quant ruling on #514, D-12-xt) the file must record the xt-v1 exit
+    freeze (`exit_freeze_sha`), else ValueError; without it (learn-window fit-only reads) the recorded value is used."""
+    from goldbot.config import xt_v1_rho_refusal
+    full = _rho_json(src)
+    if gate_read and (why := xt_v1_rho_refusal(full, src["file"])) is not None:
+        raise ValueError(why)
+    d = full["binding"]["rho_u_inst_day_mean"]
     return {tf: min(1.0, float(d[f"{src['key']}|{hold_bucket(tf)}"][src.get("stat", "max")])) for tf in cfg["tfs"]}
 
 
-def _rho_row(cfg: dict[str, Any], pdef: dict[str, Any], override: float | None = None) -> list[float]:
+def _rho_sources(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """(body, rho_inst_from) for every unit (card_pooled) and pooled body that divides by a measured rho_u,inst."""
+    out = [(unit, u["card_pooled"]["rho_inst_from"]) for unit, u in (cfg.get("units") or {}).items()
+           if (u.get("card_pooled") or {}).get("rho_inst_from")]
+    out += [(name, p["rho_inst_from"]) for name, p in (cfg.get("pooled") or {}).items() if p.get("rho_inst_from")]
+    return out
+
+
+def pre_xt_v1_rho(cfg: dict[str, Any]) -> list[str]:
+    """The units and pooled bodies whose rho_u,inst file predates xt-v1 (`PRE_XT_V1_FLAG` in the rendered table)."""
+    from goldbot.config import xt_v1_rho_refusal
+    return [body for body, src in _rho_sources(cfg) if xt_v1_rho_refusal(_rho_json(src), src["file"]) is not None]
+
+
+def require_power_read_rho(cfg: dict[str, Any], power: Any) -> None:
+    """THE one entry point a Stage 0, power or gate read calls before it uses any rho (quant ruling on #514, D-12-xt):
+    every rho_u,inst file of the sufficiency config (`measured_rho(gate_read=True)` per unit and pooled body) and the
+    power settings' measured rho_day_le_60m file (`check_rho_measurement(gate_read=True)`; the 0.25 prior reads no
+    file) must record the xt-v1 exit freeze sha. ValueError names the first that does not. `power` is a
+    `goldbot.config.PowerFirstSettings`."""
+    from goldbot.config import RHO_DAY_PRIOR, check_rho_measurement
+    for _, src in _rho_sources(cfg):
+        measured_rho(cfg, src, gate_read=True)
+    if power.rho_day_le_60m < RHO_DAY_PRIOR:
+        check_rho_measurement(power.rho_day_measurement, power.rho_day_le_60m, power.rho_day_measurement_sha256,
+                              gate_read=True)
+
+
+def _rho_row(cfg: dict[str, Any], pdef: dict[str, Any], override: float | None = None, *,
+             gate_read: bool = False) -> list[float]:
     if override is not None:
         return [override] * len(cfg["tfs"])
     if "rho_inst_from" in pdef:
-        m = measured_rho(cfg, pdef["rho_inst_from"])
+        m = measured_rho(cfg, pdef["rho_inst_from"], gate_read=gate_read)
         return [m[tf] for tf in cfg["tfs"]]
     return [float(pdef["rho_inst"])] * len(cfg["tfs"])
 
@@ -416,7 +459,8 @@ def pooled_supply_by_tf(rows: Sequence[Sequence[int | None]], rho: Sequence[floa
     return out
 
 
-def unit_rows(cfg: dict[str, Any], unit: str) -> tuple[list[int | None] | None, list[int | None] | None]:
+def unit_rows(cfg: dict[str, Any], unit: str, *,
+              gate_read: bool = False) -> tuple[list[int | None] | None, list[int | None] | None]:
     """A unit's learn and judge rows; a card-pooled unit (`card_pooled: {k, rho_inst, rho_inst_from}`) is re-divided
     at the D-12 binding rho of its membership and bucket: x (1 + (k-1) rho_card) / (1 + (k-1) rho_measured)."""
     u = cfg["units"][unit]
@@ -425,7 +469,7 @@ def unit_rows(cfg: dict[str, Any], unit: str) -> tuple[list[int | None] | None, 
     cp = u.get("card_pooled")
     if cp:
         k, r0 = int(cp["k"]), float(cp["rho_inst"])
-        m = measured_rho(cfg, cp["rho_inst_from"])
+        m = measured_rho(cfg, cp["rho_inst_from"], gate_read=gate_read)
         f = [(1 + (k - 1) * r0) / (1 + (k - 1) * m[tf]) for tf in cfg["tfs"]]
         learn = None if learn is None else [None if v is None else int(v * f[i]) for i, v in enumerate(learn)]
         judge = None if judge is None else [None if v is None else int(v * f[i]) for i, v in enumerate(judge)]
@@ -542,4 +586,5 @@ def consumers(cfg: dict[str, Any]) -> list[Consumer]:
 
 __all__ = ["METHODS", "NOT_STARTED_DATA", "unit_method", "POWER_N_EFF", "RHO_INST", "RILEY_PER_PARAM", "SYNTHETIC_COUNTS_ZERO", "Certificate", "Consumer",
            "ConsumerCell", "Gap", "Requirement", "Route", "certificates", "certify", "check_route", "consumer_cells",
-           "consumers", "hold_bucket", "inherit", "measured_rho", "members", "pooled_supply", "pooled_supply_by_tf", "unit_rows", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]
+           "consumers", "hold_bucket", "inherit", "measured_rho", "members", "PRE_XT_V1_FLAG", "pre_xt_v1_rho",
+           "require_power_read_rho", "pooled_supply", "pooled_supply_by_tf", "unit_rows", "power_n", "r2_from_auc", "rank_routes", "routes", "supply"]

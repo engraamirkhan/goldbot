@@ -632,15 +632,17 @@ def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
     lab, meta = D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=served, columns=CORE6,
                               keys={(2015, 0): k15}, window=learn)
     assert len(lab) and meta["tiers_sha256"] == rec and meta["booked_read"] is None
-    # quant A4 on #482: w2-point rows (and h_ref = H) are not a gate read, machine-readably
+    # quant A4 on #482: w2-point rows are not a gate read, machine-readably; D-4 froze the exits (xt-v1), so the
+    # shipped spec carries no D-4 block and the old h_ref = H placeholder (or any other string) does
     assert (lab["cost_version"] == "w2-point").all()
     assert meta["gate_eligible"] is False and any("w2-point" in b for b in meta["gate_block"])
-    assert any("h_ref" in b for b in meta["gate_block"])
+    assert not any("D-4" in b for b in meta["gate_block"])
     with pytest.raises(PermissionError, match="not a gate read"):
         D.require_gate_eligible(meta)
-    assert D.gate_status(lab.assign(cost_version="ecr-ub95"),
-                         D.SPEC.model_copy(update={"h_ref": "frozen-D4"})) == {"gate_eligible": True,
-                                                                                "gate_block": []}
+    assert D.gate_status(lab.assign(cost_version="ecr-ub95")) == {"gate_eligible": True, "gate_block": []}
+    for placeholder in ("H", "frozen-D4"):
+        assert not D.gate_status(lab.assign(cost_version="ecr-ub95"),
+                                 D.SPEC.model_copy(update={"h_ref": placeholder}))["gate_eligible"]
     confirm = (pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2025-10-01", tz="UTC"))
     with pytest.raises(PermissionError, match="booked"):
         D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2018], tiers=served, columns=CORE6,
