@@ -41,6 +41,7 @@ import pandas as pd
 import yaml
 
 from goldbot.base import FrozenRecord
+from goldbot.data import holdout_guard
 from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 
@@ -167,6 +168,10 @@ def _verified(version: str, paths: Mapping[str, Path | str]) -> tuple[CostRecord
     if drift:
         raise CostRecordRefused(f"cost {version}: the record's gold cells are not the cost table's: {drift[:5]}")
     _check_spread_sessions(frames["gold_spread_table"], rec)
+    # the spread months are history only: a month that starts inside the sealed holdout is refused (holdout seal)
+    sp = frames["gold_spread_table"]
+    holdout_guard.refuse(pd.DataFrame({"ts_utc": pd.to_datetime(sp["month"].astype(str) + "-01", utc=True)}),
+                         what=f"cost {version} gold spread months")
     return rec, frames
 
 

@@ -715,11 +715,12 @@ def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
     return {c: max(RHO_FLOOR_LE_60M, v) for c, v in best.items()}
 
 
-def xt_v1_rho_refusal(d: dict[str, object], path: object) -> str | None:
+def xt_v1_rho_refusal(d: dict[str, object], path: object, freeze_sha: str) -> str | None:
     """Why a rho measurement (its parsed JSON `d`) is not a Stage 0, gate or power read: it does not record the xt-v1
-    exit freeze (`exit_freeze_sha` != `dense_labels.EXIT_FREEZE_SHA256`; quant ruling on PR #514, D-12-xt). None when
-    it does. Callers go through `data_sufficiency.require_power_read_rho`, the one entry point."""
-    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
+    exit freeze (`exit_freeze_sha` != `freeze_sha`, which callers pass as `dense_labels.EXIT_FREEZE_SHA256`; quant
+    ruling on PR #514, D-12-xt). None when it does. Callers go through `data_sufficiency.require_power_read_rho`, the
+    one entry point. The sha is passed in, not imported: config is a bridge file and must not import research code."""
+    EXIT_FREEZE_SHA256 = freeze_sha
     if d.get("exit_freeze_sha") == EXIT_FREEZE_SHA256:
         return None
     return (f"rho measurement {path!s} has exit_freeze_sha {d.get('exit_freeze_sha')!r}, not the xt-v1 freeze "
@@ -728,7 +729,7 @@ def xt_v1_rho_refusal(d: dict[str, object], path: object) -> str | None:
 
 
 def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | None, *,
-                          gate_read: bool = False) -> None:
+                          gate_read: bool = False, freeze_sha: str | None = None) -> None:
     """ValueError unless `path` names the pinned D-12 measurement that carries `value` (ADR 0085 amendment 2026-11-25,
     quant ruling (c) and the code review of #466). Checked at settings load, without hashing any live script (a CI
     test ties the pinned JSON's `script.sha256` to the committed script):
@@ -740,7 +741,7 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
     - `rho_day_le_60m` has every class of RHO_CLASSES, each finite, each equal to the bound recomputed from the cells;
     - `value` is at least every class's binding;
     - with `gate_read` (any gate or power read, quant ruling on PR #514, D-12-xt): the file's `exit_freeze_sha` equals
-      the xt-v1 freeze (`dense_labels.EXIT_FREEZE_SHA256`). The D-12 file measured under h_ref = 1 bar has none, so it
+      the xt-v1 freeze `freeze_sha` (the caller passes `dense_labels.EXIT_FREEZE_SHA256`; required with `gate_read`). The D-12 file measured under h_ref = 1 bar has none, so it
       stays admitted at settings load (learn-window fit-only reads) and is refused for a gate read."""
     import json
     import math
@@ -794,8 +795,11 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
         raise ValueError(f"rho_day_measurement bindings differ from the cells file (file, recomputed): {off}")
     if value < max(vals.values()) - 1e-12:
         raise ValueError(f"rho_day_le_60m {value} is below the measured binding {max(vals.values())} ({path})")
-    if gate_read and (why := xt_v1_rho_refusal(d, path)) is not None:
-        raise ValueError(why)
+    if gate_read:
+        if not freeze_sha:
+            raise ValueError("check_rho_measurement(gate_read=True) needs freeze_sha (dense_labels.EXIT_FREEZE_SHA256)")
+        if (why := xt_v1_rho_refusal(d, path, freeze_sha)) is not None:
+            raise ValueError(why)
 
 
 class PowerFirstSettings(_Section):

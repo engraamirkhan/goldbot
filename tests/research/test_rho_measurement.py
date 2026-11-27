@@ -47,12 +47,12 @@ def test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read
     f, sha = _made(tmp_path, "none")
     check_rho_measurement(str(f), 0.05, sha)                    # fit-only / settings load: admitted as recorded
     with pytest.raises(ValueError, match="exit_freeze_sha"):
-        check_rho_measurement(str(f), 0.05, sha, gate_read=True)
+        check_rho_measurement(str(f), 0.05, sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
     other, osha = _made(tmp_path, "other", exit_freeze_sha="0" * 64)
     with pytest.raises(ValueError, match="exit_freeze_sha"):
-        check_rho_measurement(str(other), 0.05, osha, gate_read=True)
+        check_rho_measurement(str(other), 0.05, osha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
     xt, xsha = _made(tmp_path, "xt", exit_freeze_sha=D.EXIT_FREEZE_SHA256)
-    check_rho_measurement(str(xt), 0.05, xsha, gate_read=True)
+    check_rho_measurement(str(xt), 0.05, xsha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
 
 
 def test_measured_rho_inst_refuses_a_pre_xt_v1_file_for_a_gate_read(tmp_path: Path) -> None:

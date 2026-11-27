@@ -405,8 +405,9 @@ def measured_rho(cfg: dict[str, Any], src: dict[str, Any], *, gate_read: bool = 
     With `gate_read` (a Stage 0, power or gate read; quant ruling on #514, D-12-xt) the file must record the xt-v1 exit
     freeze (`exit_freeze_sha`), else ValueError; without it (learn-window fit-only reads) the recorded value is used."""
     from goldbot.config import xt_v1_rho_refusal
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
     full = _rho_json(src)
-    if gate_read and (why := xt_v1_rho_refusal(full, src["file"])) is not None:
+    if gate_read and (why := xt_v1_rho_refusal(full, src["file"], EXIT_FREEZE_SHA256)) is not None:
         raise ValueError(why)
     d = full["binding"]["rho_u_inst_day_mean"]
     return {tf: min(1.0, float(d[f"{src['key']}|{hold_bucket(tf)}"][src.get("stat", "max")])) for tf in cfg["tfs"]}
@@ -423,7 +424,9 @@ def _rho_sources(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 def pre_xt_v1_rho(cfg: dict[str, Any]) -> list[str]:
     """The units and pooled bodies whose rho_u,inst file predates xt-v1 (`PRE_XT_V1_FLAG` in the rendered table)."""
     from goldbot.config import xt_v1_rho_refusal
-    return [body for body, src in _rho_sources(cfg) if xt_v1_rho_refusal(_rho_json(src), src["file"]) is not None]
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
+    return [body for body, src in _rho_sources(cfg)
+            if xt_v1_rho_refusal(_rho_json(src), src["file"], EXIT_FREEZE_SHA256) is not None]
 
 
 def require_power_read_rho(cfg: dict[str, Any], power: Any) -> None:
@@ -433,11 +436,12 @@ def require_power_read_rho(cfg: dict[str, Any], power: Any) -> None:
     file) must record the xt-v1 exit freeze sha. ValueError names the first that does not. `power` is a
     `goldbot.config.PowerFirstSettings`."""
     from goldbot.config import RHO_DAY_PRIOR, check_rho_measurement
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
     for _, src in _rho_sources(cfg):
         measured_rho(cfg, src, gate_read=True)
     if power.rho_day_le_60m < RHO_DAY_PRIOR:
         check_rho_measurement(power.rho_day_measurement, power.rho_day_le_60m, power.rho_day_measurement_sha256,
-                              gate_read=True)
+                              gate_read=True, freeze_sha=EXIT_FREEZE_SHA256)
 
 
 def _rho_row(cfg: dict[str, Any], pdef: dict[str, Any], override: float | None = None, *,
