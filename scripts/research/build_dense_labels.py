@@ -151,7 +151,18 @@ def counts(inst: str, tfs: list[str], windows: dict[str, list[int]], event_paths
     return out
 
 
+def require_frozen_exits() -> None:
+    """Fail fast (code review LOW-2 on #516): on a host where the label spec does not hash to the xt-v1 exit freeze
+    (the mechanics unmeasurable or different), every partition would be rebuilt into rows no gate can read."""
+    got = D.exit_freeze_hash(D.SPEC)
+    if got != D.EXIT_FREEZE_SHA256:
+        raise SystemExit(f"dense labels not built: this host's exit freeze hash {got[:24]} is not xt-v1 "
+                         f"{D.EXIT_FREEZE_SHA256[:12]} (sr-v3 D-4); fix the environment (numpy/pandas versions, "
+                         "dense_labels changes) before building, or every row would be ungateable")
+
+
 def main() -> int:
+    require_frozen_exits()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--instruments", default=F.GOLD)
     ap.add_argument("--tfs", default="all")

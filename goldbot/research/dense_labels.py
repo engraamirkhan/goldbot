@@ -756,7 +756,18 @@ VALUE_KEYS = ("decision_utc", "side", "template")       # alignment columns repe
 def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: str, year: int, phase: int,
                     parts: Mapping[str, Any], spec: LabelSpec = SPEC) -> str:
     """Atomic: `<key>.skeleton.parquet` (the outcome-blind `SKELETON` columns), `<key>.values.parquet` (the label
-    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`."""
+    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`.
+    The manifest's `exit_freeze_sha` is the rows' own stamp, never measured again here (code review LOW-1 on #516: a
+    one-off failure in `label_rows` would otherwise sit under a good manifest stamp and `partition_exists` would skip
+    the partition forever). The rows must carry exactly one stamp, else ValueError; an empty partition has no row to
+    stamp and records the spec's hash."""
+    if "exit_freeze_sha" not in labels.columns:
+        raise ValueError("write_partition: the rows carry no exit_freeze_sha stamp (build them with label_rows)")
+    stamps = labels["exit_freeze_sha"].astype(str).unique()
+    if len(stamps) > 1:
+        raise ValueError(f"write_partition: the rows carry {len(stamps)} exit_freeze_sha stamps; one partition is built "
+                         "under one exit geometry")
+    stamp = str(stamps[0]) if len(stamps) else exit_freeze_hash(spec)
     key = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)
     d = _part_dir(cache, spec, instrument, tf, year, phase)
     d.mkdir(parents=True, exist_ok=True)
@@ -767,7 +778,7 @@ def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: s
         labels[cols].to_parquet(tmp, index=False, compression="zstd")
         os.replace(tmp, p)
     man = {**parts, "key": key, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
-           "exit_freeze_sha": exit_freeze_hash(spec),
+           "exit_freeze_sha": stamp,
            "instrument": instrument, "tf": tf, "year": year, "phase": phase, "rows": len(labels),
            "bars": int(labels["decision_utc"].nunique()) if len(labels) else 0,
            "sealed": True, "built_utc": str(pd.Timestamp.now(tz="UTC"))}
