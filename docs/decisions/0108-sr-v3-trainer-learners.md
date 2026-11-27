@@ -80,7 +80,9 @@ read.
 12. **Cost of record** (quant H1 on #488): rt_bp per row is the cell's max(W2, ecr ub95) per instrument x session
     x tf, and the swap is the instrument's own of record per month, from the data team's sha-checked tables; a row
     with no cell is refused. **For the quant:** a history row has no account, so a cell charges the WORSE of its
-    brokers (icm, vantage), the conservative reading; one named broker of record is a one-line change.
+    brokers (icm, vantage), the conservative reading. Quant ruling (2) on #488 accepts it: serving charges the
+    account's own broker cell, and every read states "S at the worse-broker cost" (report, report.md and each
+    learner's read, `sr_v3_report.WORSE_BROKER_STATEMENT`).
 
 ## Consequences
 - The first real run needs A4 recorded (#482), X6 merged (#484), the dl-v1 and fs-v1 stores built under the current

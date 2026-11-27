@@ -93,6 +93,11 @@ def _day_boot(d_by_day: np.ndarray, *, seed: int = V.SEED_BOOT, boot: int = 2_00
     return float(d_by_day.mean()), float(np.quantile(draws, 0.05)), float(np.quantile(draws, 0.95))
 
 
+# quant ruling (2) on #488: history charges each cost cell at its worse broker (`sr_v3_train.CostTable`); every read
+# states it. Serving charges the account's own broker cell.
+WORSE_BROKER_STATEMENT = "S at the worse-broker cost"
+
+
 def _require_trial(trial_id: int | None, judged: bool, what: str) -> None:
     if judged and trial_id is None:
         raise ReadRefused(f"refused {what}: a judged unit is read only under a booked registry trial id (quant H3)")
@@ -120,7 +125,7 @@ def learner_read(o: pd.DataFrame, name: str, *, trial_id: int | None, judged: bo
             "keep_share": rd.keep_share, "kept_mean_net": rd.kept_mean, "mean_net": rd.mean_net, "s": rd.s,
             "s_2x_cost": float((net2 * kf).mean() - max(0.0, float(net2.mean()))),
             "split": rd.decomposition.model_dump(), "net_r_per_day": float(per_day.mean()),
-            "n_eff": O.kish_n_eff(o["w"].to_numpy(float))}
+            "n_eff": O.kish_n_eff(o["w"].to_numpy(float)), "cost_statement": WORSE_BROKER_STATEMENT}
 
 
 def paired_d(o: pd.DataFrame, a: str, b: str, *, trial_id: int | None, judged: bool) -> dict[str, float]:
@@ -435,6 +440,7 @@ def unit_report(oof: pd.DataFrame, plan: UnitPlan, col: Collected, v0: FoldModel
     hl = tuple(n for n in ("L-cw", "HB", "G-cw") if n in allowed)
     rep["harness"] = (harness(col, plan, seeds=seeds, max_rows=harness_rows, learners=hl) if with_harness
                       else {"skipped": "builder"})
+    rep["cost_statement"] = WORSE_BROKER_STATEMENT
     rep["not_in_this_report"] = ["Stage L gates (evaluator)", "B2-B6 baselines (5.2, evaluator)",
                                  "arm-fire subset S (no arm candidates in dense rows)", "block dS table (no X block "
                                  "built)", "offset bias, staleness (live)", "£/day at 0.01 lot (needs the lot map)"]
@@ -486,7 +492,9 @@ def report_md(r: Mapping[str, Any]) -> str:
                   "| artifact | sha256 |", "|---|---|"]
         lines += [f"| {k} | {v} |" for k, v in (r.get("artifacts") or {}).items()]
         return "\n".join([*lines, ""])
-    lines += ["Descriptive, never a selector. Stage L gates are the evaluator's read. G-cw is the gradient-boosted "
+    lines += [f"{r.get('cost_statement', WORSE_BROKER_STATEMENT)}: each cell is charged at its worse broker "
+              "(history has no account); serving charges the account's own broker cell.", "",
+              "Descriptive, never a selector. Stage L gates are the evaluator's read. G-cw is the gradient-boosted "
              "baseline every learner must beat out of sample after costs (ADR 0106).", "",
              "| learner | rows | keep share | kept mean net | S | S at 2x cost | net R / day | D/day vs G-cw (90 %) |",
              "|---|---|---|---|---|---|---|---|"]

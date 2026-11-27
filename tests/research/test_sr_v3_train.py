@@ -921,3 +921,13 @@ def test_the_fit_path_is_a_guarded_module_and_its_guard_is_clean() -> None:
     assert O.guard_violations("goldbot.research.sr_v3_train") == []
     assert list(T.SEEDS) == MQ.seed_list(T.MANIFEST_KEY), "the fit path's copy of seed_list's formula"
     assert R.BUILDER == "goldbot.research.sr_v3_report:build_artifact"
+
+
+# ---------------------------------------------------------------------------------------------- ruling 2: broker
+def test_every_read_states_s_at_the_worse_broker_cost(fitted: tuple) -> None:
+    """Quant ruling (2) on #488: history charges a cell's worse broker; every read says so (serving charges the
+    account's own broker cell)."""
+    r = fitted[2].report
+    assert r["cost_statement"] == R.WORSE_BROKER_STATEMENT == "S at the worse-broker cost"
+    assert "S at the worse-broker cost" in R.report_md(r)
+    assert all(e["read"]["cost_statement"] == R.WORSE_BROKER_STATEMENT for e in r["learners"].values())
