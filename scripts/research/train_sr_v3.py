@@ -84,6 +84,10 @@ def phase1(unit: str, a: argparse.Namespace) -> dict[str, Any]:
     if a.stage0_only or s0.status != "fit":
         return {"unit": unit, "status": s0.status, "level": s0.level, "body": s0.body}
     plan = T.plan_from_stage0(s0)
+    extra = [c for c in plan.lcw_columns if c not in V.P30]
+    if extra:                    # quant M1 on #488: a served block column's longer lookback widens the unit's gap
+        from goldbot.research import dense_labels as D
+        plan.extra_lookback_s = max(D.input_lookback(t, extra).total_seconds() for t in plan.tfs)
     col = T.collect(store, plan, seed=T.SEEDS[0])
     save_collected(col, out)
     (out / "plan.json").write_text(json.dumps(plan.__dict__, indent=1, default=str))
@@ -122,10 +126,7 @@ def load_collected(out: Path) -> T.Collected:
 
 
 def _plan(out: Path) -> T.UnitPlan:
-    p = json.loads((out / "plan.json").read_text())
-    return T.UnitPlan(unit=p["unit"], tfs=tuple(p["tfs"]), members=tuple(p["members"]),
-                      lcw_columns=tuple(p["lcw_columns"]), first_oof=int(p["first_oof"]), lam_a=float(p["lam_a"]),
-                      design_effect=float(p["design_effect"]), stage0=json.loads(json.dumps(p["stage0"])))
+    return T.plan_of(json.loads((out / "plan.json").read_text()))
 
 
 def phase2(units: list[str], a: argparse.Namespace) -> dict[int, L.HbArtifact]:

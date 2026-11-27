@@ -106,6 +106,13 @@ H_S: dict[str, int] = {"1m": 3_600, "5m": 4 * 3_600, "15m": 8 * 3_600, "30m": 16
                        "2h": 2 * 86_400, "4h": 5 * 86_400, "1d": 10 * 86_400, "1w": 20 * 86_400}   # = dense_labels
 UNITS: dict[str, tuple[str, ...]] = {"1m": ("1m",), "5m": ("5m",), "15m": ("15m",), "30m": ("30m",), "1h": ("1h",),
                                      "2h": ("2h",), "4h": ("4h",), "1d+1w": ("1d", "1w")}
+# dense_labels.input_lookback(tf, P30) in seconds (ADR 0104 4: each column's declared lookback in decision bars x 7/5,
+# d1_ context in daily bars): the embargo's lookback term (quant M1 on #488). A constant, because the guarded fit path
+# may not import dense_labels; pinned equal by tests/research/test_sr_v3_train.py. atr_ratio_14_100 (810 bars) sets
+# every intraday-to-1w value; intraday tfs take the d1 context's 810 daily bars.
+P30_LOOKBACK_S: dict[str, float] = {"1m": 11_128_320.0, "5m": 11_128_320.0, "15m": 11_128_320.0, "30m": 11_128_320.0,
+                                    "1h": 11_128_320.0, "2h": 11_128_320.0, "4h": 16_329_600.0, "1d": 97_977_600.0,
+                                    "1w": 489_888_000.0}
 GOLD = "XAUUSD"
 FX10: tuple[str, ...] = ("AUDJPY", "AUDUSD", "EURJPY", "EURUSD", "GBPJPY", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF",
                          "USDJPY")
