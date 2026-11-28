@@ -157,7 +157,7 @@ def test_pooled_divisors_are_the_d12_binding_rho_by_bucket_never_the_admission_b
     src = cfg["pooled"]["gold_fx"]["rho_inst_from"]
     rho = D.measured_rho(cfg, src)
     assert D.hold_bucket("1m") == "le60m" and D.hold_bucket("5m") == "1h-4h" and D.hold_bucket("1h") == "gt4h"
-    assert rho["1m"] == pytest.approx(0.39895) and rho["5m"] == pytest.approx(0.26154) and rho["4h"] == pytest.approx(0.51038)   # D-12-xt: max(D-12 0.31666, xt-v1 re-run 0.51038)
+    assert rho["1m"] == pytest.approx(0.39895) and rho["5m"] == pytest.approx(0.26154) and rho["4h"] == pytest.approx(0.31666)   # D-12-xt per tf (#525 ruling 1): D-12 floor binds at 4h
     assert 0.2 not in set(rho.values())
     assert "RHO-measure" not in {r.id for r in D.routes(cfg)}
     learn, _ = D.unit_rows(cfg, "fx10")

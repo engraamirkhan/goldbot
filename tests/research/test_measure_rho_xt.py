@@ -68,7 +68,8 @@ def test_the_file_records_the_xt_v1_freeze_and_its_geometry() -> None:
     out = X.assemble(binding=_binding(), by_source={}, recorded_path="d12.json", recorded_sha="0" * 64,
                      recorded={"rho_x": {"k": 1}}, meta=_meta())
     assert out["exit_freeze_sha"] == D.EXIT_FREEZE_SHA256 and out["geometry"]["freeze_id"] == "xt-v1"
-    assert out["rho_x"] == {"k": 1} and out["binds_with"]["path"] == "d12.json"
+    assert "rho_x" not in out and out["rho_x_from"]["path"] == "d12.json" and out["binds_with"]["path"] == "d12.json"
+    assert out["geometry"]["behaviour_sha"] == D.exit_freeze().behaviour_sha
 
 
 def test_labels_are_the_factory_xt_v1_labels_and_refuse_another_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,70 +157,194 @@ def _meta() -> dict[str, Any]:
             "data": {}}
 
 
-def _d12(tmp_path: Path, le60: dict[str, float]) -> Path:
-    f = tmp_path / "d12.json"
-    f.write_text(json.dumps({"rho_day_le_60m": le60}))
-    return f
+TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
+INST_BY_TF = {"1m": .17, "5m": .16, "15m": .20, "30m": .19, "1h": .21, "2h": .27, "4h": .26, "1d": .38, "1w": .44}
+DAY_BY_TF = {"1m": .06, "5m": .07, "15m": .45, "30m": .27}
+TAU_BY_TF = {"1m": .09, "5m": .087, "15m": .09942, "30m": .1, "1h": .12, "2h": .117, "4h": .243, "1d": .258, "1w": .2}
 
 
-def _produce(tmp_path: Path, rerun_le60: float, d12_le60: float) -> tuple[Path, str, Path]:
-    """A D-12-xt file written by the script's own `assemble` + `write`, from a cells table whose le-60m within-day
-    upper bound is `rerun_le60`, binding with a D-12 file whose le-60m bound is `d12_le60` for every class."""
-    d12 = _d12(tmp_path, dict.fromkeys(CLASSES, d12_le60))
+def _d12_record(le60: float, inst: float = 0.185, day: float = 0.1) -> dict[str, Any]:
+    b = {"rho_u_day": {f"{c}|{bk}": {"max": le60 if bk == "le60m" else day} for c in CLASSES for bk in BANDS},
+         "rho_u_inst_day_mean": {f"{c}|{bk}": {"max": inst} for c in CLASSES if c != "gold" for bk in BANDS},
+         "rho_u_inst_vs_gold_day_mean": {f"{c}|{bk}": {"max": inst} for c in ("metals", "pooled", "gold+fx10")
+                                         for bk in BANDS},
+         "tau_a": {f"{c}|{bk}": {"tau_a": 0.5} for c in CLASSES if c != "gold" for bk in BANDS}}
+    return {"binding": b, "rho_day_le_60m": dict.fromkeys(CLASSES, max(0.05, le60)),
+            "rho_x": {"fold_2010_11|15m|pooled|ret_16": {"day": {"upper95": 0.3}, "inst_agg": {"upper95": 0.2}}}}
+
+
+def _cells(rerun_le60: float) -> pd.DataFrame:
     rows = []
     for c in CLASSES:
-        for band, geom in (("le60m", "1m H=1h T2"), ("1h-4h", "5m H=4h T2"), ("gt4h", "15m H=8h T2")):
-            rows.append({"kind": "out", "class": c, "key": f"out|{geom}|long_net|raw|{c}", "source": "grid",
-                         "geometry": geom, "outcome": "long_net", "orientation": "raw", "band": band, "head": "T2",
-                         "tf": geom.split()[0], "days": 100, "within_day.point": rerun_le60 / 2,
-                         "within_day.hi95": rerun_le60})
-    tab = pd.DataFrame(rows)
-    rr = {"rho_u_day": {f"{c}|{b}": _cell(rerun_le60) for c in CLASSES for b in BANDS},
-          "rho_u_inst_day_mean": {f"{c}|{b}": _cell(0.3) for c in CLASSES if c != "gold" for b in BANDS},
-          "rho_u_inst_vs_gold_day_mean": {}, "tau_a": {f"{c}|{b}": {"tau_a": 0.05} for c in CLASSES if c != "gold"
-                                                       for b in BANDS}}
-    rec = {"rho_u_day": {f"{c}|le60m": {"max": d12_le60} for c in CLASSES}}
-    out = X.assemble(binding=X.bind(rr, rec), by_source={}, recorded_path=str(d12), recorded_sha=_sha(d12),
-                     recorded={"rho_x": {}}, meta=_meta())
-    js, _ = X.write(tmp_path / "out", "rho-xt", out, tab)
-    return js, _sha(js), d12
+        for tf in TFS:
+            geom = X.geometry_name(tf, "T2")
+            r: dict[str, Any] = {"kind": "out", "class": c, "key": f"out|{geom}|long_gross|raw|{c}", "source": "grid",
+                                 "geometry": geom, "outcome": "long_gross", "orientation": "raw",
+                                 "band": X.BAND_OF[geom], "head": "T2", "tf": tf, "days": 100}
+            wd = rerun_le60 if tf == "1m" else DAY_BY_TF.get(tf)
+            if wd is not None:
+                r.update({"within_day.point": wd / 2, "within_day.hi95": wd})
+            if c != "gold":
+                r.update({"cross_agg.point": INST_BY_TF[tf] / 2, "cross_agg.hi95": INST_BY_TF[tf],
+                          "between_inst_sd.point": TAU_BY_TF[tf] / 2, "between_inst_sd.hi95": TAU_BY_TF[tf]})
+            if c in ("metals", "pooled", "gold+fx10"):
+                r.update({"vs_gold_agg.point": INST_BY_TF[tf] / 2, "vs_gold_agg.hi95": INST_BY_TF[tf]})
+            rows.append(r)
+    return pd.DataFrame(rows)
 
 
-@pytest.mark.parametrize(("rerun", "d12"), [(0.12, 0.08), (0.07, 0.15)])
-def test_a_produced_file_passes_every_gate_read_entry_point(tmp_path: Path, rerun: float, d12: float) -> None:
-    js, sha, _ = _produce(tmp_path, rerun, d12)
-    d = json.loads(js.read_text())
-    assert d["exit_freeze_sha"] == D.EXIT_FREEZE_SHA256
-    assert d["rho_day_le_60m"] == dict.fromkeys(CLASSES, max(rerun, d12))
-    check_rho_measurement(str(js), max(rerun, d12), sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
-    with pytest.raises(ValueError, match="below the measured binding"):
-        check_rho_measurement(str(js), min(rerun, d12), sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
-    cfg = {"tfs": ["1m", "5m", "1h"],
-           "units": {"fx10": {"learn": [1000] * 3, "judge": [500] * 3,
-                              "card_pooled": {"k": 10, "rho_inst": 0.5,
-                                              "rho_inst_from": {"file": str(js), "key": "fx10", "stat": "max"}}}},
-           "pooled": {"gold_fx": {"rho_inst_from": {"file": str(js), "key": "gold+fx10", "stat": "max"}}}}
-    power = PowerFirstSettings.model_validate({"rho_day_le_60m": max(0.05, rerun, d12), "rho_day_measurement": str(js),
-                                               "rho_day_measurement_sha256": sha})
-    DS.require_power_read_rho(cfg, power)
-    assert DS.pre_xt_v1_rho(cfg) == []
-    ri = S.rho_inputs(js, body="pooled", members=["XAUUSD", "XAGUSD", "EURUSD"], tf="1m",
+def _produce(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rerun_le60: float = 0.07,
+             d12_le60: float = 0.15) -> tuple[Path, str]:
+    """A D-12-xt file written by the script's own `finish` + `write` from a synthetic cells table, binding with a D-12
+    file at the repo-relative path d12.json under a repo root patched to `tmp_path`."""
+    import goldbot.config as C
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    C._rho_day_by_tf.cache_clear()
+    d12 = tmp_path / "d12.json"
+    rec = _d12_record(d12_le60)
+    d12.write_text(json.dumps(rec))
+    out = X.finish(_cells(rerun_le60), recorded=rec, recorded_path="d12.json", recorded_sha=_sha(d12), meta=_meta())
+    js, _ = X.write(tmp_path / "out", "rho-xt", out, _cells(rerun_le60))
+    return js, _sha(js)
+
+
+def _cfg(js: Path) -> dict[str, Any]:
+    return {"tfs": ["1m", "5m", "15m", "1h", "4h", "1w"],
+            "units": {"fx10": {"learn": [1000] * 6, "judge": [500] * 6,
+                               "card_pooled": {"k": 10, "rho_inst": 0.5,
+                                               "rho_inst_from": {"file": str(js), "key": "fx10", "stat": "max"}}}},
+            "pooled": {"gold_fx": {"rho_inst_from": {"file": str(js), "key": "gold+fx10", "stat": "max",
+                                                     "sha256": _sha(js)}}}}
+
+
+def test_binding_by_tf_is_the_d12_floor_and_the_cumulative_rerun_max(tmp_path: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant ruling 1 on #525: rho_u,inst(tf) = max(D-12 bucket binding, cumulative max of the re-run over holds <=
+    tf); rho_u,day(tf) = max(D-12 bucket, re-run at tf), undefined at H >= 1 d; tau_a(tf) = re-run at tf only."""
+    js, _ = _produce(tmp_path, monkeypatch)
+    bt = json.loads(js.read_text())["binding_by_tf"]
+    inst = {tf: bt["rho_u_inst_day_mean"][f"pooled|{tf}"]["max"] for tf in TFS}
+    assert inst == {"1m": .185, "5m": .185, "15m": .2, "30m": .2, "1h": .21, "2h": .27, "4h": .27, "1d": .38, "1w": .44}
+    assert bt["rho_u_inst_vs_gold_day_mean"]["pooled|4h"]["max"] == .27
+    day = {tf: bt["rho_u_day"][f"gold|{tf}"]["max"] for tf in TFS}
+    assert day["1m"] == .15 and day["5m"] == .1 and day["15m"] == .45 and day["30m"] == .27
+    assert all(day[tf] is None and bt["rho_u_day"][f"gold|{tf}"]["design_effect_1"] for tf in ("1h", "4h", "1d", "1w"))
+    assert bt["tau_a"]["pooled|15m"]["tau_a"] == .09942 and bt["tau_a"]["pooled|4h"]["tau_a"] == .243
+
+
+def test_rho_inputs_and_measured_rho_read_the_per_tf_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    js, _ = _produce(tmp_path, monkeypatch)
+    ri = S.rho_inputs(js, body="pooled", members=["XAUUSD", "XAGUSD", "EURUSD"], tf="15m",
                       freeze_sha=D.EXIT_FREEZE_SHA256)
-    assert math.isclose(ri.rho_u_inst, 0.3) and math.isclose(ri.lambda_a, S.RESIDUAL_VAR / 0.05 ** 2)
+    assert math.isclose(ri.lambda_a, S.RESIDUAL_VAR / 0.09942 ** 2) and math.isclose(ri.rho_u_inst, 0.2)
+    assert ri.rho_u_day == 0.45 and ri.rho_x_day == {"ret_16": 0.3}         # rho_x followed through rho_x_from
+    assert S.rho_inputs(js, body="pooled", members=["XAUUSD", "XAGUSD"], tf="1d",
+                        freeze_sha=D.EXIT_FREEZE_SHA256).rho_u_day == S.RHO_DAY_PRIOR     # design effect 1: the prior
+    cfg = _cfg(js)
+    rho = DS.measured_rho(cfg, cfg["pooled"]["gold_fx"]["rho_inst_from"], gate_read=True)
+    assert rho == {"1m": .185, "5m": .185, "15m": .2, "1h": .21, "4h": .27, "1w": .44}
 
 
-def test_binds_with_must_match_its_sha(tmp_path: Path) -> None:
-    js, sha, d12 = _produce(tmp_path, 0.07, 0.15)
-    check_rho_measurement(str(js), 0.15, sha)
-    d12.write_text(json.dumps({"rho_day_le_60m": dict.fromkeys(CLASSES, 0.01)}))       # the D-12 file moved
+def test_the_shipped_bodies_read_the_committed_per_tf_binding() -> None:
+    """Quant F1 on #525, on the committed file and the shipped sufficiency config."""
+    import yaml
+
+    from goldbot.config import ROOT as CROOT
+    ri = S.rho_inputs(XT_JSON, body="pooled", members=["XAUUSD", "XAGUSD", "EURUSD"], tf="15m",
+                      freeze_sha=D.EXIT_FREEZE_SHA256)
+    assert math.isclose(ri.lambda_a, S.RESIDUAL_VAR / 0.09942 ** 2, rel_tol=1e-9)
+    cfg = yaml.safe_load((CROOT / "config" / "data" / "sufficiency.yaml").read_text())
+    rho = DS.measured_rho(cfg, cfg["pooled"]["gold_fx"]["rho_inst_from"], gate_read=True)
+    assert rho["15m"] == 0.31666
+
+
+def test_rho_day_for_reads_the_class_binding_at_the_tf_from_the_pinned_xt_file() -> None:
+    """Quant F2 on #525: max(0.25, the binding rho_u,day of the class at that tf); gold at 15m (H = 8 h) >= 0.44691."""
+    from goldbot.config import load_settings
+    pf = load_settings().research.power_first
+    assert pf.rho_xt_measurement == f"docs/research/{X.STEM}.json"
+    assert pf.rho_day_for(8 / 24, "gold") >= 0.44691
+    assert pf.rho_day_for(8 / 24) == 0.25 and pf.rho_day_for(10.0, "gold") == 0.25     # no class / H >= 1 d: prior
+    assert pf.rho_day_for(60 / 1440, "fx10") >= 0.25                                    # ruling 2: le60m stays 0.25
+    with pytest.raises(ValueError, match="unknown rho class"):
+        pf.rho_day_for(8 / 24, "crypto")
+    with pytest.raises(ValueError, match="together"):
+        PowerFirstSettings.model_validate({"rho_xt_measurement": pf.rho_xt_measurement})
+    with pytest.raises(ValueError, match="differs"):
+        PowerFirstSettings.model_validate({"rho_xt_measurement": pf.rho_xt_measurement,
+                                           "rho_xt_measurement_sha256": "0" * 64})
+
+
+def test_a_pinned_sha_and_the_cells_file_guard_every_gate_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant F3 on #525: rho_inst_from pins the sha256; a gate read recomputes the per-tf binding from the cells."""
+    js, _ = _produce(tmp_path, monkeypatch)
+    cfg = _cfg(js)
+    DS.require_power_read_rho(cfg, PowerFirstSettings())
+    bad = {**cfg["pooled"]["gold_fx"]["rho_inst_from"], "sha256": "0" * 64}
+    with pytest.raises(ValueError, match="sha256 pinned"):
+        DS.measured_rho(cfg, bad)
+    d = json.loads(js.read_text())
+    d["binding_by_tf"]["rho_u_inst_day_mean"]["gold+fx10|15m"]["max"] = 0.1          # edited below the cells
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(json.dumps(d))
+    src = {"file": str(tampered), "key": "gold+fx10", "stat": "max"}
+    assert DS.measured_rho(cfg, src)["15m"] == 0.1                                   # fit-only reads the record
+    with pytest.raises(ValueError, match="recomputed"):
+        DS.measured_rho(cfg, src, gate_read=True)
+    del d["binding_by_tf"]
+    tampered.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match="binding_by_tf"):
+        DS.measured_rho(cfg, src, gate_read=True)
+
+
+def test_binds_with_is_required_repo_relative_complete_and_sha_checked(tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant F4 on #525."""
+    js, sha = _produce(tmp_path, monkeypatch)
+    check_rho_measurement(str(js), 0.15, sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
+    d = json.loads(js.read_text())
+
+    def made(name: str, dd: dict[str, Any]) -> tuple[str, str]:
+        f = tmp_path / name
+        f.write_text(json.dumps(dd))
+        return str(f), _sha(f)
+    p, s = made("v3.json", {k: v for k, v in d.items() if k != "binds_with"})
+    with pytest.raises(ValueError, match="must name binds_with"):
+        check_rho_measurement(p, 0.15, s)
+    pre = {k: v for k, v in d.items() if k not in ("binds_with", "exit_freeze_sha")} | {"schema": "rho_day_measurement/v3"}
+    p, s = made("v3b.json", pre)
+    with pytest.raises(ValueError, match="must name binds_with"):
+        check_rho_measurement(p, 0.15, s)
+    prior = tmp_path / "nogold.json"
+    rec = _d12_record(0.15)
+    del rec["rho_day_le_60m"]["gold"]
+    prior.write_text(json.dumps(rec))
+    p, s = made("nogold-xt.json", d | {"binds_with": {"path": "nogold.json", "sha256": _sha(prior)}})
+    with pytest.raises(ValueError, match="'gold' has no finite bound"):
+        check_rho_measurement(p, 0.15, s)
+    p, s = made("abs.json", d | {"binds_with": {"path": str(tmp_path / "d12.json"), "sha256": _sha(tmp_path / "d12.json")}})
+    with pytest.raises(ValueError, match="repo-relative"):
+        check_rho_measurement(p, 0.15, s)
+    (tmp_path / "d12.json").write_text(json.dumps(_d12_record(0.01)))                 # the D-12 file moved
     with pytest.raises(ValueError, match="binds_with"):
         check_rho_measurement(str(js), 0.15, sha)
 
 
-def test_the_written_cells_file_holds_only_aggregate_columns(tmp_path: Path) -> None:
-    js, _, _ = _produce(tmp_path, 0.1, 0.1)
+@pytest.mark.parametrize(("rerun", "d12"), [(0.12, 0.08), (0.07, 0.15)])
+def test_the_le60m_bound_is_max_of_d12_and_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rerun: float,
+                                                 d12: float) -> None:
+    js, sha = _produce(tmp_path, monkeypatch, rerun, d12)
+    d = json.loads(js.read_text())
+    assert d["exit_freeze_sha"] == D.EXIT_FREEZE_SHA256 and "rho_x" not in d
+    assert d["rho_day_le_60m"] == dict.fromkeys(CLASSES, max(rerun, d12))
+    check_rho_measurement(str(js), max(rerun, d12), sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
+    with pytest.raises(ValueError, match="below the measured binding"):
+        check_rho_measurement(str(js), min(rerun, d12), sha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
+
+
+def test_the_written_cells_file_holds_only_aggregate_columns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    js, _ = _produce(tmp_path, monkeypatch)
     cells = Path(json.loads(js.read_text())["cells_file"]["path"])
-    cells = cells if cells.is_absolute() else ROOT / cells
     with gzip.open(cells, "rt") as fh:
         header = fh.readline().strip().split(",")
     from tests.test_long_history import RHO_CELL_ID_COLUMNS, RHO_CELL_STATS
@@ -233,26 +358,31 @@ XT_JSON = ROOT / "docs" / "research" / f"{X.STEM}.json"
 
 def test_the_committed_xt_file_is_from_the_committed_script_and_passes_the_gate_read() -> None:
     """CI tie (as D-12's): the committed D-12-xt JSON records the committed script's sha256, its cells file's sha256,
-    the D-12 file it binds with, and the xt-v1 freeze; the shipped sufficiency config reads it for its pooled bodies
-    and the one gate-read entry point accepts it."""
+    the D-12 file it binds with, the xt-v1 freeze and its behaviour sha; it stays under the 800 kB cap; the shipped
+    sufficiency config reads it for its pooled bodies and the one gate-read entry point accepts it."""
     import yaml
 
     from goldbot.config import ROOT as CROOT
     d = json.loads(XT_JSON.read_text())
+    assert XT_JSON.stat().st_size < 800_000
     assert d["exit_freeze_sha"] == D.EXIT_FREEZE_SHA256
+    assert d["geometry"]["behaviour_sha"] == D.exit_freeze().behaviour_sha                    # quant F5 on #525
     assert d["script"]["path"] == "scripts/research/measure_rho_xt.py"
-    assert d["script"]["sha256"] == _sha(ROOT / d["script"]["path"]), "measure_rho_xt.py changed: re-run it (D-12-xt)"
+    assert d["script"]["sha256"] == _sha(ROOT / d["script"]["path"]), "measure_rho_xt.py changed: --rebind it (D-12-xt)"
     assert d["script"]["uses"]["scripts/research/measure_rho.py"] == _sha(ROOT / "scripts/research/measure_rho.py")
     assert d["cells_file"]["sha256"] == _sha(ROOT / d["cells_file"]["path"])
     assert d["binds_with"]["sha256"] == _sha(ROOT / d["binds_with"]["path"])
+    assert d["rho_x_from"]["sha256"] == _sha(ROOT / d["rho_x_from"]["path"]) and "rho_x" not in d
     assert d["bootstrap"]["B"] == 2000
     bound = max(d["rho_day_le_60m"].values())
-    check_rho_measurement(f"docs/research/{X.STEM}.json", bound, _sha(XT_JSON),
-                          gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
+    check_rho_measurement(f"docs/research/{X.STEM}.json", bound, _sha(XT_JSON), gate_read=True,
+                          freeze_sha=D.EXIT_FREEZE_SHA256)
     cfg = yaml.safe_load((CROOT / "config" / "data" / "sufficiency.yaml").read_text())
     assert DS.pre_xt_v1_rho(cfg) == []
+    assert all(src.get("sha256") == _sha(XT_JSON) for _, src in DS._rho_sources(cfg))
     DS.require_power_read_rho(cfg, PowerFirstSettings())
-    for b in d["binding"]["rho_u_day"].values():                 # max(D-12 recorded, re-run), never below either
-        assert b["max"] >= max(x for x in (b["rerun"], b["d12_recorded"]) if x is not None) - 1e-5 or b["max"] == 1.0
-    for b in d["binding"]["tau_a"].values():
-        assert b["tau_a"] is None or b["tau_a"] >= 0.01
+    bt = d["binding_by_tf"]["rho_u_inst_day_mean"]                                          # the ruling's figures
+    assert [bt[f"gold+fx10|{tf}"]["max"] for tf in ("15m", "30m", "1h", "2h", "4h", "1d", "1w")] == \
+        [0.31666] * 5 + [pytest.approx(0.410, abs=1e-3), pytest.approx(0.510, abs=1e-3)]
+    assert [bt[f"pooled|{tf}"]["max"] for tf in ("15m", "30m", "1h", "2h", "4h", "1d", "1w")] == pytest.approx(
+        [0.198, 0.203, 0.211, 0.269, 0.269, 0.380, 0.443], abs=1e-3)

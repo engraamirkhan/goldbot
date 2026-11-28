@@ -716,31 +716,62 @@ def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
 
 
 def _with_binds_with(d: dict[str, object], recomputed: dict[str, float]) -> dict[str, float]:
-    """D-12-xt (quant ruling on #514): a re-measurement that names the measurement it binds with (`binds_with`: the
-    D-12 file's repo-relative path and sha256) binds rho_u,day at max(that file's recorded `rho_day_le_60m`, its own
-    cells) per class. The named file must exist with that sha256 (ValueError otherwise); without `binds_with` the
-    cells bound is returned unchanged."""
+    """D-12-xt (quant ruling on #514; F4 of the quant review of #525): a re-measurement (schema v3 or later, or any
+    file recording `exit_freeze_sha`) MUST name the measurement it binds with (`binds_with`: a repo-relative path and
+    its sha256), and binds rho_u,day at max(that file's recorded `rho_day_le_60m`, its own cells) per class. The named
+    file must exist with that sha256 and carry a finite bound for every class of RHO_CLASSES (ValueError otherwise).
+    A pre-xt file (schema v2, no `exit_freeze_sha`) without `binds_with` gets the cells bound unchanged."""
     import json
     import math
 
     bw = d.get("binds_with")
+    schema = str(d.get("schema", ""))
+    try:
+        version = int(schema.removeprefix(RHO_SCHEMA)) if schema.startswith(RHO_SCHEMA) else 0
+    except ValueError:
+        version = 0
     if not bw:
+        if version >= 3 or d.get("exit_freeze_sha") is not None:
+            raise ValueError("rho_day_measurement: a re-measurement (schema v3+ or exit_freeze_sha) must name "
+                             "binds_with (the D-12 file it binds at max with, D-12-xt)")
         return recomputed
     if not isinstance(bw, dict) or not bw.get("path") or not bw.get("sha256"):
         raise ValueError(f"rho_day_measurement binds_with {bw!r} must name a path and its sha256")
-    prior = Path(str(bw["path"]))
-    prior = prior if prior.is_absolute() else ROOT / prior
+    rel = Path(str(bw["path"]))
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"rho_day_measurement binds_with {bw['path']!r}: a repo-relative path only")
+    prior = ROOT / rel
     if not prior.is_file() or _sha256(prior) != bw["sha256"]:
         raise ValueError(f"rho_day_measurement binds_with {bw.get('path')!r} is missing or differs from its sha256")
     rec = json.loads(prior.read_text()).get("rho_day_le_60m") or {}
     out = dict(recomputed)
-    for c, v in rec.items():
+    for c in RHO_CLASSES:
         try:
-            x = float(v)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(x):
-            out[c] = max(out.get(c, -math.inf), x)
+            x = float(rec[c])
+        except (KeyError, TypeError, ValueError):
+            x = math.nan
+        if not math.isfinite(x):
+            raise ValueError(f"rho_day_measurement binds_with {bw['path']!r}: class {c!r} has no finite bound")
+        out[c] = max(out.get(c, -math.inf), x)
+    return out
+
+
+@lru_cache(maxsize=4)
+def _rho_day_by_tf(path: str, sha256: str) -> dict[str, float | None]:
+    """`binding_by_tf.rho_u_day` maxima (`<class>|<tf>` -> value, None for H >= 1 d) of a pinned D-12-xt file, and
+    `h:<tf>` -> its hold seconds; checked against its pinned sha256."""
+    import json
+
+    f = ROOT / path
+    if not f.is_file() or _sha256(f) != sha256:
+        raise ValueError(f"rho_xt_measurement {path!r} is missing or differs from rho_xt_measurement_sha256")
+    d = json.loads(f.read_text())
+    bt = (d.get("binding_by_tf") or {}).get("rho_u_day")
+    if not bt or not d.get("exit_freeze_sha"):
+        raise ValueError(f"rho_xt_measurement {path!r} has no binding_by_tf / exit_freeze_sha (D-12-xt file needed)")
+    out: dict[str, float | None] = {k: (None if v.get("max") is None else float(v["max"])) for k, v in bt.items()}
+    for tf, h in ((d.get("geometry") or {}).get("h_by_tf_s") or {}).items():
+        out[f"h:{tf}"] = float(h)
     return out
 
 
@@ -860,6 +891,10 @@ class PowerFirstSettings(_Section):
     rho_day_measurement: str | None = None
     # the sha256 of that file, pinned here: the file cannot change under the setting (code review of #466)
     rho_day_measurement_sha256: str | None = None
+    # D-12-xt (quant F2 on #525): the committed xt-v1 rho file (repo-relative) and its sha256; rho_day_for(hold, class)
+    # reads its per-tf rho_u,day binding (never below rho_day). Both null = the prior alone
+    rho_xt_measurement: str | None = None
+    rho_xt_measurement_sha256: str | None = None
     rho_instrument: float = Field(0.5, ge=0.5, le=1)
     rho_instrument_metals: float = Field(0.7, ge=0.7, le=1)
     sims: int = Field(20_000, ge=2_000)                        # joint-power Monte Carlo draws
@@ -879,9 +914,32 @@ class PowerFirstSettings(_Section):
             check_rho_measurement(self.rho_day_measurement, self.rho_day_le_60m, self.rho_day_measurement_sha256)
         return self
 
-    def rho_day_for(self, hold_days: float) -> float:
-        """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value."""
-        return self.rho_day_le_60m if hold_days * 1440.0 <= 60.0 + 1e-9 else self.rho_day
+    @model_validator(mode="after")
+    def _rho_xt_pinned(self) -> PowerFirstSettings:
+        if (self.rho_xt_measurement is None) != (self.rho_xt_measurement_sha256 is None):
+            raise ValueError("rho_xt_measurement and rho_xt_measurement_sha256 are set together or not at all")
+        if self.rho_xt_measurement is not None and self.rho_xt_measurement_sha256 is not None:
+            _rho_day_by_tf(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
+        return self
+
+    def rho_day_for(self, hold_days: float, rho_class: str | None = None) -> float:
+        """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value.
+        With `rho_class` (gold, metals, fx10, pooled, gold+fx10) and the pinned D-12-xt file (quant F2 on #525):
+        max(the prior rule above (0.25 shipped), that file's binding rho_u,day of the class at the tf whose H is the hold; a hold that is no tf's H
+        takes the largest binding over the tfs with H <= the hold). None at H >= 1 d (design effect 1) adds nothing.
+        Unknown class: ValueError."""
+        base = self.rho_day_le_60m if hold_days * 1440.0 <= 60.0 + 1e-9 else self.rho_day
+        if rho_class is None or self.rho_xt_measurement is None or self.rho_xt_measurement_sha256 is None:
+            return base
+        if rho_class not in RHO_CLASSES:
+            raise ValueError(f"rho_day_for: unknown rho class {rho_class!r} (one of {RHO_CLASSES})")
+        by = _rho_day_by_tf(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
+        hold_s = hold_days * 86_400.0
+        tfs = [k[2:] for k, h in by.items() if k.startswith("h:") and h is not None]
+        exact = [tf for tf in tfs if abs(float(by[f"h:{tf}"] or 0) - hold_s) < 1.0]
+        pick = exact or [tf for tf in tfs if float(by[f"h:{tf}"] or 0) <= hold_s + 1.0]
+        vals = [v for tf in pick if (v := by.get(f"{rho_class}|{tf}")) is not None]
+        return max([base, *vals])
 
     def sd_r(self, timeframe: str) -> float:
         """sd_tf = max(sd_r_floor, the demo-measured sd); a timeframe not in the table is refused."""

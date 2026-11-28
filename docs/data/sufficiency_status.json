@@ -670,11 +670,11 @@
    "cell": "fx10/15m",
    "verdict": "SHORT",
    "projected": "SUFFICIENT",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 13,
+   "max_inputs": 19,
    "gaps": [
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -717,12 +717,12 @@
   {
    "cell": "fx10/30m",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": 3833,
-   "n_eff_judge": 3681,
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 5685,
+   "n_eff_judge": 5460,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 8,
+   "max_inputs": 13,
    "gaps": [
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -747,14 +747,6 @@
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
-    },
-    {
-     "gap": "learn n_eff 3,833 < 4,300 for a 10-input block (max 8 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 7,666) and the per-cell input cap to the card",
-     "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
-     "blocks": true,
-     "item": "POOL"
     }
    ],
    "requirement": {
@@ -773,12 +765,12 @@
   {
    "cell": "fx10/1h",
    "verdict": "SHORT",
-   "projected": "SHORT",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "projected": "SUFFICIENT",
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 6,
+   "max_inputs": 10,
    "gaps": [
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -803,14 +795,6 @@
      "due": "2026-12-16",
      "blocks": true,
      "item": "D-5fx"
-    },
-    {
-     "gap": "learn n_eff 2,958 < 4,300 for a 10-input block (max 6 inputs)",
-     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 5,916) and the per-cell input cap to the card",
-     "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-16",
-     "blocks": true,
-     "item": "POOL"
     }
    ],
    "requirement": {
@@ -829,12 +813,12 @@
   {
    "cell": "fx10/2h",
    "verdict": "SHORT",
-   "projected": "INFEASIBLE",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "projected": "SHORT",
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 3,
+   "max_inputs": 5,
    "gaps": [
     {
      "gap": "2h has no bar rule: config.TF_SECONDS lacks it, resample_bars refuses it, so no 2h feature or label row can be built (the nightly snapshot's 2h quota can only error)",
@@ -869,12 +853,12 @@
      "item": "D-5fx"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 2,958 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (3) or no model at this tf (rule-only)",
+     "gap": "learn n_eff 2,194 < 4,300 for a 10-input block (max 5 inputs)",
+     "plan": "deliver the pooled cross-class set at this tf (card 2.2 pooling, rho_inst 0.5; bound 4,388) and the per-cell input cap to the card",
      "owner": "data-engineer + ml-researcher",
-     "due": "2026-12-11",
+     "due": "2026-12-16",
      "blocks": true,
-     "item": "INFEASIBLE"
+     "item": "POOL"
     }
    ],
    "requirement": {
@@ -894,11 +878,11 @@
    "cell": "fx10/4h",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 4300,
    "need_judge": 1109,
-   "max_inputs": 1,
+   "max_inputs": 2,
    "gaps": [
     {
      "gap": "no side-aware r3 labels, synthetic ask, ub95 cost per class",
@@ -925,15 +909,15 @@
      "item": "D-5fx"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 1,182 at rho_inst 0.5)",
-     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (1) or no model at this tf (rule-only)",
+     "gap": "no pooling reaches 4,300 (bound 1,754 at rho_inst 0.5)",
+     "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (2) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
      "blocks": true,
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 568 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 843 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -958,8 +942,8 @@
    "cell": "fx10/1d",
    "verdict": "SHORT",
    "projected": "INFEASIBLE",
-   "n_eff_learn": 295,
-   "n_eff_judge": 283,
+   "n_eff_learn": 365,
+   "n_eff_judge": 351,
    "need_train": 4300,
    "need_judge": 1109,
    "max_inputs": 0,
@@ -989,7 +973,7 @@
      "item": "D-5fx"
     },
     {
-     "gap": "no pooling reaches 4,300 (bound 590 at rho_inst 0.5)",
+     "gap": "no pooling reaches 4,300 (bound 730 at rho_inst 0.5)",
      "plan": "data remedies first: more independent instruments (D-13), learn extended to 2003-09 if D-1 grades it, measured rho_day/rho_inst (D-12) may raise the bound; meanwhile cap inputs at max_inputs (0) or no model at this tf (rule-only)",
      "owner": "data-engineer + ml-researcher",
      "due": "2026-12-11",
@@ -997,7 +981,7 @@
      "item": "INFEASIBLE"
     },
     {
-     "gap": "judge n_eff 283 < 1,109 at keep 0.33",
+     "gap": "judge n_eff 351 < 1,109 at keep 0.33",
      "plan": "judge at a lower label-blind keep share (A22 row) or pooled; the 2003-09 test_old years once D-1 grades them; more independent instruments (D-13)",
      "owner": "quant-reviewer + data-engineer",
      "due": "2026-12-11",
@@ -2753,7 +2737,7 @@
    "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "zoo-v2",
@@ -2774,7 +2758,7 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "zoo-v2",
@@ -2795,7 +2779,7 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
@@ -2814,7 +2798,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 821,
+   "residual_learn": 651,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -2834,8 +2818,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3122,
-   "residual_judge": 197,
+   "residual_learn": 3050,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
@@ -2856,7 +2840,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 3178,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 2
   },
   {
@@ -2921,8 +2905,8 @@
   {
    "consumer": "zoo-v2",
    "cell": "fx10/15m",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 4300,
    "need_judge": 1109,
    "short_learn": 0,
@@ -2935,54 +2919,54 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 29
+   "max_inputs_after": 35
   },
   {
    "consumer": "zoo-v2",
    "cell": "fx10/30m",
-   "n_eff_learn": 3833,
-   "n_eff_judge": 3681,
+   "n_eff_learn": 5685,
+   "n_eff_judge": 5460,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 467,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 19
+   "max_inputs_after": 23
   },
   {
    "consumer": "zoo-v2",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1342,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 14
+   "max_inputs_after": 18
   },
   {
    "consumer": "zoo-v2",
    "cell": "fx10/2h",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 2821,
+   "short_learn": 2106,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -2990,46 +2974,46 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1107,
+   "residual_learn": 392,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 9
   },
   {
    "consumer": "zoo-v2",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3709,
-   "short_judge": 541,
+   "short_learn": 3423,
+   "short_judge": 266,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3024,
+   "residual_learn": 2738,
    "residual_judge": 0,
-   "max_inputs_after": 2
+   "max_inputs_after": 3
   },
   {
    "consumer": "zoo-v2",
    "cell": "fx10/1d",
-   "n_eff_learn": 295,
-   "n_eff_judge": 283,
+   "n_eff_learn": 365,
+   "n_eff_judge": 351,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 4005,
-   "short_judge": 826,
+   "short_learn": 3935,
+   "short_judge": 758,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3663,
-   "residual_judge": 492,
+   "residual_learn": 3593,
+   "residual_judge": 424,
    "max_inputs_after": 1
   },
   {
@@ -3434,8 +3418,8 @@
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4523,
-   "n_eff_judge": 2398,
+   "n_eff_learn": 5188,
+   "n_eff_judge": 2750,
    "need_train": 4300,
    "need_judge": 1109,
    "short_learn": 0,
@@ -3448,16 +3432,16 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3017,
-   "n_eff_judge": 1587,
+   "n_eff_learn": 3461,
+   "n_eff_judge": 1820,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 1283,
+   "short_learn": 839,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3467,16 +3451,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 2012,
+   "short_learn": 1675,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3486,55 +3470,55 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1155,
-   "n_eff_judge": 611,
+   "n_eff_learn": 1325,
+   "n_eff_judge": 701,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3145,
-   "short_judge": 498,
+   "short_learn": 2975,
+   "short_judge": 408,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1431,
+   "residual_learn": 1261,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 4300,
    "need_judge": 1109,
-   "short_learn": 3807,
-   "short_judge": 865,
+   "short_learn": 3735,
+   "short_judge": 828,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3122,
-   "residual_judge": 197,
+   "residual_learn": 3050,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "zoo-v2",
    "cell": "pooled_gold_fx/1d",
    "n_eff_learn": 150,
-   "n_eff_judge": 121,
+   "n_eff_judge": 130,
    "need_train": 4300,
    "need_judge": 1109,
    "short_learn": 4150,
-   "short_judge": 988,
+   "short_judge": 979,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -3542,7 +3526,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 3808,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 1
   },
   {
@@ -3625,7 +3609,7 @@
    "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "sr-v3",
@@ -3646,7 +3630,7 @@
    "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "sr-v3",
@@ -3663,11 +3647,11 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
@@ -3706,8 +3690,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1402,
-   "residual_judge": 197,
+   "residual_learn": 1330,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
@@ -3728,7 +3712,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 1458,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 2
   },
   {
@@ -3793,8 +3777,8 @@
   {
    "consumer": "sr-v3",
    "cell": "fx10/15m",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 0,
@@ -3807,13 +3791,13 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 29
+   "max_inputs_after": 35
   },
   {
    "consumer": "sr-v3",
    "cell": "fx10/30m",
-   "n_eff_learn": 3833,
-   "n_eff_judge": 3681,
+   "n_eff_learn": 5685,
+   "n_eff_judge": 5460,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 0,
@@ -3826,13 +3810,13 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 19
+   "max_inputs_after": 23
   },
   {
    "consumer": "sr-v3",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 0,
@@ -3845,16 +3829,16 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 14
+   "max_inputs_after": 18
   },
   {
    "consumer": "sr-v3",
    "cell": "fx10/2h",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1101,
+   "short_learn": 386,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -3864,44 +3848,44 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 9
   },
   {
    "consumer": "sr-v3",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1989,
-   "short_judge": 541,
+   "short_learn": 1703,
+   "short_judge": 266,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1304,
+   "residual_learn": 1018,
    "residual_judge": 0,
-   "max_inputs_after": 2
+   "max_inputs_after": 3
   },
   {
    "consumer": "sr-v3",
    "cell": "fx10/1d",
-   "n_eff_learn": 295,
-   "n_eff_judge": 283,
+   "n_eff_learn": 365,
+   "n_eff_judge": 351,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2285,
-   "short_judge": 826,
+   "short_learn": 2215,
+   "short_judge": 758,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1943,
-   "residual_judge": 492,
+   "residual_learn": 1873,
+   "residual_judge": 424,
    "max_inputs_after": 1
   },
   {
@@ -4306,8 +4290,8 @@
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4523,
-   "n_eff_judge": 2398,
+   "n_eff_learn": 5188,
+   "n_eff_judge": 2750,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 0,
@@ -4320,13 +4304,13 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3017,
-   "n_eff_judge": 1587,
+   "n_eff_learn": 3461,
+   "n_eff_judge": 1820,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 0,
@@ -4339,36 +4323,36 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 292,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1155,
-   "n_eff_judge": 611,
+   "n_eff_learn": 1325,
+   "n_eff_judge": 701,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 1425,
-   "short_judge": 498,
+   "short_learn": 1255,
+   "short_judge": 408,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -4377,36 +4361,36 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 2580,
    "need_judge": 1109,
-   "short_learn": 2087,
-   "short_judge": 865,
+   "short_learn": 2015,
+   "short_judge": 828,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1402,
-   "residual_judge": 197,
+   "residual_learn": 1330,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "sr-v3",
    "cell": "pooled_gold_fx/1d",
    "n_eff_learn": 150,
-   "n_eff_judge": 121,
+   "n_eff_judge": 130,
    "need_train": 2580,
    "need_judge": 1109,
    "short_learn": 2430,
-   "short_judge": 988,
+   "short_judge": 979,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -4414,7 +4398,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 2088,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 1
   },
   {
@@ -4493,11 +4477,11 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": "A2-pool",
+   "closed_due": "2026-12-04",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "x6",
@@ -4518,7 +4502,7 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "x6",
@@ -4539,7 +4523,7 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
@@ -4558,7 +4542,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1681,
+   "residual_learn": 1511,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -4578,8 +4562,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3982,
-   "residual_judge": 197,
+   "residual_learn": 3910,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
@@ -4600,7 +4584,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 4038,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 2
   },
   {
@@ -4665,8 +4649,8 @@
   {
    "consumer": "x6",
    "cell": "fx10/15m",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 5160,
    "need_judge": 1109,
    "short_learn": 0,
@@ -4679,35 +4663,35 @@
    "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 29
+   "max_inputs_after": 35
   },
   {
    "consumer": "x6",
    "cell": "fx10/30m",
-   "n_eff_learn": 3833,
-   "n_eff_judge": 3681,
+   "n_eff_learn": 5685,
+   "n_eff_judge": 5460,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 1327,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 19
+   "max_inputs_after": 23
   },
   {
    "consumer": "x6",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2202,
+   "short_learn": 773,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -4717,16 +4701,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 14
+   "max_inputs_after": 18
   },
   {
    "consumer": "x6",
    "cell": "fx10/2h",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 3681,
+   "short_learn": 2966,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -4734,46 +4718,46 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 1967,
+   "residual_learn": 1252,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 9
   },
   {
    "consumer": "x6",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4569,
-   "short_judge": 541,
+   "short_learn": 4283,
+   "short_judge": 266,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3884,
+   "residual_learn": 3598,
    "residual_judge": 0,
-   "max_inputs_after": 2
+   "max_inputs_after": 3
   },
   {
    "consumer": "x6",
    "cell": "fx10/1d",
-   "n_eff_learn": 295,
-   "n_eff_judge": 283,
+   "n_eff_learn": 365,
+   "n_eff_judge": 351,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4865,
-   "short_judge": 826,
+   "short_learn": 4795,
+   "short_judge": 758,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4523,
-   "residual_judge": 492,
+   "residual_learn": 4453,
+   "residual_judge": 424,
    "max_inputs_after": 1
   },
   {
@@ -5178,30 +5162,30 @@
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4523,
-   "n_eff_judge": 2398,
+   "n_eff_learn": 5188,
+   "n_eff_judge": 2750,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 637,
+   "short_learn": 0,
    "short_judge": 0,
-   "status": "SHORT",
+   "status": "MEETS",
    "routes": [
     "D-13"
    ],
-   "closed_by": "D-13",
-   "closed_due": "2026-12-11",
+   "closed_by": null,
+   "closed_due": null,
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3017,
-   "n_eff_judge": 1587,
+   "n_eff_learn": 3461,
+   "n_eff_judge": 1820,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2143,
+   "short_learn": 1699,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5211,16 +5195,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 2872,
+   "short_learn": 2535,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5230,55 +5214,55 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1155,
-   "n_eff_judge": 611,
+   "n_eff_learn": 1325,
+   "n_eff_judge": 701,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4005,
-   "short_judge": 498,
+   "short_learn": 3835,
+   "short_judge": 408,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2291,
+   "residual_learn": 2121,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 5160,
    "need_judge": 1109,
-   "short_learn": 4667,
-   "short_judge": 865,
+   "short_learn": 4595,
+   "short_judge": 828,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3982,
-   "residual_judge": 197,
+   "residual_learn": 3910,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "x6",
    "cell": "pooled_gold_fx/1d",
    "n_eff_learn": 150,
-   "n_eff_judge": 121,
+   "n_eff_judge": 130,
    "need_train": 5160,
    "need_judge": 1109,
    "short_learn": 5010,
-   "short_judge": 988,
+   "short_judge": 979,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -5286,7 +5270,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 4668,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 1
   },
   {
@@ -5323,11 +5307,11 @@
     "D-13",
     "BROKER-M1"
    ],
-   "closed_by": null,
-   "closed_due": null,
-   "residual_learn": 304,
+   "closed_by": "D-13",
+   "closed_due": "2026-12-11",
+   "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "seq-1",
@@ -5346,7 +5330,7 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2541,
+   "residual_learn": 2371,
    "residual_judge": 0,
    "max_inputs_after": 8
   },
@@ -5366,8 +5350,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4842,
-   "residual_judge": 197,
+   "residual_learn": 4770,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
@@ -5388,17 +5372,17 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 4898,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 3062,
+   "short_learn": 1633,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5408,16 +5392,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 14
+   "max_inputs_after": 18
   },
   {
    "consumer": "seq-1",
    "cell": "fx10/2h",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 4541,
+   "short_learn": 3826,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5425,46 +5409,46 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2827,
+   "residual_learn": 2112,
    "residual_judge": 0,
-   "max_inputs_after": 7
+   "max_inputs_after": 9
   },
   {
    "consumer": "seq-1",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5429,
-   "short_judge": 541,
+   "short_learn": 5143,
+   "short_judge": 266,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4744,
+   "residual_learn": 4458,
    "residual_judge": 0,
-   "max_inputs_after": 2
+   "max_inputs_after": 3
   },
   {
    "consumer": "seq-1",
    "cell": "fx10/1d",
-   "n_eff_learn": 295,
-   "n_eff_judge": 283,
+   "n_eff_learn": 365,
+   "n_eff_judge": 351,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5725,
-   "short_judge": 826,
+   "short_learn": 5655,
+   "short_judge": 758,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5383,
-   "residual_judge": 492,
+   "residual_learn": 5313,
+   "residual_judge": 424,
    "max_inputs_after": 1
   },
   {
@@ -5622,69 +5606,69 @@
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 3732,
+   "short_learn": 3395,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
-   "closed_by": null,
-   "closed_due": null,
-   "residual_learn": 304,
+   "closed_by": "D-13",
+   "closed_due": "2026-12-11",
+   "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1155,
-   "n_eff_judge": 611,
+   "n_eff_learn": 1325,
+   "n_eff_judge": 701,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 4865,
-   "short_judge": 498,
+   "short_learn": 4695,
+   "short_judge": 408,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3151,
+   "residual_learn": 2981,
    "residual_judge": 0,
-   "max_inputs_after": 6
+   "max_inputs_after": 7
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 6020,
    "need_judge": 1109,
-   "short_learn": 5527,
-   "short_judge": 865,
+   "short_learn": 5455,
+   "short_judge": 828,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4842,
-   "residual_judge": 197,
+   "residual_learn": 4770,
+   "residual_judge": 160,
    "max_inputs_after": 2
   },
   {
    "consumer": "seq-1",
    "cell": "pooled_gold_fx/1d",
    "n_eff_learn": 150,
-   "n_eff_judge": 121,
+   "n_eff_judge": 130,
    "need_train": 6020,
    "need_judge": 1109,
    "short_learn": 5870,
-   "short_judge": 988,
+   "short_judge": 979,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -5692,7 +5676,7 @@
    "closed_by": null,
    "closed_due": null,
    "residual_learn": 5528,
-   "residual_judge": 654,
+   "residual_judge": 645,
    "max_inputs_after": 1
   },
   {
@@ -5756,7 +5740,7 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "rl-x1",
@@ -5775,9 +5759,9 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3291,
+   "residual_learn": 2847,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "rl-x1",
@@ -5796,9 +5780,9 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5034,
+   "residual_learn": 4697,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
@@ -5817,8 +5801,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7271,
-   "residual_judge": 1046,
+   "residual_learn": 7101,
+   "residual_judge": 956,
    "max_inputs_after": 8
   },
   {
@@ -5837,8 +5821,8 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 9572,
-   "residual_judge": 2416,
+   "residual_learn": 9500,
+   "residual_judge": 2379,
    "max_inputs_after": 2
   },
   {
@@ -5882,11 +5866,11 @@
   {
    "consumer": "rl-x1",
    "cell": "fx10/15m",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 4959,
+   "short_learn": 2161,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5896,16 +5880,16 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 29
+   "max_inputs_after": 35
   },
   {
    "consumer": "rl-x1",
    "cell": "fx10/30m",
-   "n_eff_learn": 3833,
-   "n_eff_judge": 3681,
+   "n_eff_learn": 5685,
+   "n_eff_judge": 5460,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 6917,
+   "short_learn": 5065,
    "short_judge": 0,
    "status": "SHORT",
    "routes": [
@@ -5913,66 +5897,66 @@
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 2475,
+   "residual_learn": 623,
    "residual_judge": 0,
-   "max_inputs_after": 19
+   "max_inputs_after": 23
   },
   {
    "consumer": "rl-x1",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 7792,
-   "short_judge": 487,
+   "short_learn": 6363,
+   "short_judge": 0,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 4364,
+   "residual_learn": 2935,
    "residual_judge": 0,
-   "max_inputs_after": 14
+   "max_inputs_after": 18
   },
   {
    "consumer": "rl-x1",
    "cell": "fx10/2h",
-   "n_eff_learn": 1479,
-   "n_eff_judge": 1420,
+   "n_eff_learn": 2194,
+   "n_eff_judge": 2107,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9271,
-   "short_judge": 1908,
+   "short_learn": 8556,
+   "short_judge": 1221,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7557,
-   "residual_judge": 237,
-   "max_inputs_after": 7
+   "residual_learn": 6842,
+   "residual_judge": 0,
+   "max_inputs_after": 9
   },
   {
    "consumer": "rl-x1",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 10159,
-   "short_judge": 2760,
+   "short_learn": 9873,
+   "short_judge": 2485,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 9474,
-   "residual_judge": 2092,
-   "max_inputs_after": 2
+   "residual_learn": 9188,
+   "residual_judge": 1817,
+   "max_inputs_after": 3
   },
   {
    "consumer": "rl-x1",
@@ -6281,12 +6265,12 @@
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4523,
-   "n_eff_judge": 2398,
+   "n_eff_learn": 5188,
+   "n_eff_judge": 2750,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 6227,
-   "short_judge": 930,
+   "short_learn": 5562,
+   "short_judge": 578,
    "status": "SHORT",
    "routes": [
     "D-13"
@@ -6295,82 +6279,82 @@
    "closed_due": "2026-12-11",
    "residual_learn": 0,
    "residual_judge": 0,
-   "max_inputs_after": 26
+   "max_inputs_after": 27
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/30m",
-   "n_eff_learn": 3017,
-   "n_eff_judge": 1587,
+   "n_eff_learn": 3461,
+   "n_eff_judge": 1820,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 7733,
-   "short_judge": 1741,
+   "short_learn": 7289,
+   "short_judge": 1508,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 3291,
+   "residual_learn": 2847,
    "residual_judge": 0,
-   "max_inputs_after": 17
+   "max_inputs_after": 18
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 8462,
-   "short_judge": 2104,
+   "short_learn": 8125,
+   "short_judge": 1923,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 5034,
+   "residual_learn": 4697,
    "residual_judge": 0,
-   "max_inputs_after": 13
+   "max_inputs_after": 14
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/2h",
-   "n_eff_learn": 1155,
-   "n_eff_judge": 611,
+   "n_eff_learn": 1325,
+   "n_eff_judge": 701,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 9595,
-   "short_judge": 2717,
+   "short_learn": 9425,
+   "short_judge": 2627,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 7881,
-   "residual_judge": 1046,
-   "max_inputs_after": 6
+   "residual_learn": 7711,
+   "residual_judge": 956,
+   "max_inputs_after": 7
   },
   {
    "consumer": "rl-x1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 10750,
    "need_judge": 3328,
-   "short_learn": 10257,
-   "short_judge": 3084,
+   "short_learn": 10185,
+   "short_judge": 3047,
    "status": "SHORT",
    "routes": [
     "D-13"
    ],
    "closed_by": null,
    "closed_due": null,
-   "residual_learn": 9572,
-   "residual_judge": 2416,
+   "residual_learn": 9500,
+   "residual_judge": 2379,
    "max_inputs_after": 2
   },
   {
@@ -6438,8 +6422,8 @@
   {
    "consumer": "agg-v1",
    "cell": "fx10/15m",
-   "n_eff_learn": 5791,
-   "n_eff_judge": 5561,
+   "n_eff_learn": 8589,
+   "n_eff_judge": 8249,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6457,8 +6441,8 @@
   {
    "consumer": "agg-v1",
    "cell": "fx10/1h",
-   "n_eff_learn": 2958,
-   "n_eff_judge": 2841,
+   "n_eff_learn": 4387,
+   "n_eff_judge": 4214,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6476,8 +6460,8 @@
   {
    "consumer": "agg-v1",
    "cell": "fx10/4h",
-   "n_eff_learn": 591,
-   "n_eff_judge": 568,
+   "n_eff_learn": 877,
+   "n_eff_judge": 843,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6609,8 +6593,8 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/15m",
-   "n_eff_learn": 4523,
-   "n_eff_judge": 2398,
+   "n_eff_learn": 5188,
+   "n_eff_judge": 2750,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6628,8 +6612,8 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/1h",
-   "n_eff_learn": 2288,
-   "n_eff_judge": 1224,
+   "n_eff_learn": 2625,
+   "n_eff_judge": 1405,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6647,8 +6631,8 @@
   {
    "consumer": "agg-v1",
    "cell": "pooled_gold_fx/4h",
-   "n_eff_learn": 493,
-   "n_eff_judge": 244,
+   "n_eff_learn": 565,
+   "n_eff_judge": 281,
    "need_train": 0,
    "need_judge": 200,
    "short_learn": 0,
@@ -6674,18 +6658,18 @@
     "gold/1m:judge": 4680,
     "gold/5m": 3362,
     "gold/5m:judge": 3856,
-    "gold/15m": 1666,
-    "gold/15m:judge": 2398,
-    "gold/30m": 1158,
-    "gold/30m:judge": 1587,
-    "gold/1h": 945,
-    "gold/1h:judge": 1224,
-    "gold/2h": 545,
-    "gold/2h:judge": 611,
-    "gold/4h": 276,
-    "gold/4h:judge": 244,
+    "gold/15m": 2331,
+    "gold/15m:judge": 2750,
+    "gold/30m": 1602,
+    "gold/30m:judge": 1820,
+    "gold/1h": 1282,
+    "gold/1h:judge": 1405,
+    "gold/2h": 715,
+    "gold/2h:judge": 701,
+    "gold/4h": 348,
+    "gold/4h:judge": 281,
     "gold/1d": 150,
-    "gold/1d:judge": 121,
+    "gold/1d:judge": 130,
     "gold/1w:judge": 60
    },
    "training_gain": "",
@@ -6697,8 +6681,8 @@
    "due": "2026-12-04",
    "status": "EURUSD measured; 9 FX pairs labelled 2026-11-26 (dl-v1, outcome-blind)",
    "pr": "",
-   "counted": 26392,
-   "per_day": 11876.4
+   "counted": 28982,
+   "per_day": 13041.9
   },
   {
    "id": "D-13",

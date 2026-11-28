@@ -28,8 +28,9 @@ recorded side by side (`side_by_side`). `by_tf_rerun` reports the re-run's worst
 widens gt4h to 8 h .. 20 d, and the quant may rule a per-tf binding there. The file records `exit_freeze_sha` (and the xt-v1 record) so
 `data_sufficiency.require_power_read_rho` and `sr_v3.rho_inputs(freeze_sha=...)` accept it, and `binds_with` (the
 D-12 file, path and sha256) so `config.check_rho_measurement` can recompute the le-60m bound as max(cells, D-12).
-rho_x (label-blind feature ICCs, D-12a) does not depend on the exit geometry: it is carried over verbatim from the
-D-12 file (`rho_x_from`).
+rho_x (label-blind feature ICCs, D-12a) does not depend on the exit geometry: it is read from the D-12 file
+(`rho_x_from`, sha256), not copied. `binding_by_tf` is quant ruling 1 on #525 (`PER_TF_RULE`); `--rebind` recomputes
+every summary and binding of a committed file from its cells file without re-measuring.
 
 Label-blind with respect to sr-v3 / H-102: control-grid and replayed-family residual ICCs only; no sr-v3 learner
 outcome, no dense-label store value is read (the labels are computed here, never loaded from ~/tmp/dense-labels).
@@ -476,9 +477,47 @@ def side_by_side(binding: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> list
     return rows
 
 
+PER_TF_RULE = ("quant ruling 1 on #525 (bind per tf): rho_u,inst(tf) = max(D-12 binding of the tf's bucket, the "
+               "cumulative max of the re-run per-tf value over holds <= this tf), the same for the vs-gold level; "
+               "rho_u,day(tf) = max(D-12 bucket value, re-run at the tf), undefined for H >= 1 d (design effect 1); "
+               "tau_a(tf) = the re-run at the tf only")
+
+
+def binding_by_tf(tab: pd.DataFrame, recorded: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> dict[str, Any]:
+    """Quant ruling 1 on #525: the binding per class x tf (`PER_TF_RULE`) from the cells table (grid and families
+    together = max(grid, families)) and the D-12 recorded binding per bucket. Keys `<class>|<tf>`."""
+    per = summarise(tab.assign(band=tab["tf"]), bands=TFS)
+    out: dict[str, Any] = {"rule": PER_TF_RULE, "rho_u_day": {}, "rho_u_inst_day_mean": {},
+                           "rho_u_inst_vs_gold_day_mean": {}, "tau_a": {}}
+    for cls in M.CLASSES:
+        cum: dict[str, float | None] = {"rho_u_inst_day_mean": None, "rho_u_inst_vs_gold_day_mean": None}
+        for tf in TFS:
+            k, bk = f"{cls}|{tf}", f"{cls}|{hold_bucket(tf)}"
+            d12 = (recorded.get("rho_u_day", {}).get(bk) or {}).get("max")
+            if D.SPEC.h_by_tf[tf] >= DAY_S:
+                out["rho_u_day"][k] = {"d12": d12, "rerun": None, "max": None, "design_effect_1": True}
+            else:
+                r = _cap(_up(per["rho_u_day"].get(k)))
+                out["rho_u_day"][k] = {"d12": d12, "rerun": r, "max": _cap(_mx(d12, r))}
+            for name, sk in (("rho_u_inst_day_mean", "rho_u_inst"), ("rho_u_inst_vs_gold_day_mean",
+                                                                     "rho_u_inst_vs_gold")):
+                if k not in per[sk]:
+                    continue
+                r = _cap(_up(per[sk][k]["agg"]))
+                cum[name] = _mx(cum[name], r)
+                d12i = (recorded.get(name, {}).get(bk) or {}).get("max")
+                out[name][k] = {"d12": d12i, "rerun": r, "rerun_cummax": cum[name], "max": _cap(_mx(d12i, cum[name]))}
+            if k in per["tau_sd"]:
+                r = _up(per["tau_sd"][k])
+                tau = max(0.01, r) if r is not None else None
+                out["tau_a"][k] = {"rerun": r, "tau_a": tau, "lambda_a": 1.35 / tau ** 2 if tau else None}
+    return out
+
+
 def assemble(*, binding: Mapping[str, Any], by_source: Mapping[str, Any], recorded_path: str, recorded_sha: str,
              recorded: Mapping[str, Any], meta: Mapping[str, Any]) -> dict[str, Any]:
-    """The D-12-xt JSON (without `cells_file`, set by `write`)."""
+    """The D-12-xt JSON (without `cells_file`, set by `write`). rho_x is not copied: `rho_x_from` names the D-12 file
+    (sha256), which `sr_v3.rho_inputs` follows (quant F7 on #525: the JSON stays under the 800 kB cap)."""
     rd = binding["rho_u_day"]
     return {
         "schema": SCHEMA, "item": ITEM,
@@ -490,7 +529,8 @@ def assemble(*, binding: Mapping[str, Any], by_source: Mapping[str, Any], record
         "candidates": [
             {"kind": "control", "name": "control_grid",
              "how": "H < 1 d: every (H/tf)-th tf-bar close of each NY-17:00 session day; H >= 1 d: the first close "
-                    "of every ceil(H/1 d)-th business session day; same times on every instrument"},
+                    "of every ceil(H/1 d)-th business session day (1w: every ceil(H/1 w)-th epoch week); same "
+                    "times on every instrument"},
             *({"kind": "family", "name": fam, "arms": list(arms), "replay": "measure_rho.family_decisions (D-12)",
                "labelled_with": "every xt-v1 geometry; greedy non-overlap at hold H per instrument"}
               for fam, arms in M.FAMILIES.items())],
@@ -500,7 +540,7 @@ def assemble(*, binding: Mapping[str, Any], by_source: Mapping[str, Any], record
             "rows are the factory's usable rows: label window (decision month .. horizon end) A / A-consistent on the "
             "D-1 served tiers (gold graded too); D-12 used gold unfiltered and the r11-v2.1 HistData tiers per minute",
             "HistData has no ask: ask = bid (as the dense labels); XAG and FX bps costs are D-12's assumptions",
-            "rho_x is carried over from the D-12 file (label-blind features; the exit geometry does not enter)",
+            "rho_x is the D-12 file's (`rho_x_from`; label-blind features; the exit geometry does not enter)",
             "hold = H puts 1m alone in le60m and 5m alone in 1h-4h; gt4h holds 8 h .. 20 d",
         ],
         "geometries": [g for _, _, g in GEOMETRIES],
@@ -510,13 +550,38 @@ def assemble(*, binding: Mapping[str, Any], by_source: Mapping[str, Any], record
         "classes": {k: list(v) for k, v in M.CLASSES.items()},
         "not_measurable": recorded.get("not_measurable"),
         "pc1_orientation": meta["pc1"], "gold_sign_orientation": meta["gsign"],
-        "rho_x_from": {"path": recorded_path, "sha256": recorded_sha, "note": "D-12a rho_x, carried over verbatim"},
-        "rho_x": recorded.get("rho_x", {}),
+        "rho_x_from": {"path": recorded_path, "sha256": recorded_sha, "note": "D-12a rho_x, read from this file"},
         "binding": binding,
         "side_by_side": side_by_side(binding),
         "by_source": by_source,
         "rho_day_le_60m": {cls: rd[f"{cls}|le60m"].get("rho_value") for cls in M.CLASSES},
     }
+
+
+def finish(tab: pd.DataFrame, *, recorded: Mapping[str, Any], recorded_path: str, recorded_sha: str,
+           meta: Mapping[str, Any]) -> dict[str, Any]:
+    """Every summary and binding from the cells table: by source (grid / families in the JSON; the per-family detail
+    is the cells file's `source` column), the bucket binding, the per-tf binding (ruling 1) and the per-tf re-run."""
+    full = {"grid": summarise(tab[tab["source"] == "grid"]), "families": summarise(tab[tab["source"] != "grid"]),
+            "family:all": summarise(tab[tab["source"] == "all"])}
+    binding = bind(rerun_binding(full), recorded["binding"])
+    out = assemble(binding=binding, by_source={k: full[k] for k in ("grid", "families")}, recorded_path=recorded_path,
+                   recorded_sha=recorded_sha, recorded=recorded, meta=meta)
+    out["binding_by_tf"] = binding_by_tf(tab, recorded["binding"])
+    out["by_tf_rerun"] = summarise(tab.assign(band=tab["tf"]), bands=TFS)
+    return out
+
+
+def read_cells(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, compression="gzip")
+
+
+def script_record(head: str) -> dict[str, Any]:
+    script = Path(__file__).resolve()
+    return {"path": str(script.relative_to(ROOT)), "sha256": M.sha256_file(script), "git_blob": M.git_blob(script),
+            "uses": {"scripts/research/measure_rho.py": M.sha256_file(ROOT / "scripts/research/measure_rho.py"),
+                     "goldbot/research/dense_labels.py": M.sha256_file(ROOT / "goldbot/research/dense_labels.py")},
+            "base_commit": head}
 
 
 def write(out_dir: Path, stem: str, out: dict[str, Any], tab: pd.DataFrame) -> tuple[Path, Path]:
@@ -528,11 +593,34 @@ def write(out_dir: Path, stem: str, out: dict[str, Any], tab: pd.DataFrame) -> t
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         gz.write(tab.sort_values("key").to_csv(index=False, float_format="%.6g").encode())
     cells_path.write_bytes(buf.getvalue())
+    return write_json(out_dir / f"{stem}.json", out, cells_path, len(tab)), cells_path
+
+
+def write_json(js: Path, out: dict[str, Any], cells_path: Path, rows: int) -> Path:
     rel = cells_path.relative_to(ROOT) if cells_path.is_relative_to(ROOT) else cells_path
-    out = {**out, "cells_file": {"path": str(rel), "sha256": M.sha256_file(cells_path), "rows": int(len(tab))}}
-    js = out_dir / f"{stem}.json"
+    out = {**out, "cells_file": {"path": str(rel), "sha256": M.sha256_file(cells_path), "rows": int(rows)}}
     js.write_text(json.dumps(M.rounded(out), indent=1, default=str) + "\n")
-    return js, cells_path
+    return js
+
+
+def rebind(js: Path, recorded_path: str) -> Path:
+    """Recompute every summary and binding of a committed D-12-xt file from its own cells file (no market data read,
+    no measurement repeated); the measurement's provenance (`measurement_run`: the measuring script's sha256 / blob /
+    commit, the data shas, the bootstrap) is kept, `script` becomes this script."""
+    old = json.loads(js.read_text())
+    cells_path = ROOT / old["cells_file"]["path"]
+    if M.sha256_file(cells_path) != old["cells_file"]["sha256"]:
+        raise SystemExit(f"{cells_path} differs from the sha256 its JSON records: refused")
+    rec_path = ROOT / recorded_path
+    recorded = json.loads(rec_path.read_text())
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    run = old.get("measurement_run") or old["script"]
+    meta = {"boot": old["bootstrap"]["B"], "pc1": old["pc1_orientation"], "gsign": old["gold_sign_orientation"],
+            "script": script_record(head), "data": old["data"]}
+    tab = read_cells(cells_path)
+    out = finish(tab, recorded=recorded, recorded_path=recorded_path, recorded_sha=M.sha256_file(rec_path), meta=meta)
+    out["measurement_run"] = run
+    return write_json(js, out, cells_path, len(tab))
 
 
 # ------------------------------------------------------------------------------------------------------------ main
@@ -547,7 +635,12 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=ROOT / "docs" / "research")
     ap.add_argument("--stem", default=STEM)
     ap.add_argument("--instruments", default="", help="comma list (default: every class member)")
+    ap.add_argument("--rebind", type=Path, default=None,
+                    help="recompute the summaries and bindings of this committed JSON from its cells file and exit")
     a = ap.parse_args()
+    if a.rebind is not None:
+        print(rebind(a.rebind, a.recorded))
+        return
     if max(a.workers, a.icc_workers) > 8:
         raise SystemExit("at most 8 workers (8 CPU threads)")
     if D.exit_freeze_hash(D.SPEC) != D.EXIT_FREEZE_SHA256:
@@ -573,31 +666,16 @@ def main() -> None:
     with ProcessPoolExecutor(a.icc_workers) as ex:
         out_rows = list(ex.map(M.job, jobs, chunksize=4))
     tab = cells_table(out_rows)
-    by_source = {"grid": summarise(tab[tab["source"] == "grid"]), "families": summarise(tab[tab["source"] != "grid"])}
-    for fam in (*M.FAMILIES, "all"):
-        by_source[f"family:{fam}"] = summarise(tab[tab["source"] == fam])
-    binding = bind(rerun_binding(by_source), recorded["binding"])
-    # per tf (reporting only, never binding): which hold inside a bucket sets its worst cell
-    by_tf = summarise(tab.assign(band=tab["tf"]), bands=TFS)
-    script = Path(__file__).resolve()
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     data_files = sorted({p for i in insts for p in M.files_for(a.raw, i) if p.exists()})
-    meta = {"boot": a.boot, "pc1": pc1, "gsign": gsign,
-            "script": {"path": str(script.relative_to(ROOT)), "sha256": M.sha256_file(script),
-                       "git_blob": M.git_blob(script), "uses": {"scripts/research/measure_rho.py":
-                                                                M.sha256_file(ROOT / "scripts/research/measure_rho.py"),
-                                                                "goldbot/research/dense_labels.py":
-                                                                M.sha256_file(ROOT / "goldbot/research/dense_labels.py")},
-                       "base_commit": head},
+    meta = {"boot": a.boot, "pc1": pc1, "gsign": gsign, "script": script_record(head),
             "data": {"tiers_file": {"path": f"raw/{TIERS_FILE}", "sha256": M.sha256_file(tiers_path),
                                     "tiers": ["A", "A-consistent"]},
                      "d12_family_tiers_file": {"path": f"raw/{M.TIERS_FILE}",
                                                "sha256": M.sha256_file(a.raw / M.TIERS_FILE)},
                      "bars": [{"path": f"raw/{p.relative_to(a.raw)}", "sha256": M.sha256_file(p)} for p in data_files],
                      "instruments": info}}
-    out = assemble(binding=binding, by_source=by_source, recorded_path=a.recorded,
-                   recorded_sha=M.sha256_file(rec_path), recorded=recorded, meta=meta)
-    out["by_tf_rerun"] = by_tf
+    out = finish(tab, recorded=recorded, recorded_path=a.recorded, recorded_sha=M.sha256_file(rec_path), meta=meta)
     js, cells = write(a.out, a.stem, out, tab)
     print(json.dumps({"json": str(js), "cells": str(cells), "rho_day_le_60m": out["rho_day_le_60m"]}, indent=1))
 
