@@ -104,7 +104,7 @@ counts from the `oof.parquet` `p30_ok` column are 614 / 614 / 611 (re-derived), 
 |---|---|---|---|
 | P1 | xt-v1 dense labels for FX10 (`~/tmp/dense-labels`, exit freeze b68e2f7b...), produced sealed; no read | main session (data-engineer signs the manifest) | 2026-12-02 |
 | P2 | **D-12-xt (backlog 279):** `scripts/research/measure_rho.py` writes `exit_freeze_sha` = `dense_labels.EXIT_FREEZE_SHA256` (today it does not, so `config.xt_v1_rho_refusal` refuses every pooled power read), re-runs at xt-v1 geometry, and the result is pinned; quant signs | data-engineer; quant-reviewer | 2026-12-04 |
-| P3 | **Measured FX10 cost of record (backlog 280)**, recorded on an ADR 0098 R-H line | microstructure-researcher; quant countersigns | 2026-12-11 |
+| P3 | **Measured FX10 cost of record (backlog 280)**, recorded on an ADR 0098 R-H line | microstructure-researcher; quant countersigns | 2026-12-30 (amended; was 2026-12-11) |
 | P4 | Backlog 277 (seal guard on `oof.parquet` columns, H-104 F8) merged | implementer | with #521 |
 
 The 2027Q1 budget is **not** an S0-1 item. Worst case 6 K fits the 12 open in code, and `check_budget` covers it
@@ -122,6 +122,11 @@ The 2027Q1 budget is **not** an S0-1 item. Worst case 6 K fits the 12 open in co
   counted. Stage 0 runs once, on the first day P1-P5 hold or on 2027-01-31, whichever is first, and is never re-run. An
   instrument with fewer than 30 fills at either broker in every session stays `prior` and leaves the body; the measured
   broker is never charged alone." P5 is withdrawn, so this reads "P1-P4" here.
+- **Amended 2026-11-28** by `docs/research/prereg-amendment-2026-11-28-u2-fx-cost-probes.md` (owner-approved FX cost
+  probes; label-blind, K 0). The FX fills come from a fixed, mechanical probe schedule: all 10 pairs at icm-probe and
+  vantage-demo, 4 per session a day, seeded sides, a 60 s hold and a market exit, with no early stopping per pair. The
+  fill cut-off becomes **2026-12-22 23:59 UTC** and P3 is due **2026-12-30**. The Stage 0 rule and the 2027-01-31 kill
+  date are unchanged. Membership above is unchanged.
 
 **Membership is label-blind.** It follows fill counts, never outcomes.
 
@@ -218,7 +223,7 @@ and before any statistic.
 
 | Date | Step | Owner |
 |---|---|---|
-| 2026-12-02 / 12-04 / 12-11 | P1 / P2 / P3 | main session / data-engineer / microstructure-researcher |
+| 2026-12-02 / 12-04 / 12-30 (amended) | P1 / P2 / P3 | main session / data-engineer / microstructure-researcher |
 | first day P1-P4 hold, or 2027-01-31 | Stage 0 recorded once | evaluator |
 | within 7 days of Stage 0 | Stage L reads of started cells | ml-researcher (fit), evaluator (read) |
 | 2027-01-06 23:59 / 2027-01-08 12:00 UTC, else the next N26 batch | Confirm members / batched confirm | evaluator |
