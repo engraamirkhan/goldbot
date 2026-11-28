@@ -17,6 +17,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - **H-107 U3** `docs/research/prereg-2026-11-28-u3-deep-daily.md`: gold Frankfurt fix 1971-1998, 12-month trend side
     filter on 1d+1w, m 1. n_eff <= 658 (Q3 uniqueness across tfs) < 898 needed (power 0.36): predicted NOT STARTED,
     closes UNTESTABLE; no grading or cost work commissioned.
+  - Rev 2 the same day (quant review of #523, CHANGES, text only, 0 K): U1 is a closure and stamp record (no powered
+    read before 2044-10 at 15m, never at 30m-1d+1w), with a 40-day refusal on stale era spreads (backlog 280b) and a
+    mechanical monthly ECR roll. U2 is cut to 15m/30m/1h (Holm m 3), XAG is dropped (k 11), and ρ_inst = max(0.5,
+    measured) with power also reported at 0.7 (1h 0.58). It joins the N26 batch on 2027-01-08 by default; P5 is dropped.
+    U3 is a closure record (POS1-001 family closed 2026-11-06), with uniqueness n_eff about 540 (power about 0.28).
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also

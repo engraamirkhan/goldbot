@@ -15,12 +15,16 @@ stay owner-only. Nothing here touches the engine, the RiskGate or any account.
 
 ## 0. Money first
 
+**What this card is (quant review of #523):** a **closure and stamp record**, UNTESTABLE today, not a hypothesis card.
+It fixes the window, the reserve-week rule, the v0 stamps, the forward grade and the forward cost rules, and records
+that no cell can reach a powered read.
+
 Gold on dense candidates at 15m-4h loses its cost and nothing else (H-104 §0, seen): take-all net −0.95 R (15m) to
 −0.13 R (4h) per candidate, mean cost(x) 0.95 R to 0.13 R. 1d+1w: net −0.007 R, cost 0.054 R. A forward window does
 not change that economics. It only replaces the missing fresh history for gold 2019-2025 (grade C under r11-v2.1,
 ADR 0105). So the question this card answers is narrow: **can a forward window from 2026-10-01 give these frozen learners
-a powered judged read, and when?** Answer, from label-free counts (section 5): **not before 2038 at any unit, under
-ADR 0085 as written.**
+a powered judged read, and when?** Answer, from label-free counts (section 5), under ADR 0085 as written: **not before
+2044-10 (15m, m 4; L-cw alone 2043-09); never at 30m-1d+1w.**
 
 ## 1. Cells (learner × unit), Holm m fixed now
 
@@ -86,13 +90,22 @@ fallback-(ii) grade runs until `learning:broker_m1_capture` has passed at least 
   2025-09 spread: finite, so `gold_row_bp` does not raise. **That is a stale charge, not a refusal (code-path finding).**
 - ADR 0098 R-H says "a holdout read needs a new version". The same holds for the forward window. **The forward cost of
   record is a new version, `srv3-cost-<sha>` (forward)**, built by the frozen builder with the same rule, the same 54
-  gold cells, the same ECR `ecr-2026-11-20.2` (no ECR refresh for this card: no cost shopping), and the gold spread
+  gold cells, the ECR term rolled mechanically (below), and the gold spread
   table extended with forward months only (Dukascopy quoted spread ub95 per session and month, ≥ 2026-10, each month
   frozen at day 8 like the grade). Holdout months are never in it. It is recorded on an ADR 0098 R-H line before the
   first U1 read. It is this window's version of record from its first read (no earlier read of the window exists, so
   no K +1 applies); a second version on the same window is K +1 and the first read stands.
-- Code item (implementer, backlog 280): `gold_row_bp` refuses a row whose as-of spread month is more than one month older than the
-  row's decision month (test: a 2027-02 row against a table ending 2025-09 raises).
+- **ECR over a window of many years (decided): a mechanical monthly roll, fixed now.** For each calendar month from
+  2026-10, the ECR ub95 per broker × session × tf cell is taken over the trailing 3 calendar months of demo fills
+  (≥ 30 fills, else the session `all` cell, else the previous frozen month carries), frozen at day 8 after month-end
+  with its sha256, and joined as of `available_utc` like the spread. Reason: `ecr-2026-11-20.2` measures four weeks of
+  2026 fills. Holding it for years would charge 2030s rows with 2026 broker conditions, and the size and sign of that
+  drift are unknown. A roll that is fixed before any forward label exists is point in time and leaves no choice to
+  shop. The 2x stress gate still applies.
+- Code item (implementer, backlog 280): "`gold_row_bp` refuses a row whose as-of spread row has `available_utc` more
+  than 40 days before `decision_utc`; forward spread months carry `available_utc` = their day-8 freeze time; history
+  months keep their existing `available_utc`. Test: a 2027-02-03 row against a table whose last month is 2026-12
+  (frozen 2027-01-08) charges; against a table ending 2025-09 it raises." (quant, verbatim)
 
 ## 4. Hypotheses and honest priors (rule 2 card)
 
@@ -145,8 +158,9 @@ the edge is expected.
   window after one round trip, ADR 0106 decision 4), 11 (fresh n_eff ≥ 200), 13 reported, 14 at 15m (R-T broker leg).
   H-104 §4 gate 8 (paired D vs G-cw on shared rows) for HB, AVG, SEQ-1, CAS-1 and CAS-2. Gate 12 cannot be met by a
   forward window (it needs 2021 or 2022); its forward form is **two disjoint halves of the window, each with kept mean
-  net > 0 and ≥ 10 kept trades a year spanned** (ADR 0085 decision 3, pre-registered blocks). The quant signs that form
-  before any read.
+  net > 0 and ≥ 10 kept trades a year spanned** (ADR 0085 decision 3, pre-registered blocks). "The halves split at the
+  calendar midpoint of the judged window as of the read date (no chosen split point), and each half spans at least 12
+  months." (quant, verbatim)
 - Stationary day-block bootstrap (BOOT 10,000, mean block 5 days, seed 20261206). Holm within the unit's batch at m of
   section 1. Every read reports S by half, the S split, £/day at 0.01 lot, and the losers next to the winners.
 - A pass licenses only what sr-v3 5.3 licenses (learning-class demo gating). Real money: owner-only.
@@ -171,8 +185,10 @@ the edge is expected.
   U1 books nothing in either quarter.
 - **Kill (quant F5 form):** if the Stage 0 of record leaves every cell NOT STARTED (power), U1 closes **UNTESTABLE on the
   gold forward window under ADR 0085** the same day. No read, not a NULL, N10 not invoked. What stays recorded: the
-  window start, the reserve-week rule, the v0 stamps of section 1 and the forward cost and grade rules. Any later card
-  that reads these rows cites them as pre-registered before the data.
+  window start, the reserve-week rule, the v0 stamps of section 1 and the forward cost and grade rules. "The stamps fix
+  definitions, not blindness. A later card reading these rows lists every look at reserve-week outcomes (harm
+  sequences, performance-analyst, dashboards) made before its own signature, and its read is booked as a fresh look
+  under ADR 0085, not as this card's pre-registration." (quant, verbatim)
 - Reopening needs a new card with new mechanism evidence and a count in K. A changed alpha schedule is the quant's
   ruling, never this card's.
 
@@ -203,5 +219,6 @@ money lever stays where H-104 §10 put it: cost per candidate, longer holds, and
 ## Sign-off
 
 - Research director: 2026-11-28.
-- Quant-reviewer: pending (forward gate-12 form, the forward cost version rule).
+- Quant-reviewer: CHANGES on #523 (closure framing, §0 dates, 40-day era-spread refusal, stamps not blindness,
+  gate-12 split, ECR decision), applied verbatim 2026-11-28; re-verify pending.
 - Evaluator: pending (Stage 0 of record).

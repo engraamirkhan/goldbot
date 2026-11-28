@@ -13,6 +13,11 @@ Dukascopy gold 2010-2025, 20-120 day lookbacks with barrier exits: screen gross 
 n 421-457), net −0.02 to −0.06 R at the then cost priors, which the 11-15 audit found 2.6x too high. That evidence shaped
 the prior below. It is not this window.
 
+**Quant review of #523 (verbatim):** "Seen: POS1-001 (same sign(r252) signal), net SR 0.40, t 1.61, 2003-05 + 2010-17;
+family closed 2026-11-06 (A1.4). This card offers no new mechanism evidence. It is admissible only as a closure record
+under that rule. Deflation K includes the family's line K 19 and registry trials 49-87." **This card is therefore a
+closure record**, not a reopening of the family.
+
 **Status: proposed.** Quant-reviewer and evaluator sign. **0 K now.** Real money, sizing and live unlock are
 owner-only.
 
@@ -47,7 +52,9 @@ asks whether 27 years of untouched gold daily history can give a gold daily rule
   - |ln(month mean of the USD fix / World Bank Pink Sheet monthly gold average)| ≤ tol. tol is the smallest 5 bp step at
     which ≥ 95 % of 2010-2018 calibration months pass, comparing the Dukascopy 15:00 London mid month mean with the same
     reference. Void if tol > 100 bp.
-  - A pass grades the month **B-daily** (close-only inputs, T0 labels); otherwise C.
+  - "B-daily needs a day-level independent reference (a London fix daily series, where a local copy exists); without
+    one the grade is 'monthly-consistent only' and is not B-daily." (quant, verbatim) A month that passes only the
+    monthly checks above is 'monthly-consistent only'. No local London fix daily series exists for 1971-1998 today.
 
 ## 2. The cell (Holm m = 1, fixed now)
 
@@ -55,21 +62,26 @@ asks whether 27 years of untouched gold daily history can give a gold daily rule
 - **Candidates:** every fix day (1d) and the last fix of each ISO week (1w), both sides (dense, as sr-v3).
 - **Signal:** s_t = sign(ln(P_t / P_{t−252})), fixes as of t. Keep the side equal to s_t and abstain on the other side
   (k = 0.5). s_t = 0: abstain on both. No parameter is fitted. The 12-month lookback is the published default
-  (Moskowitz, Ooi & Pedersen 2012); it was not chosen on any gold data.
+  (Moskowitz, Ooi & Pedersen 2012). "The 12-month lookback was selected in published samples that include gold
+  1985-1998; the window is fresh to this program only." (quant, verbatim)
 - **Label (T0):** entry at the next fix P_{t+1}, exit at P_{t+1+H}, H = 10 sessions (1d) and 20 sessions (1w), the sr-v3
   H. gross R = side × ln(P_exit / P_entry) / (σ20_t × √H), where σ20_t is the sd of the 20 daily log returns to t. One R
   is one sigma of the hold, so the gross sd is about 1 and the 1.2 R sd floor is honest. Clipped at ±10 R.
 - **Cost of record:** a new version `srv3-cost-deep-<sha>`, built label-blind by the microstructure-researcher and
   recorded on an ADR 0098 R-H line before Stage 0. It charges **today's** costs scale-free, because the trade being judged
   is today's:
-  - the round trip in bp is the maximum over brokers, sessions and tf ∈ {1d, 1w} of the record's gold row charge
-    (`gold_row_bp`) on 2018-01..2025-09 daily rows;
+  - the round trip in bp is the maximum over brokers and sessions of the record's own cost-table cells for tf ∈ {1d, 1w}:
+    max(cell `rt_bp`, cell `ecr_ub95_usd` / reference price × 1e4) at the worse broker, floored at W2. The reference
+    price is fixed at the cell's ECR-window mean broker mid. It is not computed as the maximum of `gold_row_bp` over
+    2018-25 daily rows (quant item 5);
   - swap in bp per calendar night held, per side, from the record's swap table at its latest month (Wednesday triple
     folded into the nightly mean);
   - stress at 2x.
 - **Population n_eff:** ADR 0085 Q3 computes uniqueness across tfs, so 1w labels share the 1d days. The unit's n_eff is
   counted as decision days / 10 = **≤ 658**. The sr-v3 / H-104 summed convention (1d + 1w = 658 + 329 = 987) is an upper
-  bound, and it is **not** used.
+  bound, and it is **not** used. "Stage 0 states `power_first.uniqueness` on the label-free 1d+1w event timetable
+  (expected about 540, power about 0.28)." (quant, verbatim) The binding figure is that one, and it is below the 658 days/10
+  figure used in section 4. Both fail.
 
 ## 3. Hypothesis and prior (rule 2 card)
 
@@ -87,7 +99,7 @@ asks whether 27 years of untouched gold daily history can give a gold daily rule
 - Fresh route: the deep window itself (pre-learn, never read). A rule-only cell has no Stage L; the read is one batch on
   the ADR 0085 ledger. Ledger year 1 (read before 2027-11-15): α_j 0.00625, m 1, **z 2.50**, n_req = (2.50 × 1.2 / 0.10)²
   = **898**.
-- n_eff **≤ 658** if every month grades B-daily. Power = Φ(0.10 × √658 / 1.2 − 2.50) = **0.36 < 0.5**.
+- n_eff **≤ 658** (days/10) if every month grades, power Φ(0.10 × √658 / 1.2 − 2.50) = **0.36 < 0.5**. On the uniqueness count (about 540) power is about 0.28.
 - The smallest per-trade edge detectable at power 0.5 is 0.117 R, a net annual Sharpe of about 0.59.
 - After 2027-11-14, z is 2.73 and n_req is 1,077. The route never gets better with time.
 - **No hold length fixes it:** with R = one sigma of the hold, n_eff ∝ 1/H while the per-trade edge ∝ √H. The true power
@@ -97,7 +109,7 @@ asks whether 27 years of untouched gold daily history can give a gold daily rule
 |---|---|
 | S0-1 (grade rule `rd-v1`, grades, World Bank reference, deep cost version) | fail today; **not commissioned** (S0-3 fails on the ungraded upper bound) |
 | S0-2 (cost feasibility, reported) | pass: cost ≈ 0.03 R per candidate |
-| **S0-3 (record reason)** | **fail: n_eff ≤ 658 < 898 (power 0.36 at z 2.50); with the summed 1d+1w upper bound, 987 / 0.55 would pass, but Q3 refuses that count** |
+| **S0-3 (record reason)** | **fail: uniqueness n_eff about 540 (power about 0.28), and at most 658 even by days/10 (power 0.36), both < 898 at z 2.50; with the summed 1d+1w upper bound, 987 / 0.55 would pass, but Q3 refuses that count** |
 | **Predicted** | **NOT STARTED (power), 0 K. U3 closes UNTESTABLE for gold-only deep daily under ADR 0085.** |
 
 **The powered variant, named and not registered.** Pooling gold with the five Frankfurt-fix FX series of 1973-1998
@@ -133,7 +145,9 @@ and it says little about gold today. It is a new card if the director wants it.
 ## 7. Integrity
 
 - The 1971-1998 window is unread: no registry row reads a pre-2003 window (brain snapshot of 2026-11-24, 6,990 rows),
-  and no research doc reports a pre-2003 gold return. The evaluator re-checks the ops-VM registry at Stage 0.
+  and no research doc reports a pre-2003 gold return. At Stage 0 the evaluator re-checks the ops-VM registry, and also
+  `state/position_reads.jsonl`, `window_reads.jsonl` and any ADR 0046 regime-robustness daily-proxy check that touched
+  1971-1998 (quant item 6).
 - Holdout untouched (the window ends in 1998). One instrument, one rule, m 1, K counted if ever read.
 - **Re-derived for this card:** fix-day counts (7,622 from 1968; 6,842 from 1971-08-16) from the file's `date`/`source`
   columns. The registry tsmom 1d screen figures above come from the registry rows' `results.screen` (trials 49, 81).
@@ -141,5 +155,5 @@ and it says little about gold today. It is a new card if the director wants it.
 ## Sign-off
 
 - Research director: 2026-11-28.
-- Quant-reviewer: pending (Q3 count, `rd-v1` draft if ever used).
+- Quant-reviewer: CHANGES on #523 (items 1-6), applied verbatim 2026-11-28; re-verify pending.
 - Evaluator: pending.
