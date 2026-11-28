@@ -28,8 +28,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   sides, broker-min lot, 60 s hold then market close with the pair's own exit quote, 20-pip safety stop, at most 2
   open per account, GBP 25/account/day allowance, no early stopping per pair, counts-only reads until the cut-off.
   120 probes per broker per weekday; 48 slots per pair x broker x session by the new fill cut-off 2026-12-22 23:59 UTC
-  (30 needed). P3 due 2026-12-30; Stage 0 on the first P1-P4 day, kill 2027-01-31 unchanged. Backlog 283 (engine
-  stream), 284 (Dukascopy FX bid+ask), 285 (swap capture; quant ruling on history swap first).
+  (30 needed). P3 due 2026-12-30; Stage 0 on the first P1-P4 day, kill 2027-01-31 unchanged. Quant review applied the same day (F1-F8, swap ruling F9: as-of policy-rate differential + measured broker markup; backlog 286 rate table, P3 needs it). Backlog 283 (engine
+  stream), 284 (Dukascopy FX bid+ask), 285 (swap capture).
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also

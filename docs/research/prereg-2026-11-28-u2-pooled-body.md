@@ -118,6 +118,20 @@ The 2027Q1 budget is **not** an S0-1 item. Worst case 6 K fits the 12 open in co
 - a floor at W2, with the worse broker charged;
 - swap (quant, verbatim): "FX/XAG swap per side per rollover from the broker's symbol swap spec captured point in time,
   triple on the broker's triple day, charged on every row whose horizon crosses a rollover."
+  - **History rows (quant ruling F9, 2026-11-28, verbatim, recorded before the first capture):** "History rows
+    (2010-01..2025-09): swap per side per night = max(0, d_side(t) + m_{broker,inst,side}) in bp of entry, where:
+    d_side = (r_quote − r_base)/360 × 1e4 for a long (the reverse for a short); r = each currency's policy rate as of
+    `decision_utc`, by `asof_join` on `available_utc` (the decision announcement instant, UTC; step function, never
+    revised), applied to every rollover in (decision_utc, horizon_end_utc]; m = the maximum over the captures from
+    the first capture to the day before the P3 freeze of (captured charge in bp a night − d_side at the capture),
+    floored at 0. The capture-time rates are a separate scalar file, never joined to research rows. Triple on the
+    broker's `swap_rollover3days`, the worse broker, a credit never banked. The rate table ends 2025-09-30 (holdout
+    sealed). The 40-day staleness refusal does not apply to the step-function rate table; coverage-end ≥ decision
+    does. Forward rows (from 2026-12) use the captured spec as-of `captured_utc`, as `fx_swap_bp` does now. The
+    decision-time cost(x) uses the same as-of rate. (c) is reported as a sensitivity, never charged." Confirm rows
+    use the same function. Sources and tests: the amendment, section 5 item 4.
+  - **P3 now also requires the policy-rate table** (backlog 286). If it is not assembled by 2026-12-30, P3 fails and
+    Stage 0 waits, up to the 2027-01-31 kill date.
 - Fill cut-off, Stage 0 date and thin instruments (quant, verbatim): "Fills dated after 2026-12-11 23:59 UTC are not
   counted. Stage 0 runs once, on the first day P1-P5 hold or on 2027-01-31, whichever is first, and is never re-run. An
   instrument with fewer than 30 fills at either broker in every session stays `prior` and leaves the body; the measured

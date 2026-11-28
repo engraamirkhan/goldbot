@@ -71,17 +71,39 @@ value, slip, spread statistic or P&L of this stream is computed, reported or loo
 2026-12-23 00:00 UTC. The single exception is a safety alert: an account's realised loss crossing a RiskGate limit,
 which is reported as a limit event with no per-instrument cost.
 
+Quant F2 (verbatim): "Until 2026-12-23 00:00 UTC every surface that reads `cost_probes` (shadow_report, trades_ledger,
+activity, labs, daily_review) shows `basis: scheduled_fx_u2` rows as counts only: no price, spread, slip, commission or
+P&L. `fx_cost_cells.main` and `build_record` refuse while the wall clock is before `FILL_CUTOFF_UTC`. The builder's `lo`
+is None (every FX fill from the first one), pinned by a test. No protocol value of section 1 changes after the first
+slot. A safety halt ends the stream; it never resumes with changed values." Each sentence has a test (section 6).
+
+**Caps and measurability, fixed before the first slot** (quant F3, verbatim):
+
+- "Before the first slot, the FX10 `max_spread_points` and `volume_min` at both accounts, including the probe-only
+  symbols, are recorded in this amendment with the config sha256. A probe-only symbol's cap is the other broker's cap
+  in pips. Any change before 2026-12-23 voids the window."
+- "If vantage FX market closes are not measurable (no exit quote, or a fill at a level), the stream runs unchanged,
+  those exits are dropped and counted, and no amendment follows on cost grounds."
+- "Allowance and margin refusals record the quoted spread and are imputed like spread refusals. Infrastructure misses
+  are not imputed."
+
+Pre-first-slot record. The implementer fills it in a docs commit before the deploy. Until it is filled, no slot runs.
+
+| Instrument | icm-probe `max_spread_points` / `volume_min` | vantage-demo `max_spread_points` / `volume_min` | `config/instruments.yaml` sha256 |
+|---|---|---|---|
+| (pending, all 10) | | | |
+
 ## 2. Which cost cells a probe fills (srv3_cost_record / fx_cost_cells fallback)
 
 The ECR cells are instrument × broker × session × tf. U2's tfs are 15m, 30m and 1h (card section 1). A probe has no
 timeframe, so:
 
 - **A probe fill counts only toward its broker × session `all` cell**, with tf label `probe`. It never counts toward a
-  15m, 30m or 1h cell.
-- Each of U2's tf rows charges its own tf cell only if that cell is trusted (≥ 30 measured fills and ≥ 5 session days)
-  from strategy fills. Otherwise it charges the session `all` cell (`ecr-session-all`), which the probes fill. Only if
-  that cell is also untrusted does it charge the broker's worst trusted session (`ecr-broker-max`). This is the
-  existing `fx_cost_cells.cost_rows` rule, unchanged.
+  15m, 30m or 1h cell, and the `probe` cell itself is never selected as a charge (pinned by a test; quant F6).
+- Each of U2's tf rows: if its own tf cell is trusted (≥ 30 measured fills and ≥ 5 session days) from strategy fills,
+  it charges **max(tf cell, session `all` cell)** (quant F6, adopted: a thin strategy tf cell can never charge below the
+  probe-filled session cell). Otherwise it charges the session `all` cell (`ecr-session-all`), which the probes fill.
+  Only if that cell is also untrusted does it charge the broker's worst trusted session (`ecr-broker-max`).
 - The schedule targets **≥ 30 in every session at both brokers** (48 slots per cell at the latest start, section 3).
   The card's membership rule is weaker: ≥ 30 in at least one session at each broker. So, barring outages, each session
   charges its own measured cell rather than the broker-max fallback.
@@ -89,28 +111,47 @@ timeframe, so:
   every session stays `prior` and leaves the body; the measured broker is never charged alone." Fills mean measured
   fills, as `fx_cost_cells` counts them.
 
-**Spread-cap refusals (bias guard, mechanical).** The RiskGate's spread cap refuses an entry when the quote is wide. So
-an expensive pair could lose slots exactly when it is expensive, and that would bias its measured cost down. The rail is
-never loosened. Instead:
+**Spread-cap, allowance and margin refusals (bias guard, mechanical).** The RiskGate's spread cap refuses an entry when
+the quote is wide. So an expensive pair could lose slots exactly when it is expensive, and that would bias its measured
+cost down. The rail is never loosened. Instead:
 
-- A probe refused for spread is recorded with its quoted spread.
-- In the cost record, each such refusal enters its broker × session `all` cell's round-trip sample, for the mean and
-  ub95 only. Its value is its quoted spread plus the cell's mean positive entry slip, mean positive exit slip and mean
-  commission (bp).
-- It does **not** count toward the 30 fills for membership.
-- The record reports the refusal count per cell.
+- A probe refused for spread, for the £25 allowance or for margin is recorded with its quoted spread (F3).
+  Infrastructure misses are not imputed.
+- In the cost record, each such refusal enters its broker × session `all` cell's round-trip sample. Its value is its
+  quoted spread plus the cell's mean positive entry slip, mean positive exit slip and mean commission (bp).
+- Quant F4 (verbatim): "Imputed refusals enter the cell's mean and its day-clustered ub95 only. They are excluded from
+  `n`, from `n_days` (for `trusted`) and from `membership`. Tests: (i) a cell of 29 fills plus 5 imputed refusals is not
+  trusted and not a member; (ii) adding an imputed refusal never lowers `charged`."
+- The record reports the imputed count per cell.
 
-This can only raise a cell's charge. It needs no judgement.
+**What probe fills may set** (quant F5, verbatim): "Probe fills set only the round-trip term (ECR ub95, slip_x).
+Stop-exit overshoot stays `OVERSHOOT_BP` (W2) on every stop exit, and swap is charged per rollover held (section 5
+ruling). No probe value lowers either. Probe exit quotes count only within `PROBE_QUOTE_MAX_LAG_S` of the exit deal, as
+for gold. The record states 'demo-measured; real-money use needs a new R-H version from live fills'." Test: an FX row's
+`cost_b` = k × `OVERSHOOT_BP` under the measured record.
+
+**Rollover and release rows** (quant F5). Stage 0 reports the share of kept rows that time-exit into the rollover
+(21:45-23:15 UTC) and the share that enter at a tier-1 release minute. If either share is above 5 %, those rows take
+max(charge, Dukascopy 1m bid+ask spread at the entry and exit minute + commission + slip_x) (backlog 284 data). The
+60 s probes at fixed slots do not sample those minutes, so this guard charges them from quotes instead.
+
+**Gold stays untouched** (quant F1, verbatim): "`cost_of_record.frames` keeps only probes with `symbol in (None,
+'XAUUSD')`; failing test first: a `basis: scheduled_fx_u2` EURUSD probe in the window leaves every gold cell
+byte-identical." The same assertion holds for every `realised_costs.read_rows` consumer. Today `cost_of_record.py`
+(lines 177-181) labels every `cost_measurement` probe as gold, so without this fix the FX probes would pull gold's
+exit-slip cells towards 0.
 
 ## 3. Dates, counts and expected spend
 
 | Date (UTC) | Step | Owner |
 |---|---|---|
 | before the engine deploy | This amendment merged; quant signs | research director; quant-reviewer |
-| 2026-12-04 | Quant ruling on swap for history rows (section 5), before the first swap capture | quant-reviewer |
+| 2026-11-28 | Quant ruling on swap for history rows (F9, section 5 item 4): given, recorded in the card before the first capture | quant-reviewer |
+| before 2026-12-04 21:00 | Pre-first-slot caps record (section 1, F3) with the config sha256 | implementer |
 | 2026-12-04 21:00 | Engine change deployed after trading-safety and code review (section 6); swap capture starts with it | implementer; trading-safety-reviewer; sre |
 | Mon 2026-12-07 00:15 | Planned first slot. The latest allowed is Wed 2026-12-09 00:15, else the amendment lapses | engine |
 | 2026-12-18 | Dukascopy FX10 bid+ask 1m pull, 2003-01..2025-09 (era term), local only | data-engineer |
+| 2026-12-23 | Policy-rate table for the F9 swap charge (8 currencies, from the last decision before 2010-01-01 to 2025-09-30, decision-release step functions), backlog 286; P3 fails without it | data-engineer; quant countersigns |
 | **2026-12-22 23:59:59** | **New fill cut-off**: fills sent at or after 2026-12-23 00:00 UTC are not counted (replaces 2026-12-11 23:59 UTC), and the stream stops | engine; microstructure-researcher |
 | 2026-12-30 | P3: measured FX10 cost of record, a new recorded version on an ADR 0098 R-H line (replaces 2026-12-11) | microstructure-researcher; quant countersigns |
 | first day P1-P4 hold (expected 2026-12-30), else 2027-01-31 | **Stage 0**, recorded once and never re-run (card section 3, unchanged rule) | evaluator |
@@ -153,6 +194,10 @@ copy) of:
   first P1-P4 day moves from 2026-12-11 to 2026-12-30. The kill date stays 2027-01-31.
 - Code constant: `srv3_cost_record.FILL_CUTOFF_UTC` becomes `"2026-12-23T00:00:00+00:00"` on PR #527
   (`feat/cost-record-fx`), with the dry-run label text in `fx_cost_cells.build_record` to match.
+- Section 3 swap: history rows are charged by the quant's ruling F9 (section 5 item 4), and P3 also requires the
+  policy-rate table (backlog 286).
+- Cost rows (quant F6): a trusted FX tf cell charges max(tf cell, session `all` cell). Imputed refusals (F4), the F5
+  limits on what probe fills may set, and gold isolation (F1) as in section 2.
 - Unchanged: membership, the ub95 charge rule, the W2 floor, the worse broker charged, S0-2 binding, Holm m 3, the N26
   batch rule and every gate.
 
@@ -171,19 +216,30 @@ copy) of:
    `swap_rollover3days`, each with `captured_utc`.
    - It is append-only in the ops DB (aggregates only: no account identifiers in anything published).
    - It starts with the engine deploy and runs through Stage 0.
-4. **Quant ruling on swap for history rows** (quant-reviewer, before the first capture, due 2026-12-04). The card
-   charges "FX/XAG swap per side per rollover from the broker's symbol swap spec captured point in time". But captures
-   start in 2026-12, and the learn and confirm rows are 2010-2025-09. A 2026 swap spec applied to 2010-2021
-   (near-zero-rate) rows is not point in time. The options:
-   - (a) Charge the earliest capture to every history row. This is simple, and wrong in sign and size across rate
-     regimes.
-   - (b) Swap = the as-of policy-rate differential (point in time, `available_utc`) plus the broker's markup, measured
-     as the capture minus the differential at capture time. This needs a policy-rate series per currency.
-   - (c) Charge the worse side's captured swap on both sides as a conservative constant. This can only raise cost.
+4. **Swap for history rows: quant ruling F9 (2026-11-28), recorded here and in the card before the first capture.**
+   Option (b) is adopted. (a) is rejected, and so is (c) as a charge, because (c) undercharges the 2023-24 confirm
+   rows; (c) is reported as a sensitivity only. Ruling (verbatim):
 
-   **My recommendation: (b) as the charge, with (c) reported as a sensitivity.** If (b)'s rate series cannot be
-   assembled by 2026-12-30, use (c), stated as such. Not (a). The ruling is recorded in the card before the first
-   capture is read.
+   "History rows (2010-01..2025-09): swap per side per night = max(0, d_side(t) + m_{broker,inst,side}) in bp of entry,
+   where: d_side = (r_quote − r_base)/360 × 1e4 for a long (the reverse for a short); r = each currency's policy rate as
+   of `decision_utc`, by `asof_join` on `available_utc` (the decision announcement instant, UTC; step function, never
+   revised), applied to every rollover in (decision_utc, horizon_end_utc]; m = the maximum over the captures from the
+   first capture to the day before the P3 freeze of (captured charge in bp a night − d_side at the capture), floored at
+   0. The capture-time rates are a separate scalar file, never joined to research rows. Triple on the broker's
+   `swap_rollover3days`, the worse broker, a credit never banked. The rate table ends 2025-09-30 (holdout sealed). The
+   40-day staleness refusal does not apply to the step-function rate table; coverage-end ≥ decision does. Forward rows
+   (from 2026-12) use the captured spec as-of `captured_utc`, as `fx_swap_bp` does now. The decision-time cost(x) uses
+   the same as-of rate. (c) is reported as a sensitivity, never charged."
+
+   - Confirm rows use the same function.
+   - Sources (free, point in time, from official decision releases): USD FRED DFEDTARU; EUR FRED ECBDFR; GBP BoE
+     IUDBEDR; JPY the BoJ decision table (−0.10 % announced 2016-01-29, effective 2016-02-16; then 0-0.1 %, 0.25 %,
+     0.5 %), cross-checked against STRDCLUCON; AUD RBA F1.1; NZD RBNZ B2 OCR; CAD BoC Valet V39079; CHF the midpoint
+     of the SNB 3M CHF LIBOR target range until 2019-06-13, then the SNB policy rate. No OECD or FRED monthly averages.
+   - Tests: truncation at 2025-09-30; a hand-computed 2015 EURUSD long and a 2023 USDJPY short; a credit row charges 0;
+     any row on or after 2025-10 is refused.
+   - **P3 now also requires this rate table** (backlog 286, data-engineer). If (b) is not assembled by 2026-12-30, P3
+     fails and Stage 0 waits, up to the 2027-01-31 kill date.
 
 ## 6. What the engine change must implement (implementer brief)
 
@@ -232,7 +288,10 @@ offset in `magic.py`, a `cm-fx-` id (≤ 29 characters) and `basis: scheduled_fx
 - A market close at vantage must fill at market, not at a level. Verify this on the first probes; it is reported as a
   count.
 
-**7. Record.** One `ProbeRecord` per order in `cost_probes`, with:
+**7. Record.** Gold isolation first (F1): `cost_of_record.frames` keeps only probes with `symbol in (None,
+'XAUUSD')`, and every `realised_costs.read_rows` consumer likewise. Failing test first: a `basis: scheduled_fx_u2`
+EURUSD probe in the window leaves every gold cell byte-identical. Then one `ProbeRecord` per order in `cost_probes`,
+with:
 
 - `symbol` set;
 - `spread_usd` in the symbol's price units;
@@ -246,16 +305,29 @@ A refused or missed slot gets a skip row with its reason, and its quoted spread 
 
 **9. Hard end.** No send at or after 2026-12-23 00:00 UTC.
 
-**10. Counts-only report.** Scheduled, sent, filled, refused by reason, missed by reason and dropped exits, per
-instrument × broker × session × day. It shows no cost values before the cut-off.
+**10. Counts-only surfaces (F2).** Scheduled, sent, filled, refused by reason, missed by reason and dropped exits, per
+instrument × broker × session × day. Until 2026-12-23 00:00 UTC, shadow_report, trades_ledger, activity, labs and
+daily_review show `scheduled_fx_u2` rows as counts only (no price, spread, slip, commission or P&L): one test per
+surface. The section 1 values are frozen after the first slot (test), and a safety halt ends the stream for good
+(test: no resume path).
+
+**10a. Caps record (F3).** Before the first slot, write the pre-first-slot table in section 1 (both accounts, including
+the probe-only symbols; a probe-only symbol's cap is the other broker's cap in pips) with the config sha256. Allowance
+and margin refusals record the quoted spread.
 
 **11. Builder** (`fx_cost_cells` / `srv3_cost_record` on PR #527). The microstructure-researcher's lane does this, not
 the engine lane:
 
 - read the stream's rows from `cost_probes` (`purpose: cost_measurement`, `basis: scheduled_fx_u2`, FX10 symbol) with
   tf `probe`, so they feed the session `all` cells only, and an exit source `quote`;
-- apply the spread-refusal imputation of section 2;
-- `FILL_CUTOFF_UTC` = 2026-12-23 00:00 UTC.
+- apply the refusal imputation of section 2 (spread, allowance, margin), with the F4 tests (29 fills + 5 imputed is
+  neither trusted nor a member; an imputed refusal never lowers `charged`);
+- `FILL_CUTOFF_UTC` = 2026-12-23 00:00 UTC; `main` and `build_record` refuse while the wall clock is before it, and
+  `lo` is None, each with a test (F2);
+- F5: probe fills set only ECR ub95 and slip_x; `OVERSHOOT_BP` on every stop exit; probe exit quotes only within
+  `PROBE_QUOTE_MAX_LAG_S`; the "demo-measured" statement; the test FX `cost_b` = k × `OVERSHOOT_BP`;
+- F6: the `probe` tf cell is never selected (test); a trusted tf cell charges max(tf cell, session `all`); fix the
+  stale `fx_cost_cells.py` docstring ("FX has no scheduled cost probes"; the 2026-12-12 cut-off).
 
 ## 7. Integrity
 
@@ -272,5 +344,6 @@ the engine lane:
 ## Sign-off
 
 - Research director: 2026-11-28.
-- Quant-reviewer: pending (required before any probe).
+- Quant-reviewer: review of eb365b4c, CHANGES F1-F8 and the swap ruling F9, applied 2026-11-28 (verbatim where given;
+  F7 no change). Re-verify pending.
 - Trading-safety-reviewer: pending, on the engine change (section 6), before deploy.
