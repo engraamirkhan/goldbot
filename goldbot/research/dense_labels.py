@@ -9,8 +9,9 @@ The label (`LabelSpec`, id dl-v1; a change is a new spec id and re-keys the cach
   move of that exit-side quote from its own value at entry, in units of the template's initial risk. With a constant
   spread it is the mid move exactly; the spread is charged once in cost(x), never in the label.
 - Base distance d0 = ATR14 (Wilder, mid, the tf's decision bars, known at the decision bar's close) x sqrt(H / h_ref)
-  with h_ref = H until D-4 freezes it (factor 1), floored at 1.5 x the median 1m true range of the 1,440 minutes up
-  to the decision ("session-median TR").
+  (the W2-2 formula), floored at 1.5 x the median 1m true range of the 1,440 minutes up to the decision
+  ("session-median TR"). D-4 froze h_ref = H per tf (record xt-v1, `exit_freeze()`): the factor is exactly 1, so k is
+  the ATR14_tf multiple the card's table states.
 - Templates: stop / target / trail in units of d0; R = the template's own initial stop distance (T0 has none: R = d0).
   A stop order (initial, break-even or trailed) is `barrier_hit` "stop" (`stop_moved` marks a moved one); a gapped
   stop fills at the minute's open (adverse); a gapped target fills at the target (never a gap gain); a minute that
@@ -74,7 +75,7 @@ from goldbot.data.daily import session_date
 from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features import build_features
-from goldbot.features.registry import column_lookback
+from goldbot.features.registry import CLOSE_ONLY_COLUMNS, column_lookback
 from goldbot.research import decision_cost as DC
 from goldbot.research import feature_store as F
 from goldbot.research import windows as WN
@@ -121,7 +122,7 @@ class LabelSpec(FrozenRecord):
     h_by_tf: dict[str, int]
     clip_r: float
     atr_n: int
-    h_ref: str                      # "H": sqrt(H / h_ref) = 1 until D-4 freezes the W2-2 h_ref
+    h_ref: dict[str, int]           # W2-2 reference hold per tf, seconds: d0 = ATR14 x sqrt(H / h_ref) (D-4: = H)
     floor_tr_mult: float
     floor_window_min: int
     sides: tuple[int, ...]
@@ -132,14 +133,67 @@ class LabelSpec(FrozenRecord):
     feature_spec: str               # the fs-v1 spec hash the rows come from
 
 
-SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=10.0, atr_n=14, h_ref="H",
+SPEC = LabelSpec(spec_id="dl-v1", templates=TEMPLATES, h_by_tf=H_BY_TF, clip_r=10.0, atr_n=14, h_ref=dict(H_BY_TF),
                  floor_tr_mult=1.5, floor_window_min=1_440, sides=(1, -1), judged_head="T2", lookback_bars=100,
                  ctx_lookback_days=140, rho_day=0.25, feature_spec=F.spec_hash())
 
 # Card ruling 5 / test 21: label VALUES are read only under a tiers file whose sha256 ADR 0085 A4 records. A member
 # must appear in full on an ADR 0085 recording line (test). Recorded 2026-11-26 (quant R-b on PR #472): the D-1 served
 # file tiers_served_r11-v2.1.csv. It unseals learn-window reads only: confirm and test_old need a booked read id (C-1),
-# and w2-point / h_ref = H rows are not gate reads until D-3 and D-4 freeze.
+# and w2-point rows are not gate reads until D-3 freezes the ub95 cost of record (D-4 froze the exits: xt-v1).
+
+
+class ExitFreeze(FrozenRecord):
+    """sr-v3 D-4 (card 2.1 "Templates T0-T7", work item D-4; W3-1 / RL-1, one definition repo-wide): the exit
+    geometry every dense label and the RL-1 exit bandit share. Frozen label-blind from the card's own table, before any
+    label value was read for a choice: no outcome, return or barrier statistic informed it."""
+    freeze_id: str
+    templates: tuple[Template, ...]
+    h_by_tf: dict[str, int]
+    h_ref: dict[str, int]
+    atr_n: int
+    floor_tr_mult: float
+    floor_window_min: int
+    clip_r: float
+    sides: tuple[int, ...]
+    grid_time_exit_tfs: tuple[str, ...]     # sorted GRID_TIME_EXIT_TFS
+    close_to_close: tuple[str, ...]         # sorted CLOSE_TO_CLOSE
+    behaviour_sha: str                      # `_behaviour_sha`: the exit mechanics on a fixed synthetic set (quant 1, #514)
+
+
+_GEOMETRY = ("templates", "h_by_tf", "h_ref", "atr_n", "floor_tr_mult", "floor_window_min", "clip_r", "sides")
+
+
+def _raw_geometry(spec: LabelSpec) -> dict[str, Any]:
+    raw = {k: getattr(spec, k) for k in _GEOMETRY}
+    raw["templates"] = [t.model_dump(mode="json") if isinstance(t, Template) else t for t in raw["templates"]]
+    raw["sides"] = list(raw["sides"]) if isinstance(raw["sides"], tuple | list) else raw["sides"]
+    return raw
+
+
+def exit_freeze(spec: LabelSpec = SPEC) -> ExitFreeze:
+    """The exit geometry and mechanics a label spec carries, as an `ExitFreeze` record named xt-v1."""
+    return ExitFreeze(freeze_id="xt-v1", templates=spec.templates, h_by_tf=spec.h_by_tf, h_ref=spec.h_ref,
+                      atr_n=spec.atr_n, floor_tr_mult=spec.floor_tr_mult, floor_window_min=spec.floor_window_min,
+                      clip_r=spec.clip_r, sides=spec.sides, grid_time_exit_tfs=tuple(sorted(GRID_TIME_EXIT_TFS)),
+                      close_to_close=tuple(sorted(CLOSE_TO_CLOSE)), behaviour_sha=_behaviour_of(spec))
+
+
+def exit_freeze_hash(spec: LabelSpec = SPEC) -> str:
+    """sha256 of the canonical JSON of the spec's exit geometry (parameters, sides, the grid time-exit and
+    close-to-close sets) and of the exit mechanics' behaviour (`_behaviour_sha`, quant 1 on #514). A spec built with a
+    malformed field (`model_copy` does not validate) hashes its raw fields, so it can never match the frozen value."""
+    blob = {"freeze_id": "xt-v1", **_raw_geometry(spec), "grid_time_exit_tfs": sorted(GRID_TIME_EXIT_TFS),
+            "close_to_close": sorted(CLOSE_TO_CLOSE), "behaviour_sha": _behaviour_of(spec)}
+    return hashlib.sha256(json.dumps(blob, sort_keys=True, default=str).encode()).hexdigest()
+
+
+# D-4, 2026-11-27 (card rev 10 amendment, re-hashed with the mechanics after the quant review of #514): the sha256 of
+# xt-v1. A gate read needs rows stamped with it and a spec that hashes to it (`gate_status`); the card records the
+# same value, so the freeze changes only with a card amendment and a new id. The record is `exit_freeze()`, computed
+# on call (the behaviour sha is cached); no module `__getattr__`, so mypy keeps checking every attribute (LOW-2, #514).
+EXIT_FREEZE_SHA256 = "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826"
+
 RECORDED_TIERS_SHA256: frozenset[str] = frozenset({
     "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",   # tiers_served_r11-v2.1.csv (D-1, #467)
 })
@@ -149,7 +203,7 @@ ROW_KEYS = ("instrument", "tf", "phase", "group_id", "decision_utc", "available_
             "bid_only")
 SKELETON = (*ROW_KEYS, "side", "template", "entry_utc", "entry", "risk_usd", "base_dist", "horizon_end_utc",
             "max_hold_s", "label_available_utc", "label_ok", "quote_basis", "tier", "usable", "cost_rt_bp",
-            "cost_version", "spec_id")
+            "cost_version", "spec_id", "exit_freeze_sha")
 LABEL_VALUES = ("gross_r_raw", "gross_r", "clipped", "barrier_hit", "label_exit_utc", "stop_moved")
 COLUMNS = (*SKELETON, *LABEL_VALUES)
 
@@ -368,12 +422,26 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     phase = int(rows["phase"].iloc[0]) if len(rows) else 0
     holdout_guard.refuse(rows, what="dl-v1 rows", col="decision_utc")
     bars = decision_bars(m, tf, phase, spec) if bars is None else bars
+    out = _label_core(m, rows, tf, bars, spec)
+    out["exit_freeze_sha"] = exit_freeze_hash(spec)          # provenance: the exit geometry the row was built under
+    return _typed(out[list(COLUMNS)])
+
+
+def _base_distance(atr: np.ndarray, floor: np.ndarray, tf: str, spec: LabelSpec) -> np.ndarray:
+    """d0 (card 2.1, W2-2): ATR14 x sqrt(H / h_ref), THEN the floor; fmax: a NaN floor (warm-up) leaves the ATR leg.
+    xt-v1 has h_ref = H, so the factor is exactly 1."""
+    return np.fmax(atr * float(np.sqrt(spec.h_by_tf[tf] / spec.h_ref[tf])), floor)
+
+
+def _label_core(m: Minutes, rows: pd.DataFrame, tf: str, bars: pd.DataFrame, spec: LabelSpec) -> pd.DataFrame:
+    """`label_rows` without the guards and the `exit_freeze_sha` stamp (the behaviour sha measures it, so it cannot
+    call `exit_freeze_hash`): every column of `COLUMNS` but the stamp."""
     dec = _ns(rows["decision_utc"])
     bi = np.searchsorted(bars["close_ns"].to_numpy(), dec, side="right") - 1
     atr = np.where(bi >= 0, bars["atr"].to_numpy()[np.clip(bi, 0, None)], np.nan)
     eh = entry_and_horizon(m, rows, tf, bars["close_ns"].to_numpy(), spec)
     floor = m.floor_at(dec)
-    d0 = np.fmax(atr, floor)                                     # fmax: a NaN floor (warm-up) leaves the ATR
+    d0 = _base_distance(atr, floor, tf, spec)
     ok = eh["ok"] & np.isfinite(d0) & (d0 > 0) & np.isfinite(atr)
     e, z = eh["e"], eh["z"]
     idx = np.flatnonzero(ok)
@@ -414,7 +482,7 @@ def label_rows(m: Minutes, rows: pd.DataFrame, tf: str, *, bars: pd.DataFrame | 
     out["cost_rt_bp"] = DC.RT_BP
     out["cost_version"] = "w2-point"
     out["spec_id"] = spec.spec_id
-    return _typed(out[list(COLUMNS)])
+    return out
 
 
 def _typed(df: pd.DataFrame) -> pd.DataFrame:
@@ -426,7 +494,7 @@ def _typed(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = df[c].astype(np.int64)
     for c in ("instrument", "tf", "source", "template", "quote_basis", "tier", "cost_version", "spec_id",
-              "barrier_hit"):
+              "barrier_hit", "exit_freeze_sha"):
         if c in df.columns:
             df[c] = df[c].astype(str)
     return df.reset_index(drop=True)
@@ -438,8 +506,11 @@ def months_between(a: pd.Series, b: pd.Series) -> tuple[np.ndarray, np.ndarray]:
             np.asarray(session_date(b).to_period("M").astype(str)))
 
 
-# card 3.1: the column sets every count is reported for (quant C-3 / R-a); `side` reads no market data
-CORE12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "atr_ratio_14_100", "er_30", "bb_z_20", "ret_16",
+# card 3.1: the column sets every count is reported for (quant C-3 / R-a); `side` reads no market data. Card rev 8
+# (quant ruling 2026-11-26, label-blind, before any sr-v3 label read): "core-12 position 4 is `rv_ratio` (replaces
+# `atr_ratio_14_100`, which moves to the rest of P30 in its 3.1 position)": its 810-bar range lookback left no A-graded
+# gold learn rows at 4h/1d/1w; `rv_ratio` is its close-only regime twin (ADR 0104 R-a). One substitution only.
+CORE12: tuple[str, ...] = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16",
                            "ret_96", "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
 COST8: tuple[str, ...] = ("em_atr_cost", "em_yz_4_cost", "em_yz_16_cost", "em_yz_48_cost", "spread_atr",
                           "spread_rel_median_48", "tick_count_z_48", "tick_vol_ratio_20")
@@ -493,17 +564,33 @@ def input_lookback(tf: str, columns: Sequence[str], spec: LabelSpec = SPEC) -> p
     return pd.Timedelta(seconds=round(t))
 
 
+def close_only(column: str) -> bool:
+    """R-a: the column (a d1_ context column by its base column) is declared close-only in the registry."""
+    base = column[len(CONTEXT) + 1:] if column.startswith(f"{CONTEXT}_") else column
+    return base in CLOSE_ONLY_COLUMNS
+
+
 def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, columns: Sequence[str],
                  proxy_source: str | None = None, spec: LabelSpec = SPEC) -> pd.DataFrame:
-    """ADR 0104 4: a row is usable only if every session month its served inputs read (decision - `input_lookback`
-    of `columns`), its decision month and its label horizon are usable under the template rule (intraday: A /
-    A-consistent; 1d/1w barrier: A / A-consistent, T0 also B). `tier` = the worst tier over those months. The tiers
-    must grade the rows' own source (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the
-    graded one; any other source is `ungraded` and never usable."""
+    """ADR 0104 4 with rule R-a (quant ruling on PR #486): "A column declared close-only in the registry
+    (`CLOSE_ONLY_COLUMNS`) accepts lookback months graded B. Every other column needs A or A-consistent over its
+    lookback. The label window (decision month through horizon end) needs A or A-consistent for barrier templates, and
+    also B for T0 at 1d/1w as before. C, F, P and ungraded months are never usable. A row's usability is the
+    conjunction over its requested columns."
+    Two spans per row: strict = [decision - `input_lookback` of the columns that are not close-only, horizon end]
+    under the template rule; close = [decision - `input_lookback` of the close-only columns, decision] at A /
+    A-consistent / B. `tier` = the worst tier over every month the row reads (reporting). The tiers must grade the
+    rows' own source (`<source>:<instrument>` = tiers.key, quant C3) unless `proxy_source` names the graded one; any
+    other source is `ungraded` and never usable."""
     if labels.empty:
         return labels.assign(tier=pd.Series(dtype=str), usable=pd.Series(dtype=bool))
     out = labels.copy()
-    tier = np.full(len(out), "ungraded", dtype=object)
+    n = len(out)
+    names = {v: k for k, v in F.TIER_RANK.items()}
+    worst_strict = np.full(n, F.TIER_RANK["ungraded"])
+    worst_close = np.zeros(n, dtype=int)                    # no close-only column: nothing extra to read
+    strict_cols = [c for c in columns if not close_only(c)]
+    close_cols = [c for c in columns if close_only(c)]
     if tiers is not None:
         inst = str(out["instrument"].iloc[0])
         src = out["source"].astype(str)
@@ -511,23 +598,31 @@ def attach_tiers(labels: pd.DataFrame, tiers: F.Tiers | None, *, columns: Sequen
         graded = (key == tiers.key(inst)) | (proxy_source is not None and proxy_source == tiers.key(inst))
         if graded.any():
             g = out[graded]
-            lb = {t: input_lookback(t, columns, spec) for t in g["tf"].unique()}
-            start = pd.DatetimeIndex(g["decision_utc"]) - pd.to_timedelta(g["tf"].map(lb).to_numpy())
-            a, b = months_between(pd.Series(start), g["horizon_end_utc"])
-            lo, hi = min(a.min(), b.min()), max(a.max(), b.max())
-            allm = pd.period_range(lo, hi, freq="M").astype(str)
-            ranks = np.array([F.TIER_RANK.get(x, 6) for x in tiers.tier_of(inst, list(allm))])
-            pos = {mm: i for i, mm in enumerate(allm)}
-            names = {v: k for k, v in F.TIER_RANK.items()}
-            worst_of = {(x, y): names[int(ranks[pos[x]:pos[y] + 1].max())] for x, y in set(zip(a, b, strict=True))}
-            tier[graded] = [worst_of[(x, y)] for x, y in zip(a, b, strict=True)]
-    out["tier"] = tier.astype(str)
+            dec = pd.DatetimeIndex(g["decision_utc"])
+
+            def span_worst(cols: Sequence[str], end: pd.Series) -> np.ndarray:
+                lb = {t: input_lookback(t, cols, spec) for t in g["tf"].unique()}
+                start = dec - pd.to_timedelta(g["tf"].map(lb).to_numpy())
+                a, b = months_between(pd.Series(start), end)
+                allm = pd.period_range(min(a.min(), b.min()), max(a.max(), b.max()), freq="M").astype(str)
+                ranks = np.array([F.TIER_RANK.get(x, 6) for x in tiers.tier_of(inst, list(allm))])
+                pos = {mm: i for i, mm in enumerate(allm)}
+                w = {(x, y): int(ranks[pos[x]:pos[y] + 1].max()) for x, y in set(zip(a, b, strict=True))}
+                return np.array([w[(x, y)] for x, y in zip(a, b, strict=True)], dtype=int)
+            mask = np.asarray(graded, dtype=bool)
+            worst_strict[mask] = span_worst(strict_cols, g["horizon_end_utc"])
+            if close_cols:
+                worst_close[mask] = span_worst(close_cols, g["decision_utc"])
+    out["tier"] = pd.Series([names[int(x)] for x in np.maximum(worst_strict, worst_close)], index=out.index, dtype=str)
+    strict_name = pd.Series([names[int(x)] for x in worst_strict], index=out.index)
+    close_name = pd.Series([names[int(x)] for x in worst_close], index=out.index)
     is_daily = {t: tf_seconds(t) >= DAY_S for t in out["tf"].unique()}
     daily = out["tf"].map(is_daily).to_numpy(dtype=bool)
     barrier = ~out["template"].isin(CLOSE_TO_CLOSE).to_numpy()
-    allowed_a = out["tier"].isin(F.INTRADAY_TIERS).to_numpy()
-    allowed_b = out["tier"].isin(F.DAILY_TIERS).to_numpy()
-    out["usable"] = out["label_ok"].to_numpy(bool) & np.where(daily & ~barrier, allowed_b, allowed_a)
+    allowed_a = strict_name.isin(F.INTRADAY_TIERS).to_numpy()
+    allowed_b = strict_name.isin(F.DAILY_TIERS).to_numpy()
+    close_ok = close_name.isin(F.DAILY_TIERS).to_numpy()
+    out["usable"] = out["label_ok"].to_numpy(bool) & np.where(daily & ~barrier, allowed_b, allowed_a) & close_ok
     return out
 
 
@@ -661,7 +756,18 @@ VALUE_KEYS = ("decision_utc", "side", "template")       # alignment columns repe
 def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: str, year: int, phase: int,
                     parts: Mapping[str, Any], spec: LabelSpec = SPEC) -> str:
     """Atomic: `<key>.skeleton.parquet` (the outcome-blind `SKELETON` columns), `<key>.values.parquet` (the label
-    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`."""
+    values, `LABEL_VALUES`, row-aligned; only `load_labels` opens it, code review LOW-2) and `<key>.json`.
+    The manifest's `exit_freeze_sha` is the rows' own stamp, never measured again here (code review LOW-1 on #516: a
+    one-off failure in `label_rows` would otherwise sit under a good manifest stamp and `partition_exists` would skip
+    the partition forever). The rows must carry exactly one stamp, else ValueError; an empty partition has no row to
+    stamp and records the spec's hash."""
+    if "exit_freeze_sha" not in labels.columns:
+        raise ValueError("write_partition: the rows carry no exit_freeze_sha stamp (build them with label_rows)")
+    stamps = labels["exit_freeze_sha"].astype(str).unique()
+    if len(stamps) > 1:
+        raise ValueError(f"write_partition: the rows carry {len(stamps)} exit_freeze_sha stamps; one partition is built "
+                         "under one exit geometry")
+    stamp = str(stamps[0]) if len(stamps) else exit_freeze_hash(spec)
     key = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)
     d = _part_dir(cache, spec, instrument, tf, year, phase)
     d.mkdir(parents=True, exist_ok=True)
@@ -672,6 +778,7 @@ def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: s
         labels[cols].to_parquet(tmp, index=False, compression="zstd")
         os.replace(tmp, p)
     man = {**parts, "key": key, "spec_id": spec.spec_id, "spec_hash": spec_hash(spec), "code_hash": code_hash(),
+           "exit_freeze_sha": stamp,
            "instrument": instrument, "tf": tf, "year": year, "phase": phase, "rows": len(labels),
            "bars": int(labels["decision_utc"].nunique()) if len(labels) else 0,
            "sealed": True, "built_utc": str(pd.Timestamp.now(tz="UTC"))}
@@ -683,9 +790,18 @@ def write_partition(labels: pd.DataFrame, *, cache: Path, instrument: str, tf: s
 
 def partition_exists(cache: Path, instrument: str, tf: str, year: int, phase: int, parts: Mapping[str, Any],
                      spec: LabelSpec = SPEC) -> bool:
+    """Built: all three files exist AND the manifest records the xt-v1 stamp. `label_key` does not carry the stamp,
+    so a partition built while the exit mechanics were not measurable (or not xt-v1) is rebuilt, never skipped
+    (code review LOW-1 on #514)."""
     stem = label_key(parts, instrument=instrument, tf=tf, year=year, phase=phase, spec=spec)[:24]
     d = _part_dir(cache, spec, instrument, tf, year, phase)
-    return all((d / f"{stem}{x}").exists() for x in (".skeleton.parquet", ".values.parquet", ".json"))
+    if not all((d / f"{stem}{x}").exists() for x in (".skeleton.parquet", ".values.parquet", ".json")):
+        return False
+    try:
+        man = json.loads((d / f"{stem}.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(man, dict) and man.get("exit_freeze_sha") == EXIT_FREEZE_SHA256
 
 
 def readable(tiers: F.Tiers | None) -> bool:
@@ -905,13 +1021,124 @@ def load_labels(cache: Path, *, procedure: str, ledger: Path, instrument: str, t
 def gate_status(labels: pd.DataFrame, spec: LabelSpec = SPEC) -> dict[str, Any]:
     """Quant A4 on PR #482 (verbatim): "`load_labels` sets `meta['gate_eligible'] = False` whenever any returned row
     has `cost_version == 'w2-point'` or the spec's `h_ref == 'H'`, with `meta['gate_block']` naming why. Any gate or
-    evaluator read refuses `gate_eligible` False." (ADR 0085 A4: not gate reads until D-3 and D-4 freeze.)"""
+    evaluator read refuses `gate_eligible` False." (ADR 0085 A4: not gate reads until D-3 and D-4 freeze.)
+    D-4 froze the exits as xt-v1 (2026-11-27): the D-4 condition is now "not xt-v1": the spec does not hash to
+    `EXIT_FREEZE_SHA256`, or any row lacks the `exit_freeze_sha` stamp or carries another (quant 2 on #514: the
+    rows' provenance decides, not only the spec argument). The old h_ref = H placeholder fails both."""
     block = []
     if len(labels) and (labels["cost_version"].astype(str) == "w2-point").any():
         block.append("cost_version w2-point: the ub95 cost of record per cell is not frozen (D-3)")
-    if spec.h_ref == "H":
-        block.append("h_ref = H: the exit templates' h_ref is not frozen (D-4)")
+    if exit_freeze_hash(spec) != EXIT_FREEZE_SHA256:
+        block.append(f"exit templates / h_ref are not the D-4 freeze xt-v1 (sha256 {EXIT_FREEZE_SHA256[:12]}): "
+                     "not a frozen exit geometry (D-4)")
+    if len(labels) and ("exit_freeze_sha" not in labels.columns
+                        or (labels["exit_freeze_sha"].astype(str) != EXIT_FREEZE_SHA256).any()):
+        block.append(f"label rows were not built under the D-4 freeze xt-v1 (sha256 {EXIT_FREEZE_SHA256[:12]}): "
+                     "missing or other exit_freeze_sha (D-4)")
     return {"gate_eligible": not block, "gate_block": block}
+
+
+# --------------------------------------------------------------------------------------------- xt-v1 behaviour (D-4)
+def _behaviour_frame(rows: Sequence[tuple[float, float, float, float]], start: str) -> pd.DataFrame:
+    """Consecutive 1m minutes from bid (open, high, low, close) tuples; the ask is the bid + 0.1."""
+    b = np.asarray(rows, dtype=float)
+    ts = pd.date_range(start, periods=len(b), freq="1min", tz="UTC")
+    return pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1),
+                         "bid_open": b[:, 0], "bid_high": b[:, 1], "bid_low": b[:, 2], "bid_close": b[:, 3],
+                         "ask_open": b[:, 0] + .1, "ask_high": b[:, 1] + .1, "ask_low": b[:, 2] + .1,
+                         "ask_close": b[:, 3] + .1, "tick_count": 10.0, "spread_mean": .1, "spread_max": .1,
+                         "source": "synthetic", "bid_only": False})
+
+
+# six 6-minute blocks, entry at each block's first open (100), d0 = 1: a both-touch minute, a gapped stop, a gapped
+# target, a trail trigger, a break-even trigger, a plain time exit
+_FP_BLOCKS: tuple[tuple[tuple[float, float, float, float], ...], ...] = (
+    ((100, 100.3, 99.8, 100.1), (100.1, 101.5, 98.8, 100), *[(100, 100.1, 99.9, 100)] * 4),
+    ((100, 100.2, 99.7, 99.9), (98.0, 98.2, 97.8, 98.1), *[(98.1, 98.2, 98.0, 98.1)] * 4),
+    ((100, 100.4, 99.8, 100.2), (103.5, 103.8, 103.2, 103.6), *[(103.6, 103.7, 103.5, 103.6)] * 4),
+    ((100, 100.5, 99.9, 100.4), (100.4, 101.8, 100.3, 101.7), (101.7, 103.0, 101.6, 102.9),
+     (102.9, 102.95, 101.5, 101.6), (101.6, 101.7, 101.4, 101.5), (101.5, 101.6, 101.4, 101.5)),
+    ((100, 100.6, 99.8, 100.5), (100.5, 101.2, 100.4, 101.1), (101.1, 101.15, 99.7, 99.8),
+     *[(99.8, 99.9, 99.7, 99.8)] * 3),
+    ((100, 100.3, 99.8, 100.1), (100.1, 100.4, 99.9, 100.2), (100.2, 100.5, 100.0, 100.3),
+     *[(100.3, 100.4, 100.2, 100.3)] * 3),
+)
+
+
+def _path_frame() -> pd.DataFrame:
+    """A smooth deterministic minute path 2015-02-23..2015-03-13 with the FX weekend gaps (Fri 21:00 to Sun 22:00 UTC
+    absent): decision bars, the TR floor and the horizons (15m across a weekend, 1d on the feature-day grid)."""
+    ts = pd.date_range("2015-02-23", "2015-03-13 20:59", freq="1min", tz="UTC")
+    wd, hr = ts.dayofweek, ts.hour
+    ts = ts[~((wd == 5) | ((wd == 4) & (hr >= 21)) | ((wd == 6) & (hr < 22)))]
+    i = np.arange(len(ts), dtype=float)
+    c = 1200 + 3 * np.sin(i / 97) + 0.002 * i + 0.5 * np.sin(i / 7.3)
+    o = np.concatenate(([c[0]], c[:-1]))
+    w = 0.15 + 0.1 * np.abs(np.sin(i / 3.1))
+    rows = np.column_stack([o, np.maximum(o, c) + w, np.minimum(o, c) - w, c])
+    f = _behaviour_frame([tuple(r) for r in rows], "2015-02-23")
+    f["ts_utc"], f["visible_at"] = ts, ts + pd.Timedelta(minutes=1)
+    return f
+
+
+def _r(x: Any) -> list[Any]:
+    a = np.asarray(x)
+    return list(np.round(a.astype(float), 6).tolist()) if a.dtype.kind == "f" else list(a.astype(np.int64).tolist())
+
+
+def _behaviour_of(spec: LabelSpec) -> str:
+    """The behaviour sha of the spec's mechanics, or "unmeasurable:<error>" when they cannot run: never the frozen
+    value. The failure is caught HERE, outside the cache (code review LOW-1 on #514): a transient error is not
+    remembered for the process; the next call measures again."""
+    key = {k: v for k, v in _raw_geometry(spec).items() if k not in ("h_ref", "clip_r")}
+    try:
+        return _behaviour_sha(json.dumps(key, sort_keys=True, default=str))
+    except Exception as exc:  # any failure is a non-frozen geometry, never an exception inside a gate check
+        log.warning("xt-v1 behaviour not measurable: %s: %s", type(exc).__name__, exc)
+        return f"unmeasurable:{type(exc).__name__}"
+
+
+@lru_cache(maxsize=8)
+def _behaviour_sha(key: str) -> str:
+    """sha256 of the exit mechanics' outputs on a fixed synthetic set (quant 1 on #514): `first_passage` for every
+    template on both sides' quotes (`_quotes`) over `_FP_BLOCKS`; `decision_bars` (close, ATR) and `floor_at` at 15m
+    and 1d; `entry_and_horizon` at 15m (across the weekend gaps) and 1d (the grid time exit). Raises when the
+    mechanics cannot run (`_behaviour_of` turns that into "unmeasurable", uncached). Only successes are cached, per
+    geometry; `_behaviour_sha.cache_clear()` re-measures."""
+    raw = json.loads(key)
+    spec = SPEC.model_copy(update={**raw, "templates": tuple(Template(**t) for t in raw["templates"]),
+                                   "sides": tuple(raw["sides"])})
+    out: dict[str, Any] = {}
+    mf = Minutes(_behaviour_frame([r for b in _FP_BLOCKS for r in b], "2015-03-04 10:00"), spec)
+    starts = np.cumsum([0, *[len(b) for b in _FP_BLOCKS[:-1]]]).astype(np.int64)
+    ends = starts + np.array([len(b) - 1 for b in _FP_BLOCKS], dtype=np.int64)
+    for side in spec.sides:
+        o, h, lo, c = _quotes(mf, side)
+        for tpl in spec.templates:
+            fp = first_passage(o, h, lo, c, starts, ends, np.ones(len(starts)), tpl)
+            out[f"fp:{side}:{tpl.name}"] = [_r(fp[k]) for k in ("gross", "hit", "exit", "moved")]
+    mp = Minutes(_path_frame(), spec)
+    for tf in ("15m", "1d"):
+        bars = decision_bars(mp, tf, 0, spec)
+        close = bars["close_ns"].to_numpy()
+        out[f"bars:{tf}"] = [_r(close), _r(bars["atr"].to_numpy())]
+        out[f"floor:{tf}"] = _r(mp.floor_at(close))
+        rows = pd.DataFrame({"decision_utc": _to_utc(close)})
+        eh = entry_and_horizon(mp, rows, tf, close, spec)
+        out[f"eh:{tf}"] = [_r(eh[k]) for k in ("e", "z", "end", "ok")]
+    # d0 composition (quant re-verify B on #514): base_dist, risk_usd and gross_r_raw of T2 and T6, both sides, from
+    # `_label_core` at 15m, under the spec and under an h_ref probe (16 x H: factor 1/4) where the floor binds
+    bars = decision_bars(mp, "15m", 0, spec)
+    dec = _to_utc(bars["close_ns"].to_numpy())
+    rows = pd.DataFrame({"instrument": "SYN", "tf": "15m", "phase": 0, "group_id": 0, "decision_utc": dec,
+                         "available_utc": dec, "window_from_utc": dec, "source": "synthetic", "bid_only": False})
+    probe = spec.model_copy(update={"h_ref": {**spec.h_ref, "15m": 16 * spec.h_by_tf["15m"]}})
+    for name, sp in (("spec", spec), ("probe", probe)):
+        lab = _label_core(mp, rows, "15m", bars, sp)
+        lab = lab[lab["template"].isin(["T2", "T6"])]
+        out[f"core:{name}"] = [_r(lab[k].to_numpy()) for k in ("side", "base_dist", "risk_usd", "gross_r_raw")]
+        out[f"core:{name}:templates"] = lab["template"].astype(str).tolist()
+    return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
 
 
 def require_gate_eligible(meta: Mapping[str, Any]) -> None:
@@ -920,9 +1147,9 @@ def require_gate_eligible(meta: Mapping[str, Any]) -> None:
         raise PermissionError(f"dense labels are not a gate read: {meta.get('gate_block') or 'no gate status'}")
 
 
-__all__ = ["CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
+__all__ = ["EXIT_FREEZE_SHA256", "ExitFreeze", "exit_freeze", "exit_freeze_hash", "CACHE", "COLUMN_SETS", "COLUMNS", "booked", "consume", "gate_status", "require_gate_eligible", "column_producers", "input_lookback", "judged_spans",
            "label_key", "learn_end", "RECORDED_TIERS_SHA256", "H_BY_TF", "LABEL_COST_COLS", "LABEL_VALUES", "SKELETON", "SPEC",
-           "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "code_hash",
+           "TEMPLATES", "LabelSpec", "Minutes", "SealedStore", "Template", "attach_tiers", "close_only", "code_hash",
            "decision_bars", "embargo", "entry_and_horizon", "event_index", "first_passage", "iso_reserve",
            "label_rows", "load_labels", "readable", "n_eff", "net_r", "partition_exists", "purge", "skeleton", "spec_hash",
            "uniqueness", "weights", "write_partition"]

@@ -169,10 +169,45 @@ def test_confirm_or_test_old_rows_enter_only_under_a_booked_read_id() -> None:
 def test_holm_adjusts_the_a_b_d_reads_of_one_unit_and_cycle() -> None:
     strong, weak = _bb(0.1), _bb(0.02)
     out = mq.holm_adjust({"seq1": strong, "rl": weak}, group="XAUUSD:15m|2027-01")
-    assert out["seq1"].detail["holm"]["m"] == 2
-    assert out["seq1"].detail["holm"]["p_holm"] == pytest.approx(min(1.0, 2 * strong.detail["p"]))
+    assert out["seq1"].detail["holm"]["m"] == len(mq.BASELINE_REQUIRED)
+    assert out["seq1"].detail["holm"]["p_holm"] == pytest.approx(min(1.0, 3 * strong.detail["p"]))
     assert out["rl"].detail["holm"]["p_holm"] >= out["seq1"].detail["holm"]["p_holm"]
     assert out["seq1"].passed
+
+
+def _at_p(p: float) -> mq.QualityVerdict:
+    """A positive-d beats_baseline read with its bootstrap p set to `p`."""
+    v = _bb(0.1)
+    return mq.QualityVerdict(check=v.check, passed=p <= mq.ALPHA, reasons=[], detail={**v.detail, "p": p})
+
+
+def test_holm_m_is_fixed_at_the_three_baseline_families_and_missing_reads_count_as_p_one() -> None:
+    out = mq.holm_adjust({"A": _at_p(0.01), "B": _at_p(0.03)}, group="XAUUSD:15m|2027-01")
+    assert {v.detail["holm"]["m"] for v in out.values()} == {3}
+    assert out["A"].detail["holm"]["missing"] == 1
+    assert out["A"].detail["holm"]["p_holm"] == pytest.approx(0.03) and out["A"].passed        # 3 x 0.01
+    assert out["B"].detail["holm"]["p_holm"] == pytest.approx(0.06) and not out["B"].passed    # 2 x 0.03
+
+
+def test_a_single_read_at_p_003_adjusted_alone_is_refused_for_serving(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    q = _verdicts("A", tmp_path / "m", repo, p=0.03)
+    assert q[-1].detail["holm"] == {"group": "XAUUSD:15m|2027-01", "m": 3, "missing": 2,
+                                    "p_holm": pytest.approx(0.09)}
+    m = rm.record(**_fields("A", quality=q), root=tmp_path / "m", repo=repo)
+    with pytest.raises(mq.ModelRefused, match="beats_baseline failed"):
+        mq.require_servable(m, lookup=_lookup(tmp_path / "m"))
+
+
+def test_a_baseline_win_adjusted_over_fewer_than_three_reads_is_refused_for_serving(tmp_path: Path) -> None:
+    repo = git_repo(tmp_path / "repo")
+    q = _verdicts("A", tmp_path / "m", repo)
+    v = q[-1]
+    q[-1] = mq.QualityVerdict(check=v.check, passed=True, reasons=[],
+                              detail={**v.detail, "holm": {**v.detail["holm"], "m": 1, "missing": 0}})
+    m = rm.record(**_fields("A", quality=q), root=tmp_path / "m", repo=repo)
+    with pytest.raises(mq.ModelRefused, match="Holm m 1 < 3"):
+        mq.require_servable(m, lookup=_lookup(tmp_path / "m"))
 
 
 # ---------------------------------------------------------------------------------------------- serving rule
@@ -188,7 +223,7 @@ def _seeds_ok(rows: str = RK) -> mq.QualityVerdict:
 
 
 def _verdicts(family: str, root: Path, repo: Path, *, baseline_family: str = "C", beat: bool = True,
-              base_end: pd.Timestamp = T_END, holm: bool = True) -> list[Any]:
+              base_end: pd.Timestamp = T_END, holm: bool = True, p: float | None = None) -> list[Any]:
     model, b, days, hz = _oos(lift=0.1 if beat else 0.0)
     rows = mq.rows_key(model.index)
     out: list[Any] = [_seeds_ok(rows)]
@@ -197,6 +232,8 @@ def _verdicts(family: str, root: Path, repo: Path, *, baseline_family: str = "C"
                          root=root, repo=repo)
         v = mq.beats_baseline(model, b, days, hz, baseline_manifest_id=base.manifest_id, train_end=T_END,
                               fold_keys=FOLDS, trial=7)
+        if p is not None:
+            v = mq.QualityVerdict(check=v.check, passed=True, reasons=[], detail={**v.detail, "p": p})
         out.append(mq.holm_adjust({"m": v}, group="XAUUSD:15m|2027-01")["m"] if holm else v)
     return out
 

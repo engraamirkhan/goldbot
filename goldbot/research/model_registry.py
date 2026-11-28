@@ -26,6 +26,7 @@ import logging
 import os
 import pickle
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -46,6 +47,10 @@ log = logging.getLogger("goldbot.model_registry")
 Status = Literal["challenger", "champion", "previous", "retired"]
 
 
+class RegistryLockTimeout(TimeoutError):
+    """registry.lock was not acquired within the instance's `lock_timeout_s`; nothing was changed."""
+
+
 class ModelEntry(Record):
     version: str
     family: str
@@ -61,52 +66,121 @@ class ModelEntry(Record):
     promoted_utc: UtcTimestamp | None = None
     notes: list[str] = Field(default_factory=list)
     recalibrations: list[dict[str, Any]] = Field(default_factory=list)    # minor versions: only the calibrator changed
-    manifest_id: str | None = None    # run manifest in models/manifests/ (None: a rule model or a pre-manifest fit)
+    manifest_id: str | None = Field(None, pattern=rm._HEX64)    # run manifest in models/manifests/ (None: a rule model or a pre-manifest fit)
     model_family: ModelFamily | None = None    # ADR 0106 decision 3, from the manifest
 
 
 class ModelRegistry:
     """Keyed by agent: every population member (a specialist family + config, see research/population.py) has its own
-    champion, challengers and previous champion. The founder agent of a family is its default configuration."""
+    champion, challengers and previous champion. The founder agent of a family is its default configuration.
 
-    def __init__(self, root: str | Path):
+    Several processes write registry.json (the scheduler, the engine's rule challengers, `rollback-model`) and the
+    first two hold one instance for their life. Every query re-reads the file when it changed on disk, and every
+    change is a load-modify-save under the exclusive lock on <root>/registry.lock (code review MEDIUM on #494: a
+    long-lived instance's save wrote its stale list back and silently undid a rollback)."""
+
+    def __init__(self, root: str | Path, *, lock_timeout_s: float | None = None):
+        """`lock_timeout_s`: how long a change waits for registry.lock before RegistryLockTimeout; None waits as long
+        as it takes (jobs, the CLI). The engine passes a bound: its loop also runs exits (PR #494 round 3)."""
         self.root = Path(root)
+        self.lock_timeout_s = lock_timeout_s
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "registry.json"
         self.manifests = self.root / "manifests"
-        raw = json.loads(self.path.read_text()) if self.path.exists() else []
-        self.entries: list[ModelEntry] = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
+        self._held = False                # this process holds registry.lock (inside `locked` or `_write`)
+        self._entries: list[ModelEntry] = []      # read through `entries`, which re-reads a changed file
+        self._sig: tuple[int, int, int] | None = None
+        self._load()
 
-    @classmethod
-    @contextmanager
-    def locked(cls, root: str | Path) -> Iterator[ModelRegistry]:
-        """The registry loaded under an exclusive lock on <root>/registry.lock, for a load-modify-save that must not
-        lose a concurrent writer's change (code review LOW-1 on #494). flock on POSIX, msvcrt on Windows."""
-        from goldbot.research.windows import _lock_fd, _unlock_fd
-        Path(root).mkdir(parents=True, exist_ok=True)
-        fd = os.open(Path(root) / "registry.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    @property
+    def entries(self) -> list[ModelEntry]:
+        """Every entry, as registry.json holds it now (re-read when another writer changed it). Inside a change
+        (`_write`) the list being changed. PR #494 round 3: jobs read this list directly."""
+        self._fresh()
+        return self._entries
+
+    def _stat(self) -> tuple[int, int, int] | None:
         try:
-            _lock_fd(fd)
+            st = self.path.stat()
+        except FileNotFoundError:
+            return None
+        return st.st_mtime_ns, st.st_size, st.st_ino      # an atomic replace changes the inode
+
+    def _load(self) -> None:
+        sig = self._stat()
+        raw = json.loads(self.path.read_text()) if sig is not None else []
+        self._entries = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
+        self._sig = sig
+
+    def _fresh(self) -> None:
+        """Re-read registry.json when another writer changed it since this instance last read or wrote it."""
+        if self._stat() != self._sig:
+            self._load()
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        from goldbot.research.windows import _lock_fd, _try_lock_fd, _unlock_fd
+        if self._held:                    # re-entrant: a change made inside `locked`
+            yield
+            return
+        fd = os.open(self.root / "registry.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            if self.lock_timeout_s is None:
+                _lock_fd(fd)
+            else:
+                deadline = time.monotonic() + self.lock_timeout_s
+                while not _try_lock_fd(fd):
+                    if time.monotonic() >= deadline:
+                        raise RegistryLockTimeout(f"{self.root / 'registry.lock'} held by another writer for more "
+                                                  f"than {self.lock_timeout_s:g} s; nothing changed")
+                    time.sleep(0.01)
+            self._held = True
             try:
-                yield cls(root)
+                yield
             finally:
+                self._held = False
                 _unlock_fd(fd)
         finally:
             os.close(fd)
 
+    @contextmanager
+    def _write(self) -> Iterator[None]:
+        """One change: under the lock, from the file's current content, saved on success."""
+        with self._lock():
+            self._fresh()
+            try:
+                yield
+            except BaseException:
+                self._load()              # a change that failed half-way leaves nothing behind in memory
+                raise
+            self._save()
+
+    @classmethod
+    @contextmanager
+    def locked(cls, root: str | Path) -> Iterator[ModelRegistry]:
+        """The registry loaded under an exclusive lock on <root>/registry.lock, for a read-check-change sequence that
+        must not interleave with another writer (code review LOW-1 on #494). flock on POSIX, msvcrt on Windows."""
+        reg = cls(root)
+        with reg._lock():
+            reg._load()
+            yield reg
+
     # ------------------------------------------------------------------ queries
     def by_agent(self, agent_id: str, status: Status | None = None) -> list[ModelEntry]:
-        return [e for e in self.entries if e.agent_id == agent_id and (status is None or e.status == status)]
+        self._fresh()
+        return [e for e in self._entries if e.agent_id == agent_id and (status is None or e.status == status)]
 
     def champion(self, agent_id: str) -> ModelEntry | None:
         ch = self.by_agent(agent_id, "champion")
         return ch[-1] if ch else None
 
     def agent_ids(self) -> list[str]:
-        return sorted({e.agent_id for e in self.entries})
+        self._fresh()
+        return sorted({e.agent_id for e in self._entries})
 
     def get(self, version: str) -> ModelEntry:
-        for e in self.entries:
+        self._fresh()
+        for e in self._entries:
             if e.version == version:
                 return e
         raise KeyError(version)
@@ -172,7 +246,8 @@ class ModelRegistry:
     def shadow_models(self) -> dict[str, tuple[str, Any]]:
         """version -> (agent_id, model) for every champion and challenger the serving rule admits: what the shadow
         book paper-trades."""
-        live = [e for e in self.entries if e.status in ("champion", "challenger")]
+        self._fresh()
+        live = [e for e in self._entries if e.status in ("champion", "challenger")]
         served = self._served(live)
         return {e.version: (e.agent_id, served[e.version]) for e in live if e.version in served}
 
@@ -180,10 +255,13 @@ class ModelRegistry:
     def ensure_rule_challenger(self, *, family: str, agent_id: str, now: UtcTimestamp | None = None) -> ModelEntry | None:
         """ADR 0038: a `RuleModel` challenger for a rule agent with no registry entry yet (any status), so it
         shadow-trades; None (nothing written) when the agent has one. No backtest, so the weekly gate never promotes it."""
-        if self.by_agent(agent_id):
+        if self.by_agent(agent_id):       # the usual case on every engine reload: no lock taken
             return None
-        return self.add_challenger(RuleModel(rule=family), family=family, agent_id=agent_id, backtest={}, now=now,
-                                   notes=["rule model (ADR 0038): p = rule fired, uncalibrated; shadow only"])
+        with self._lock():                # RegistryLockTimeout under the engine's bound
+            if self.by_agent(agent_id):   # another writer added it meanwhile
+                return None
+            return self.add_challenger(RuleModel(rule=family), family=family, agent_id=agent_id, backtest={}, now=now,
+                                       notes=["rule model (ADR 0038): p = rule fired, uncalibrated; shadow only"])
 
     def add_challenger(self, model: MetaLabelModel | RuleModel, *, family: str, agent_id: str, backtest: dict[str, Any],
                        now: UtcTimestamp | None = None, notes: list[str] | None = None,
@@ -197,95 +275,102 @@ class ModelRegistry:
                 raise ValueError(f"manifest {manifest.manifest_id[:12]} was recorded for another artefact "
                                  f"({manifest.artifact_sha256[:12]}), not this model's pickle")
             rm.store(manifest, self.manifests)
-        now = now or pd.Timestamp.now("UTC")
-        version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
-        n = 1
-        while any(e.version == version for e in self.entries):     # two trainings in one second
-            version, n = f"{agent_id}-{now:%Y%m%dT%H%M%S}-{n}", n + 1
-        rel = Path(family) / f"{version}.pkl"
-        (self.root / family).mkdir(parents=True, exist_ok=True)
-        (self.root / rel).write_bytes(data)
-        e = ModelEntry(version=version, family=family, agent_id=agent_id, status="challenger", created_utc=now,
-                       feature_version=model.feature_version, feature_names=list(model.feature_names),
-                       artefact=str(rel), sha256=hashlib.sha256(data).hexdigest(), backtest=backtest, notes=notes or [],
-                       manifest_id=manifest.manifest_id if manifest else None,
-                       model_family=manifest.family if manifest else None)
-        self.entries.append(e)
-        self._save()
-        return e
+        with self._write():
+            now = now or pd.Timestamp.now("UTC")
+            version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
+            n = 1
+            while any(e.version == version for e in self._entries):     # two trainings in one second
+                version, n = f"{agent_id}-{now:%Y%m%dT%H%M%S}-{n}", n + 1
+            rel = Path(family) / f"{version}.pkl"
+            (self.root / family).mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_bytes(data)
+            e = ModelEntry(version=version, family=family, agent_id=agent_id, status="challenger", created_utc=now,
+                           feature_version=model.feature_version, feature_names=list(model.feature_names),
+                           artefact=str(rel), sha256=hashlib.sha256(data).hexdigest(), backtest=backtest, notes=notes or [],
+                           manifest_id=manifest.manifest_id if manifest else None,
+                           model_family=manifest.family if manifest else None)
+            self._entries.append(e)
+            return e
 
     def promote(self, version: str, now: UtcTimestamp | None = None, note: str = "") -> ModelEntry:
-        e = self.get(version)
-        if e.status != "challenger":
-            raise ValueError(f"{version} is {e.status}, only a challenger can be promoted")
-        live_feature_check(list(e.feature_names))
-        for old in self.by_agent(e.agent_id, "previous"):
-            old.status = "retired"
-        for old in self.by_agent(e.agent_id, "champion"):
-            old.status = "previous"
-        e.status, e.promoted_utc = "champion", now or pd.Timestamp.now("UTC")
-        if note:
-            e.notes.append(note)
-        self._save()
-        return e
+        """The challenger becomes champion; ModelRefused (nothing changed) when the serving rule refuses it (PR #494
+        safety MEDIUM-3: a refused champion is never loaded, so promoting it would leave the agent, and its open
+        trades, with no model while a serving champion is demoted)."""
+        with self._write():
+            e = self.get(version)
+            if e.status != "challenger":
+                raise ValueError(f"{version} is {e.status}, only a challenger can be promoted")
+            why = self.serving_refusal(e)
+            if why is not None:
+                raise ModelRefused(f"{version} not promoted: {why}")
+            live_feature_check(list(e.feature_names))
+            for old in self.by_agent(e.agent_id, "previous"):
+                old.status = "retired"
+            for old in self.by_agent(e.agent_id, "champion"):
+                old.status = "previous"
+            e.status, e.promoted_utc = "champion", now or pd.Timestamp.now("UTC")
+            if note:
+                e.notes.append(note)
+            return e
 
     def restore_previous(self, agent_id: str, reason: str, *, demote_to: Status = "retired") -> ModelEntry:
         """The previous champion becomes champion again. The current one is retired (the CUSUM watch's alarm), or kept
         as `previous` (`demote_to="previous"`, rollback-model) so the rollback itself can be undone the same way."""
         if demote_to not in ("retired", "previous"):
             raise ValueError("a demoted champion becomes retired or previous")
-        prev = self.by_agent(agent_id, "previous")
-        if not prev:
-            raise ValueError(f"no previous champion for {agent_id}")
-        back = prev[-1]
-        for cur in self.by_agent(agent_id, "champion"):
-            cur.status = demote_to
-            cur.notes.append(f"demoted: {reason}")
-        back.status = "champion"
-        back.notes.append(f"restored: {reason}")
-        self._save()
-        return back
+        with self._write():
+            prev = self.by_agent(agent_id, "previous")
+            if not prev:
+                raise ValueError(f"no previous champion for {agent_id}")
+            back = prev[-1]
+            for cur in self.by_agent(agent_id, "champion"):
+                cur.status = demote_to
+                cur.notes.append(f"demoted: {reason}")
+            back.status = "champion"
+            back.notes.append(f"restored: {reason}")
+            return back
 
     def recalibrate(self, version: str, model: MetaLabelModel, record: dict[str, Any]) -> ModelEntry:
         """Store `model` (same trees, new calibrator) as the next minor version of `version`: a new artefact with its
         checksum, the record appended to `recalibrations`. Status, version and the shadow record are unchanged, so
         nothing is promoted or retired by a recalibration."""
-        e = self.get(version)
-        if e.status not in ("champion", "challenger"):
-            raise ValueError(f"{version} is {e.status}; only a champion or challenger is recalibrated")
-        if list(model.feature_names) != e.feature_names or model.feature_version != e.feature_version:
-            raise ValueError("a recalibration may change only the calibrator, not the model's inputs")
-        minor = len(e.recalibrations) + 1
-        base = {"base_sha256": e.sha256} if minor == 1 else {}      # the fitted artefact the run manifest describes
-        rel = Path(e.family) / f"{e.version}-r{minor}.pkl"
-        data = pickle.dumps(model)
-        (self.root / rel).write_bytes(data)
-        e.artefact, e.sha256 = str(rel), hashlib.sha256(data).hexdigest()
-        e.recalibrations.append({"minor": minor, **base, **record})
-        e.notes.append(f"recalibration r{minor}: ECE {record.get('ece_before', float('nan')):.4f} -> "
-                       f"{record.get('ece_after', float('nan')):.4f} on {record.get('n', 0)} shadow outcomes")
-        self._save()
-        return e
+        with self._write():
+            e = self.get(version)
+            if e.status not in ("champion", "challenger"):
+                raise ValueError(f"{version} is {e.status}; only a champion or challenger is recalibrated")
+            if list(model.feature_names) != e.feature_names or model.feature_version != e.feature_version:
+                raise ValueError("a recalibration may change only the calibrator, not the model's inputs")
+            minor = len(e.recalibrations) + 1
+            base = {"base_sha256": e.sha256} if minor == 1 else {}      # the fitted artefact the run manifest describes
+            rel = Path(e.family) / f"{e.version}-r{minor}.pkl"
+            data = pickle.dumps(model)
+            (self.root / rel).write_bytes(data)
+            e.artefact, e.sha256 = str(rel), hashlib.sha256(data).hexdigest()
+            e.recalibrations.append({"minor": minor, **base, **record})
+            e.notes.append(f"recalibration r{minor}: ECE {record.get('ece_before', float('nan')):.4f} -> "
+                           f"{record.get('ece_after', float('nan')):.4f} on {record.get('n', 0)} shadow outcomes")
+            return e
 
     def retire(self, version: str, reason: str) -> None:
-        e = self.get(version)
-        e.status = "retired"
-        e.notes.append(reason)
-        self._save()
+        with self._write():
+            e = self.get(version)
+            e.status = "retired"
+            e.notes.append(reason)
 
     def retire_agent(self, agent_id: str, reason: str) -> None:
         """End of an agent's life: called when a retired member's six months of shadow trading are over (population
         retirement itself only stops live trading; its champion keeps shadow-trading so the record stays unbiased)."""
-        for e in self.entries:
-            if e.agent_id == agent_id and e.status in ("champion", "challenger", "previous"):
-                e.status = "retired"
-                e.notes.append(reason)
-        self._save()
+        with self._write():
+            for e in self._entries:
+                if e.agent_id == agent_id and e.status in ("champion", "challenger", "previous"):
+                    e.status = "retired"
+                    e.notes.append(reason)
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps([e.model_dump(mode="json") for e in self.entries], indent=1))
+        tmp.write_text(json.dumps([e.model_dump(mode="json") for e in self._entries], indent=1))
         tmp.replace(self.path)
+        self._sig = self._stat()
 
 
 def rollback_main(argv: list[str] | None = None) -> int:

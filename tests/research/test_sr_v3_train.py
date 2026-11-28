@@ -1,0 +1,1135 @@
+"""The sr-v3 history trainer (goldbot/research/sr_v3_train.py): folds with a gap, past-only normalisation, decision-time
+cost per fold, Stage 0 reads no label, the learner reports, deterministic v0 artifacts, rebuild from the run log, the
+sealed-store refusal, and train/serve parity of the L-cw export."""
+from __future__ import annotations
+
+import json
+import zlib
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from goldbot.base import load_record_json
+from goldbot.research import decision_cost as DC
+from goldbot.research import dense_labels as D
+from goldbot.research import learners as L
+from goldbot.research import sr_v3 as V
+from goldbot.research import sr_v3_report as R
+from goldbot.research import sr_v3_serve as S
+from goldbot.research import sr_v3_store as ST
+from goldbot.research import sr_v3_train as T
+from goldbot.research.self_retrain import FEATURES, INPUTS, LogitModel, design, design_row
+
+ROOT = Path(__file__).resolve().parents[2]
+RHO_FILE = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
+
+
+def _frame(inst: str, year: int, *, tf: str = "4h", seed: int = 0, signal: float = 0.25) -> pd.DataFrame:
+    rng = np.random.default_rng(zlib.crc32(f"{inst}|{year}|{seed}".encode()))     # stable across processes
+    days = pd.bdate_range(f"{year}-01-01", f"{year}-12-31", tz="UTC")
+    bars = pd.DatetimeIndex([d + pd.Timedelta(hours=h) for d in days for h in (2, 10, 18)])
+    n = len(bars)
+    dec = np.repeat(bars, 2)
+    side = np.tile([1, -1], n)
+    X = rng.normal(size=(2 * n, len(V.P30)))
+    X[:, 0] = side
+    gross = signal * X[:, 1] + rng.normal(0, 1.1, 2 * n)
+    base = pd.DataFrame({"decision_utc": dec, "side": side, "max_hold_s": float(V.H_S[tf]), "entry": 1_500.0 + year,
+                         "risk_usd": 12.0, "cost_rt_bp": 0.575})
+    parts = T.cost_parts(base)
+    full = parts["nights_full"].to_numpy()
+    f = pd.DataFrame({"instrument": inst, "tf": tf, "phase": 0, "decision_utc": dec,
+                      "horizon_end_utc": dec + pd.Timedelta(seconds=V.H_S[tf]), "side": side, "gross": gross,
+                      "t0_gross": gross * 0.8 + rng.normal(0, 0.3, 2 * n), "stop": rng.random(2 * n) < 0.4,
+                      "nights_held": np.floor(full * rng.random(2 * n)), "w": rng.uniform(0.1, 0.3, 2 * n),
+                      "entry": 1_500.0 + year, "base_dist": 12.0, "cost_rt_bp": 0.575, "p30_ok": True})
+    f = pd.concat([f, parts[["cost_a", "cost_b", "cost_c", "nights_full"]]], axis=1)
+    for j, c in enumerate(V.P30):
+        if c != "side":
+            f[c] = X[:, j]
+    return f[list(T.ROW_COLS)]
+
+
+ELIGIBLE = {"gate_eligible": True, "gate_block": []}
+
+
+def _data(insts: tuple[str, ...] = ("XAUUSD", "EURUSD"), *, readable: bool = True, **kw: object) -> T.FrameData:
+    """Fixture frames. `readable`: a gate-eligible read with a ub95 cost version (read-statistic mode allowed);
+    otherwise FrameData's defaults (no gate status, W2 point costs): fit-only."""
+    frames = {(i, "4h", y): _frame(i, y, **kw) for i in insts for y in V.LEARN_YEARS}  # type: ignore[arg-type]
+    if not readable:
+        return T.FrameData(frames)
+    return T.FrameData(frames, gate=ELIGIBLE, cost_version="fixture-ub95")
+
+
+def _plan(cols: tuple[str, ...] = V.CORE_6, members: tuple[str, ...] = ("XAUUSD", "EURUSD")) -> T.UnitPlan:
+    return T.UnitPlan(unit="4h", tfs=("4h",), members=members, lcw_columns=cols, first_oof=2012, lam_a=820.0,
+                      design_effect=1.2, stage0={"level": "L3", "judged": True})
+
+
+# ---------------------------------------------------------------------------------------------- folds
+def test_a_training_row_ends_before_the_test_year_minus_the_gap() -> None:
+    g = T.gap("4h")
+    assert g == pd.Timedelta(days=5)
+    start = pd.Timestamp("2014-01-01", tz="UTC")
+    f = pd.DataFrame({"tf": "4h", "horizon_end_utc": [start - g - pd.Timedelta(seconds=1), start - g,
+                                                      start - pd.Timedelta(days=1)]})
+    assert T.train_mask(f, 2014).tolist() == [True, False, False]
+    assert T.gap("1m") == pd.Timedelta(days=1)
+
+
+def test_fold_moments_hold_only_rows_labelled_before_the_gap() -> None:
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    for Y in plan.oof_years:
+        want = sum(int(T.train_mask(data.frame(i, "4h", y), Y).sum()) for i in plan.members for y in V.LEARN_YEARS)
+        assert sum(m.n for m in col.lcw[Y].values()) == want
+    end = T.WN.SPANS[T.WN.Window.LEARN][1]
+    v0 = sum(int((data.frame(i, "4h", y)["horizon_end_utc"] <= end).sum()) for i in plan.members for y in V.LEARN_YEARS)
+    assert sum(m.n for m in col.lcw[2018].values()) == v0
+
+
+def test_normalisation_uses_past_rows_only() -> None:
+    plan = _plan()
+    a = T.collect(_data(), plan, seed=T.SEEDS[0])
+    late = dict(_data().frames)
+    for i in plan.members:
+        f = late[(i, "4h", 2017)].copy()
+        f[list(V.P30[1:])] = f[list(V.P30[1:])] * 3 + 5
+        late[(i, "4h", 2017)] = f
+    b = T.collect(T.FrameData(late), plan, seed=T.SEEDS[0])
+    for Y in (2012, 2015, 2017):
+        fa = L.lcw_from_moments(a.lcw[Y], a.impute[:6], plan.lcw_columns, lam=540, lam_a=820, design_effect=1.2)
+        fb = L.lcw_from_moments(b.lcw[Y], b.impute[:6], plan.lcw_columns, lam=540, lam_a=820, design_effect=1.2)
+        assert L.artifact_sha(fa) == L.artifact_sha(fb)
+    assert np.array_equal(a.impute, b.impute)
+
+
+def test_cost_per_fold_is_decision_cost_cost_x_with_that_folds_priors() -> None:
+    f = _frame("XAUUSD", 2013)
+    labels = f.assign(arm="XAUUSD:4h:T2", max_hold_s=float(V.H_S["4h"]), risk_usd=12.0, entry=1_500.0 + 2013,
+                      label_exit_utc=f["decision_utc"] + pd.Timedelta(hours=30),
+                      barrier_hit=np.where(f["stop"], "stop", "time"), template="T2")
+    acc = T.PriorAcc()
+    acc.add(f.assign(nights_held=DC.nights_held(labels)))
+    pri = acc.priors(pd.Timestamp("2015-01-01", tz="UTC"))
+    ref = DC.priors(labels, before=pd.Timestamp("2015-01-01", tz="UTC"))
+    assert pri.p_stop == pytest.approx(ref.p_stop) and pri.night_share == pytest.approx(ref.night_share)
+    want = DC.cost_x(labels, ref)
+    assert np.allclose(T.cost_of(f, pri), want)
+    rows = labels.assign(gross_r_raw=f["gross"], instrument="XAUUSD", tf="4h")
+    assert np.allclose(D.net_r(rows, ref), O_clip(f["gross"].to_numpy() - T.cost_of(f, pri)))
+
+
+def O_clip(x: np.ndarray) -> np.ndarray:
+    return np.clip(x, -10, 10)
+
+
+# ---------------------------------------------------------------------------------------------- Stage 0
+def test_stage0_reads_no_label_column(tmp_path: Path) -> None:
+    rng = np.random.default_rng(3)
+    dec = pd.date_range("2010-01-04", "2011-12-30", freq="4h", tz="UTC")
+    ev = pd.DataFrame({"instrument": "XAUUSD", "tf": "4h", "phase": 0, "decision_utc": dec, "usable": True,
+                       "u": rng.uniform(0.1, 0.3, len(dec)), **{f"ok:{c}": True for c in V.P30}})
+    with_labels = ev.assign(gross_r_raw=rng.normal(size=len(dec)), barrier_hit="stop")
+    a = T.stage0_counts(ev, years=(2010, 2011))
+    b = T.stage0_counts(with_labels.drop(columns=["gross_r_raw"]), years=(2010, 2011))
+    c = T.stage0_counts(with_labels, years=(2010, 2011))
+    assert a == b == c
+    from goldbot.research.dense_labels import EXIT_FREEZE_SHA256 as XT
+    rho = tmp_path / "rho.json"                          # the pooled body reads rho only from an xt-v1 file (D-12-xt)
+    rho.write_text(json.dumps({**json.loads(RHO_FILE.read_text()), "exit_freeze_sha": XT}))
+    s0 = T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=rho,
+                  freeze_sha=XT)
+    s1 = T.stage0("4h", ("4h",), {"XAUUSD": with_labels, "EURUSD": with_labels.assign(instrument="EURUSD")},
+                  rho_file=rho, freeze_sha=XT)
+    assert s0.model_dump() == s1.model_dump()
+    assert s0.rho["gold"].source_sha256 == V.file_sha256(rho)
+    with pytest.raises(ValueError, match="xt-v1"):       # the pre-xt-v1 D-12 file refuses a pooled Stage 0
+        T.stage0("4h", ("4h",), {"XAUUSD": ev, "EURUSD": ev.assign(instrument="EURUSD")}, rho_file=RHO_FILE,
+                 freeze_sha=XT)
+
+
+REV8_CORE12 = ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16", "ret_96",
+               "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
+
+
+def _sequenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every precondition of the quant sequencing as it will stand on main: A4 sha, X6 merged instant, rev 8 order."""
+    from goldbot.features import price_action_x6 as X6
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset({"a" * 64}))
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", "2026-11-26T11:30:53Z")
+    monkeypatch.setattr(D, "CORE12", REV8_CORE12)
+
+
+def test_the_trainer_core_order_is_card_rev_8_with_rv_ratio_at_position_4() -> None:
+    assert V.CORE_12 == REV8_CORE12 and V.CORE_6 == REV8_CORE12[:6]
+    assert "atr_ratio_14_100" in V.P30_REST and "rv_ratio" not in V.P30_REST
+
+
+def test_no_label_or_stage0_read_while_x6_merged_utc_is_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant sequencing on #482 (binding): no sr-v3 label value or Stage 0 statistic until #482, #484, rev 8 and
+    X6_MERGED_UTC are all on main. The store itself refuses, so no caller can read around the CLI."""
+    from goldbot.features import price_action_x6 as X6
+
+    def boom(*a: object, **k: object) -> None:
+        raise AssertionError("a label was read before the sequencing held")
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    monkeypatch.setattr(D, "load_labels", boom)
+    monkeypatch.setattr(D, "skeleton", boom)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    with pytest.raises(ST.SequencingRefused, match="X6_MERGED_UTC"):
+        store.frame("XAUUSD", "4h", 2013)
+    with pytest.raises(ST.SequencingRefused, match="X6_MERGED_UTC"):
+        store.events("XAUUSD", "4h", (2010, 2011))
+
+
+def test_each_missing_sequencing_step_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from goldbot.features import price_action_x6 as X6
+    _sequenced(monkeypatch)
+    assert ST.sequencing_gaps() == []
+    monkeypatch.setattr(D, "CORE12", (*REV8_CORE12[:3], "atr_ratio_14_100", *REV8_CORE12[4:]))
+    assert any("rev 8" in g for g in ST.sequencing_gaps())
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(D, "RECORDED_TIERS_SHA256", frozenset())
+    assert ST.sequencing_gaps() == ["ADR 0085 A4 tiers sha (PR #482)"]
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    assert len(ST.sequencing_gaps()) == 1 and "X6_MERGED_UTC" in ST.sequencing_gaps()[0]
+
+
+def test_store_stage0_never_calls_load_labels(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _sequenced(monkeypatch)
+
+    def boom(*a: object, **k: object) -> None:
+        raise AssertionError("Stage 0 read a label")
+    monkeypatch.setattr(D, "load_labels", boom)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=RHO_FILE)
+    assert store.events("XAUUSD", "4h", (2010, 2011)).empty
+
+
+def test_store_frame_goes_through_load_labels_on_the_learn_window(monkeypatch: pytest.MonkeyPatch,
+                                                                  tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+
+    def sealed(*a: object, **k: object) -> None:
+        seen.update(k)
+        raise D.SealedStore("sealed")
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(D, "load_labels", sealed)
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    with pytest.raises(D.SealedStore):
+        store.frame("XAUUSD", "4h", 2013)
+    assert seen["window"] == T.WN.SPANS[T.WN.Window.LEARN] and seen["purpose"] == "train"
+    assert seen["columns"] == list(V.CORE_6) and seen.get("booked_read") is None, \
+        "rev 9 C3: one label load, under the unit's narrowest served column set"
+    assert seen["years"] == list(V.LEARN_YEARS), "one ledgered load per instrument x tf for every learn year (#482)"
+    assert seen["procedure"] == "sr-v3", "the consumption row names sr-v3, so the X6 legitimacy guard sees it"
+
+
+# ---------------------------------------------------------------------------------------------- the unit fit
+TRIAL = 9_999                     # a booked registry trial id (the fixtures' read; never a real registry row)
+
+
+@pytest.fixture(scope="module")
+def fitted() -> tuple[T.FrameData, T.UnitPlan, T.UnitResult]:
+    """A full read of a judged unit, with the zoo-v2 card taken as signed (so G-cw, HB and AVG are read too)."""
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    hb = T.hb_from_plans(data, [plan], seed=T.SEEDS[0])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(R, "ZOO_V2_CARD", "fixture: zoo-v2 signed")
+        return data, plan, R.fit_unit(data, plan, hb_by_fold=hb, col=col, harness_rows=20_000, read=True,
+                                      trial_id=TRIAL)
+
+
+def test_every_built_learner_is_reported_against_the_gbt_baseline(fitted: tuple) -> None:
+    _, _, res = fitted
+    r = res.report
+    assert set(r["learners"]) == {"L-cw", "G-cw", "HB", "AVG"}
+    for name in ("L-cw", "HB", "AVG"):
+        d = r["learners"][name]["d_vs_gcw"]
+        assert d["n"] > 0 and d["lo90"] <= d["d_per_day"] <= d["hi90"]
+    assert {"L-cw vs G-cw", "L-cw vs HB", "G-cw vs AVG"} <= set(r["paired_d"])
+    assert r["learners"]["L-cw"]["read"]["s"] > 0, "the planted tsmom signal is found out of fold"
+    assert set(r["baselines"]["buy_and_hold"]) == {"XAUUSD", "EURUSD"}
+    assert r["baselines"]["buy_and_hold"]["XAUUSD"]["pct"] < 0.01
+    assert r["learners"]["L-cw"]["twin_s_expectation"] is not None
+
+
+def test_report_carries_seed_stability_shift_canaries_and_the_shuffle_check(fitted: tuple) -> None:
+    r = fitted[2].report
+    for name in ("G-cw", "AVG"):
+        assert len(r["seed_stability"][name]["detail"]["seeds"]) == len(T.SEEDS) >= 5
+    for name in ("L-cw", "HB"):        # quant M4 on #488: closed forms have no seed: not applicable, never "passed"
+        assert r["seed_stability"][name]["passed"] is None
+        assert "not applicable" in r["seed_stability"][name]["detail"]
+    h = r["harness"]
+    assert set(h["canaries"]) == {"L-cw", "HB", "G-cw"} and len(h["canaries"]["L-cw"]) == 3
+    assert all(set(c) == {"delta", "s_model", "s_oracle", "s_null", "recovered"} for c in h["canaries"]["L-cw"])
+    ps = h["parameter_shift"]
+    assert ps["L-cw"]["check"] == "param_shift" and len(ps["L-cw"]["detail"]["grid"]) == 8
+    assert {g["param"] for g in ps["G-cw"]["detail"]["grid"]} == {"learning_rate", "num_iterations", "min_child_share"}
+    assert {g["shift"] for g in ps["HB"]["detail"]["grid"]} == {-0.2, -0.1, 0.1, 0.2}
+    assert all("auc_in_band" in v for v in h["shuffle"].values())
+    assert len(h["seed_s"]["G-cw"]) == 5 and h["learning_curve_lcw"][-1]["n"] == h["train_rows"]
+    assert "XAUUSD" in r["levels"] and set(r["levels"]["XAUUSD"]) == {"shrunk", "unshrunk"}
+    assert 0 <= r["v0_keep_share_2015_17"] <= 1
+
+
+def test_v0_artifacts_are_deterministic_and_load(fitted: tuple) -> None:
+    data, plan, res = fitted
+    again = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    for k in ("L-cw", "B8", "G-cw", "D-40"):
+        assert res.report["artifacts"][k] == again.report["artifacts"][k]
+        assert isinstance(L.load_artifact(res.artifacts[k]), (L.LcwArtifact, L.GcwArtifact, L.DenseArtifact))
+    assert "AVG" in res.artifacts and "HB" in res.artifacts
+
+
+def test_every_v0_artifact_is_recorded_with_its_quality_and_rebuilds_byte_exactly(fitted: tuple,
+                                                                                   tmp_path: Path) -> None:
+    from goldbot.research import run_manifest as RM
+    data, plan, res = fitted
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version=data.manifest()[
+        "frames_sha256"], data_root=tmp_path, data_files=[frames.name], hb_plans=[plan], root=tmp_path / "manifests")
+    assert set(mans) == set(res.artifacts)
+    g = mans["G-cw"]
+    assert g.family == "C" and g.builder == R.BUILDER and g.data_files[frames.name]
+    assert g.manifest_key == T.MANIFEST_KEY and g.seeds == list(T.SEEDS) and len(g.seeds) == 5 and g.served == "seed0"
+    assert g.unit == plan.unit and g.fold_keys[-1] == "v0:2010-2017"
+    assert {q.check for q in g.quality} == {"seed_stability", "param_shift"}
+    # beats_baseline books a registry trial (K +1): it is read at promotion, never by the trainer
+    assert not [q for m in mans.values() for q in m.quality if q.check == "beats_baseline"]
+    lcw = mans["L-cw"]
+    assert lcw.train_end <= lcw.label_end_max <= pd.Timestamp("2018-01-01", tz="UTC")
+    assert RM.load(g.manifest_id, tmp_path / "manifests") == g
+    spec = RM.BuildSpec(data_files={frames.name: str(frames)}, settings=g.settings, seeds=g.seeds,
+                        train_end=g.train_end, scaler_fit_end=g.scaler_fit_end)
+    for name in ("G-cw", "HB"):
+        m = mans[name]
+        got = RM.build(R.BUILDER, spec.model_copy(update={"settings": m.settings}))
+        assert RM.sha256_bytes(got) == m.artifact_sha256, name
+
+
+def test_rebuild_from_changed_data_gives_other_bytes(fitted: tuple, tmp_path: Path) -> None:
+    data, plan, res = fitted
+    bumped = dict(data.frames)
+    bumped[("XAUUSD", "4h", 2016)] = bumped[("XAUUSD", "4h", 2016)].assign(gross=lambda f: f["gross"] + 0.5)
+    other = R.fit_unit(T.FrameData(bumped), plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    assert other.report["artifacts"]["L-cw"] != res.report["artifacts"]["L-cw"]
+
+
+def test_intercept_only_unit_serves_level_minus_cost() -> None:
+    data, plan = _data(), _plan(cols=())
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False)
+    a = L.load_artifact(res.artifacts["L-cw"])
+    assert isinstance(a, L.LcwArtifact) and a.columns == () and set(a.levels) == {"XAUUSD", "EURUSD"}
+    assert "intercept-only" in R.report_md(res.report)
+
+
+# ---------------------------------------------------------------------------------------------- serving parity
+def test_lcw_export_loads_in_shadow_scoring_and_scores_the_engine_vector_identically() -> None:
+    data, plan = _data(), _plan()
+    f = pd.concat([data.frame(i, "4h", y) for i in plan.members for y in (2012, 2013)], ignore_index=True)
+    td = L.TrainData(X=f[list(plan.lcw_columns)].to_numpy(float), columns=plan.lcw_columns,
+                     gross=f["gross"].to_numpy(float), net=f["gross"].to_numpy(float), cost=np.zeros(len(f)),
+                     w=f["w"].to_numpy(float), instrument=f["instrument"].to_numpy(), day=np.zeros(len(f)),
+                     tf=f["tf"].to_numpy(), design_effect=1.0)
+    a = L.fit_lcw(td, lam=540, lam_a=820)
+    lm = load_record_json(LogitModel, S.to_logit_model(a, "XAUUSD").model_dump_json(), source="test")
+    rng = np.random.default_rng(9)
+    for _ in range(25):
+        feats: dict[str, float | None] = {c: float(rng.normal()) for c in FEATURES}
+        feats["atr_ratio_14_100"] = None
+        side = int(rng.choice([1, -1]))
+        x = design_row(feats, side)
+        g = S.gross_row(lm, x)
+        assert lm.score_row(x) == 1.0 / (1.0 + np.exp(-g))
+        p30 = S.p30_row(x)
+        lc = [V.P30.index(c) for c in plan.lcw_columns]
+        assert g == pytest.approx(a.value_row(p30[lc], "XAUUSD"), abs=1e-12)
+        row = pd.DataFrame([{**feats, "side": side}])
+        assert np.allclose(design(row)[list(INPUTS)].to_numpy(float)[0], x, equal_nan=True)
+    assert lm.keep(pd.DataFrame([{c: 0.0 for c in INPUTS}]))[0], "tau 0: the sr-v2 rule keeps (never refuses)"
+
+
+def test_hook_needs_are_listed_for_the_trading_safety_review() -> None:
+    assert any("GATE_SPECS" in n for n in S.ENGINE_HOOK_NEEDS)
+    assert any("fails open" in n for n in S.ENGINE_HOOK_NEEDS)
+
+
+def test_the_cli_refuses_to_run_until_the_sequencing_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.util
+
+    from goldbot.features import price_action_x6 as X6
+    spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(X6, "X6_MERGED_UTC", None)
+    with pytest.raises(SystemExit, match="X6_MERGED_UTC"):
+        mod.refuse_before_x6()
+    _sequenced(monkeypatch)
+    mod.refuse_before_x6()                              # every precondition on main: no refusal
+
+
+# ---------------------------------------------------------------------------------------------- H2: fit-only
+READ_KEYS = ("learners", "paired_d", "baselines", "seed_stability", "harness", "levels", "v0_keep_share_2015_17")
+
+
+def test_fit_only_is_the_default_and_writes_artifacts_and_sealed_scores_but_no_read_statistic(tmp_path: Path) -> None:
+    data, plan = _data(readable=False), _plan()
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:2])
+    r = res.report
+    assert r["mode"] == "fit-only"
+    assert not [k for k in READ_KEYS if k in r], "fit-only computes no S, kept mean, S@2x, D or other read statistic"
+    assert {"L-cw", "B8", "G-cw", "D-40"} <= set(res.artifacts)
+    assert not {"gross", "net", "net2", "t0_gross", "entry", "base_dist"} & set(res.oof.columns), "scores only"
+    assert {"v_L-cw", "k_L-cw", "v_G-cw", "cost", "decision_utc", "instrument"} <= set(res.oof.columns)
+    assert r["oof_scores_sha256"] == T.scores_sha(res.oof)
+    assert r["gate_eligible"] is False and r["gate_block"]
+    d = R.write_unit(res, tmp_path)
+    assert not (d / "oof.parquet").exists() and (d / "oof_scores.parquet").exists()
+    assert T.scores_sha(pd.read_parquet(d / "oof_scores.parquet")) == r["oof_scores_sha256"]
+    for text in ((d / "report.json").read_text(), (d / "report.md").read_text()):
+        assert '"s"' not in text and "kept mean" not in text and "D/day" not in text
+
+
+def test_read_statistic_mode_refuses_unless_the_label_read_is_gate_eligible() -> None:
+    data, plan = _data(readable=False), _plan()
+    blocked = T.FrameData(data.frames, gate={"gate_eligible": False, "gate_block": ["cost_version w2-point"]},
+                          cost_version="fixture-ub95")
+    with pytest.raises(R.ReadRefused, match="w2-point"):
+        R.fit_unit(blocked, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
+    unknown = T.FrameData(data.frames, cost_version="fixture-ub95")
+    with pytest.raises(R.ReadRefused, match="gate"):
+        R.fit_unit(unknown, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
+
+
+def test_gate_status_and_mode_are_written_into_every_manifest(tmp_path: Path) -> None:
+    data, plan = _data(readable=False), _plan()
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS)
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[], root=tmp_path / "m")
+    assert set(mans) == set(res.artifacts)
+    for m in mans.values():
+        assert m.results["mode"] == "fit-only" and m.results["gate_eligible"] is False and m.results["gate_block"]
+        assert m.results["oof_scores_sha256"] == res.report["oof_scores_sha256"]
+        assert "s" not in m.results and not m.quality, "no read statistic and no net-based verdict in fit-only"
+
+
+def test_store_keeps_load_labels_gate_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from goldbot.research import feature_store as F
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    meta = {"keys": {}, "tiers_sha256": "t", "rows": 0, "gate_eligible": False,
+            "gate_block": ["h_ref = H: the exit templates' h_ref is not frozen (D-4)"]}
+    empty = pd.DataFrame(columns=["template", "phase", "decision_utc", "side", "gross_r_raw"])
+    monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, meta))
+    monkeypatch.setattr(F, "load", lambda *a, **k: (pd.DataFrame(columns=["phase", "decision_utc"]), {"keys": {}}))
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=tmp_path / "l.jsonl")
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    assert store.gate_status()["gate_eligible"] is False, "no label read yet: not eligible"
+    store.frame("XAUUSD", "4h", 2013)
+    g = store.gate_status()
+    assert g["gate_eligible"] is False and "h_ref" in g["gate_block"][0]
+    monkeypatch.setattr(D, "load_labels", lambda *a, **k: (empty, {**meta, "gate_eligible": True, "gate_block": []}))
+    store.frame("EURUSD", "4h", 2013)
+    assert store.gate_status()["gate_eligible"] is False, "one blocked load blocks the unit"
+
+
+# ---------------------------------------------------------------------------------------------- H4: one ledger
+def _cli() -> Any:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("train_sr_v3", ROOT / "scripts" / "research" / "train_sr_v3.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_store_and_cli_default_ledger_is_the_one_the_x6_guard_reads(monkeypatch: pytest.MonkeyPatch,
+                                                                         tmp_path: Path) -> None:
+    """Quant H4 on #488: a worktree has no raw/ or state/ of its own; the read-once / consumption ledger must be the
+    one beside the research registry (`default_registry().with_name(READS_LEDGER)`), which the X6 legitimacy guard
+    reads (tests/test_price_action_x6.py `_ledgers()[0]`), never <worktree>/state/."""
+    from goldbot.research.catalogue.run import default_registry
+    from tests.test_price_action_x6 import _ledgers
+    monkeypatch.delenv("GOLDBOT_REGISTRY", raising=False)
+    monkeypatch.delenv("GOLDBOT_READ_LEDGERS", raising=False)
+    want = default_registry().with_name(T.WN.READS_LEDGER)
+    assert want == _ledgers()[0]
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == want
+    assert Path(_cli().parser().parse_args([]).ledger) == want
+    monkeypatch.setenv("GOLDBOT_REGISTRY", str(tmp_path / "state" / "research_registry.jsonl"))
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).ledger == _ledgers()[0]
+
+
+# ---------------------------------------------------------------------------------------------- H5: one run record
+class _FixtureStore(T.FrameData):
+    """A store stand-in for the CLI phases: FrameData's rows, no Stage 0 events (Stage 0 is stubbed)."""
+    used: dict[str, object] = {}
+
+    def events(self, instrument: str, tf: str, years: object) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
+def test_cli_phases_record_one_manifest_per_artifact_with_the_collected_train_end(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant H5 on #488: phase 1 persists train_end and label_end_max (phase 3 recorded the learn end instead), and
+    each artifact's manifest is recorded before the unit's outputs are written (report.json names them)."""
+    import argparse
+    import json
+    from types import SimpleNamespace
+
+    from goldbot.research import run_manifest as RM
+    cli = _cli()
+    data, plan = _data(readable=False), _plan()
+    store = _FixtureStore(data.frames)
+    s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
+    monkeypatch.setattr(cli, "_store", lambda a, unit=None, key=None: store)
+    monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
+    monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
+                           tiers=str(tiers), rho=str(RHO_FILE), ledger=str(tmp_path / "l.jsonl"), out=str(tmp_path / "o"),
+                           stage0_only=False, read=False, cost_manifest=None, trial_id=None)
+    cli.phase1("4h", a)
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    saved = json.loads((tmp_path / "o" / "4h" / "collected.json").read_text())
+    assert pd.Timestamp(saved["train_end"]) == col.train_end
+    assert pd.Timestamp(saved["label_end_max"]) == col.label_end_max
+    cli.phase2(["4h"], a)
+    out = cli.phase3("4h", a)
+    root = tmp_path / "o" / "manifests"
+    files = sorted(root.glob("*.json"))
+    report = json.loads((tmp_path / "o" / "4h" / "report.json").read_text())
+    assert len(files) == len(out["artifacts"]) == len(report["manifests"])
+    assert {f.stem for f in files} == set(report["manifests"].values())
+    for mid in report["manifests"].values():
+        m = RM.load(mid, root)
+        assert m.train_end == col.train_end and m.label_end_max == col.label_end_max
+    assert not [r for r in T.WN.read_ledger(tmp_path / "l.jsonl") if r.get("family") == "sr-v3:4h"], \
+        "a fit-only run books no read-once row (quant N1)"
+
+
+def test_store_version_covers_the_weights_and_rho_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant H5 on #488: the data version a manifest records names every input a rebuild reads: the uniqueness
+    weights and the rho (D-12) file as well as the label keys and tiers."""
+    w = tmp_path / "_weights" / "XAUUSD"
+    w.mkdir(parents=True)
+    (w / "4h.parquet").write_bytes(b"one")
+    rho, tiers = tmp_path / "rho.json", tmp_path / "tiers.csv"
+    rho.write_text("{}")
+    tiers.write_text("key,month,tier\n")
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, rho=rho, ledger=tmp_path / "l.jsonl")
+    v0 = store.version(["XAUUSD"], ["4h"], (0,))
+    (w / "4h.parquet").write_bytes(b"two")
+    v1 = store.version(["XAUUSD"], ["4h"], (0,))
+    rho.write_text('{"x": 1}')
+    v2 = store.version(["XAUUSD"], ["4h"], (0,))
+    assert len({v0, v1, v2}) == 3, "a changed weights file or rho file changes the data version"
+
+
+# ---------------------------------------------------------------------------------------------- M4: seeds differ
+def test_gcw_seeds_fit_different_resamples_even_below_the_tree_row_cap() -> None:
+    """Quant M4 on #488: below MAX_TREE_ROWS (pi = 1) every seed fitted the same rows, so the 5 "seeds" were one fit
+    and seed stability passed by construction. Each seed now fits its own 90 % seed-hash subsample."""
+    data, plan = _data(), _plan()
+    col = T.collect(data, plan, seed=T.SEEDS[0])
+    assert col.pi == 1.0
+    fm = T.fit_fold(2015, col, plan, hb=None, seeds=T.SEEDS[:3], dense_by_year={})
+    te = data.frame("XAUUSD", "4h", 2015)
+    X = T._with_dense(te, fm.dense, T.cost_of(te, fm.priors))[list(T.gcw_columns())].to_numpy(float)
+    vals = [a.value(X) for a in fm.gcw.values()]
+    assert not np.allclose(vals[0], vals[1]) and not np.allclose(vals[1], vals[2]), "each seed is its own resample"
+
+
+def test_closed_form_learners_record_no_seed_stability_verdict(fitted: tuple, tmp_path: Path) -> None:
+    data, plan, res = fitted
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    for name in ("L-cw", "HB", "B8"):
+        assert "seed_stability" not in {q.check for q in mans[name].quality}
+    assert "seed_stability" in {q.check for q in mans["G-cw"].quality}
+
+
+# ---------------------------------------------------------------------------------------------- H1: cost of record
+def _cost_files(tmp_path: Path, *, gold_asia_icm: float = 1.4) -> Path:
+    """A cost manifest like the data team's (~/tmp/sr-v3-trainsets/manifest.json "costs"): per instrument x broker x
+    session x tf rt_bp = max(W2, ecr ub95), and a monthly swap table per instrument."""
+    import hashlib
+    import json
+    cells = [{"instrument": i, "broker": b, "session": s, "tf": "4h", "rt_bp": v}
+             for i in ("XAUUSD", "EURUSD") for b in ("icm", "vantage") for s in ("asia", "london", "newyork")
+             for v in [0.9 if b == "vantage" else (gold_asia_icm if (i, s) == ("XAUUSD", "asia") else 0.7)]]
+    cells.append({"instrument": "XAUUSD", "broker": "icm", "session": "london", "tf": "1h", "rt_bp": 0.3})
+    cells.append({"instrument": "XAUUSD", "broker": "vantage", "session": "london", "tf": "1h", "rt_bp": 0.2})
+    months = [f"{y}-{m:02d}" for y in range(2009, 2019) for m in range(1, 13)]
+    swap = [{"instrument": i, "month": mo, "long_per_night": lp, "short_per_night": sp}
+            for i, lp, sp in (("XAUUSD", -0.000154, 0.0), ("EURUSD", -0.00004, 0.00001)) for mo in months]
+    d = tmp_path / "costs"
+    d.mkdir(exist_ok=True)
+    pd.DataFrame(cells).to_parquet(d / "cost_table.parquet", index=False)
+    pd.DataFrame(swap).to_parquet(d / "swap_table.parquet", index=False)
+
+    def sha(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    man = {"costs": {"cost_version": "srv3-cost-fixture", "files": {
+        "cost_table": str(d / "cost_table.parquet"), "cost_table_sha256": sha(d / "cost_table.parquet"),
+        "swap_table": str(d / "swap_table.parquet"), "swap_table_sha256": sha(d / "swap_table.parquet")}}}
+    (tmp_path / "manifest.json").write_text(json.dumps(man))
+    return tmp_path / "manifest.json"
+
+
+def _cost_rows(inst: str = "XAUUSD", tf: str = "4h", hour: int = 2, n: int = 4) -> pd.DataFrame:
+    dec = pd.DatetimeIndex([pd.Timestamp(f"2013-03-0{4 + i} {hour:02d}:00", tz="UTC") for i in range(n)])
+    return pd.DataFrame({"instrument": inst, "tf": tf, "decision_utc": dec, "side": [1, -1] * (n // 2),
+                         "max_hold_s": float(V.H_S[tf]), "entry": 1_500.0, "risk_usd": 12.0, "cost_rt_bp": DC.RT_BP})
+
+
+def test_a_ub95_cell_above_w2_is_charged_at_ub95_and_the_worst_broker(tmp_path: Path) -> None:
+    """Quant H1 on #488: rt_bp per row from the per-cell table, max(W2, ecr ub95) by broker x session x tf; the run
+    charges the worse broker of the cell (conservative: the account is not known at history time)."""
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    rows = _cost_rows(hour=2)                                    # 02:00 UTC: asia
+    k = DC.row_k(rows)
+    parts = T.cost_parts(rows, table)
+    assert np.allclose(parts["cost_rt_bp"], 1.4) and np.allclose(parts["cost_a"], k * 1.4)
+    assert (parts["cost_a"].to_numpy() > k * DC.RT_BP).all()
+    assert np.allclose(T.cost_parts(_cost_rows(hour=10), table)["cost_rt_bp"], 0.9), "london: vantage 0.9 > icm 0.7"
+    assert np.allclose(T.cost_parts(_cost_rows(tf="1h", hour=10), table)["cost_rt_bp"], DC.RT_BP), "W2 floor"
+    assert table.version == "srv3-cost-fixture"
+
+
+def test_rows_with_no_cost_cell_are_refused(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    with pytest.raises(T.CostCellMissing, match="XAUUSD:asia:30m"):
+        T.cost_parts(_cost_rows(tf="30m"), table)
+    with pytest.raises(T.CostCellMissing, match="USDJPY"):
+        T.cost_parts(_cost_rows(inst="USDJPY"), table)
+    late = _cost_rows().assign(decision_utc=lambda f: f["decision_utc"] + pd.Timedelta(days=3_000))
+    with pytest.raises(T.CostCellMissing, match="swap"):
+        T.cost_parts(late, table)
+
+
+def test_swap_is_charged_per_instrument_from_the_table(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    rows = _cost_rows(inst="EURUSD", hour=10)
+    parts = T.cost_parts(rows, table)
+    full = DC.nights_full_hold(rows)
+    assert (full > 0).any()
+    want = full * DC.row_k(rows) * 1e4 * np.where(rows["side"] > 0, 0.00004, 0.00001)
+    assert np.allclose(parts["cost_c"], want), "EURUSD's own swap, never gold's"
+
+
+def test_a_tampered_cost_file_is_refused(tmp_path: Path) -> None:
+    man = _cost_files(tmp_path)
+    pd.DataFrame([{"instrument": "XAUUSD", "broker": "icm", "session": "asia", "tf": "4h", "rt_bp": 0.0}]).to_parquet(
+        tmp_path / "costs" / "cost_table.parquet", index=False)
+    with pytest.raises(ValueError, match="sha256"):
+        T.CostTable.from_manifest(man)
+
+
+def test_read_mode_refuses_w2_point_costs_even_on_a_gate_eligible_read() -> None:
+    data, plan = _data(readable=False), _plan()
+    w2 = T.FrameData(data.frames, gate=ELIGIBLE)
+    with pytest.raises(R.ReadRefused, match="w2-point"):
+        R.fit_unit(w2, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True,
+                   trial_id=TRIAL)
+
+
+def test_the_store_reports_its_cost_table_version(tmp_path: Path) -> None:
+    table = T.CostTable.from_manifest(_cost_files(tmp_path))
+    store = ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path, ledger=tmp_path / "l", costs=table)
+    assert store.cost_version() == "srv3-cost-fixture"
+    assert ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tmp_path).cost_version() == T.W2_COST_VERSION
+
+
+def test_the_data_teams_cost_manifest_loads_when_present() -> None:
+    man = Path.home() / "tmp" / "sr-v3-trainsets" / "manifest.json"
+    if not man.exists():
+        pytest.skip("no local cost manifest (market-derived, never in the repo)")
+    t = T.CostTable.from_manifest(man)
+    assert t.version.startswith("srv3-cost-") and t.rt_bp(_cost_rows()).min() >= DC.RT_BP
+
+
+# ---------------------------------------------------------------------------------------------- M1: embargo
+def test_the_gap_is_max_of_a_day_and_the_units_longest_hold() -> None:
+    """Quant ruling (1) on #488, a label-blind clarification of card R-B (K 0): gap(unit) = max(1 d, max H over the
+    unit's tfs); no lookback term (expanding forward folds with a full-horizon purge carry no future information)."""
+    assert T.gap("1d") == T.gap("1w") == pd.Timedelta(days=20)
+    assert T.gap("4h") == pd.Timedelta(days=5)
+    assert T.gap("1h") == pd.Timedelta(days=1) and T.gap("1m") == pd.Timedelta(days=1)
+    for unit, tfs in V.UNITS.items():
+        want = max([pd.Timedelta(days=1)] + [pd.Timedelta(seconds=V.H_S[t]) for t in tfs])
+        assert all(T.gap(t) == want for t in tfs), unit
+
+
+def test_a_fold_with_no_training_row_under_the_gap_is_skipped_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(T, "gap", lambda tf: pd.Timedelta(days=4 * 365 + 30))     # 2014's cut falls before 2010
+    data, plan = _data(readable=False), _plan()
+    res = R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1])
+    assert res.report["folds_without_training_rows"] == [2012, 2013, 2014]
+    assert set(res.oof["year"]) == {2015, 2016, 2017}
+
+
+# ---------------------------------------------------------------------------------------------- M2: net_read
+def test_net_read_charges_the_realised_overshoot_and_the_nights_held() -> None:
+    """Quant M2 on #488: net_read = gross − k·(RT_ub95 + OV·1[stop]) − nights held × swap; cost(x) keeps."""
+    f = _frame("XAUUSD", 2013).head(200)
+    full = f["nights_full"].to_numpy(float)
+    per_night = np.divide(f["cost_c"].to_numpy(float), full, out=np.zeros(len(f)), where=full > 0)
+    want = np.clip(f["gross"] - f["cost_a"] - f["cost_b"] * f["stop"] - per_night * f["nights_held"], -10, 10)
+    assert np.allclose(T.net_read(f), want)
+    stop, held = f["stop"].to_numpy(bool), f["nights_held"].to_numpy(float)
+    calm = ~stop & (held == 0)
+    assert np.allclose(T.net_read(f)[calm], np.clip(f["gross"] - f["cost_a"], -10, 10)[calm]), "no stop, no night"
+    assert (T.net_read(f)[stop] < np.clip(f["gross"] - f["cost_a"], -10, 10)[stop]).all(), "OV only on stops"
+
+
+def test_every_read_statistic_uses_net_read_and_keep_uses_cost_x(fitted: tuple) -> None:
+    _, _, res = fitted
+    o, r = res.oof, res.report
+    assert not np.allclose(o["net_read"], o["net"]), "the fixture's realised leg differs from cost(x)"
+    mean = float(o["net_read"].mean())
+    assert r["baselines"]["B1_take_all"] == pytest.approx(mean - max(0.0, mean))
+    lr = R.learner_read(o, "L-cw", trial_id=TRIAL, judged=True)
+    assert lr["mean_net"] == pytest.approx(mean)
+    k = o["k_L-cw"].to_numpy(float)
+    assert lr["s_2x_cost"] == pytest.approx(float((o["net2"] * k).mean() - max(0.0, float(o["net2"].mean()))))
+    assert np.array_equal(o["k_L-cw"], o["v_L-cw"] - o["cost"] > 0), "keep is ĝ − cost(x) > 0, never realised"
+
+
+# ---------------------------------------------------------------------------------------------- M3: N6 by block
+def test_the_shuffle_moves_whole_days_by_a_seeded_circular_shift_of_at_least_20_trading_days() -> None:
+    """Quant M3 re-verify on #488: N6 permutes whole days, not rows within a day: each instrument's label series is
+    shifted circularly by a seeded offset of >= 20 trading days, keeping each row's intraday position."""
+    f = pd.concat([_frame(i, y) for i in ("XAUUSD", "EURUSD") for y in (2013, 2014)], ignore_index=True)
+    perm = R.block_permutation(f, seed=V.SEED_B2)
+    assert sorted(perm.tolist()) == list(range(len(f))), "a permutation"
+    assert np.array_equal(perm, R.block_permutation(f, seed=V.SEED_B2)), "seeded"
+    inst = f["instrument"].astype(str).to_numpy()
+    day = np.asarray(T.session_date(f["decision_utc"]).astype(str))
+    assert (inst[perm] == inst).all(), "an instrument's labels stay its own"
+    pos = f.groupby([inst, day]).cumcount().to_numpy()
+    assert (pos[perm] == pos).all(), "intraday position kept"
+    for i in ("XAUUSD", "EURUSD"):
+        m = inst == i
+        days = np.unique(day[m])
+        idx = {d: k for k, d in enumerate(days)}
+        shift = {(idx[day[perm][r]] - idx[day[r]]) % len(days) for r in np.flatnonzero(m)}
+        assert len(shift) == 1, "one circular offset per instrument: whole days move together"
+        (k,) = shift
+        assert 20 <= k <= len(days) - 20
+
+
+def test_the_shuffle_check_passes_per_instrument_tf_session_cell(fitted: tuple) -> None:
+    """Quant M3 on #488: the N6 rule of diagnostics.shuffled_keep_check (false keep <= 5 % or fewer than MIN_KEPT
+    kept) per (instrument x tf, session) cell, not pooled."""
+    from goldbot.research import diagnostics as G
+    sh = fitted[2].report["harness"]["shuffle"]
+    for name, v in sh.items():
+        cells = v["cells"]
+        assert cells and all(c.count(":") == 1 and "|" in c for c in cells), name
+        assert {c.split("|")[0] for c in cells} == {"XAUUSD:4h", "EURUSD:4h"}
+        assert {c.split("|")[1] for c in cells} <= {"asia", "london", "newyork"}
+        want = all(c["false_keep_share"] <= G.MAX_FALSE_KEEP or c["kept"] < V.MIN_KEPT for c in cells.values())
+        assert v["passed"] is want, name
+
+
+# ---------------------------------------------------------------------------------------------- M5: truncation
+def test_year_y_oof_scores_and_fold_priors_ignore_every_label_at_or_after_the_cut() -> None:
+    """Quant M5 on #488, end to end: perturb the labels of every row decided at or after year Y's start, or whose
+    horizon ends at or after Y's start minus the gap; year Y's OOF scores of L-cw, B8, HB, G-cw (every seed) and AVG
+    and fold Y's CostPriors are unchanged."""
+    Y = 2015
+    data, plan = _data(readable=False), _plan()
+    cut_dec = T.year_start(Y)
+    cut_hor = cut_dec - T.gap("4h")
+    bumped: dict[tuple[str, str, int], pd.DataFrame] = {}
+    for k, f in data.frames.items():
+        hit = ((pd.to_datetime(f["decision_utc"], utc=True) >= cut_dec)
+               | (pd.to_datetime(f["horizon_end_utc"], utc=True) >= cut_hor)).to_numpy()
+        g = f.copy()
+        rng = np.random.default_rng(len(bumped))
+        g.loc[hit, "gross"] = rng.normal(3.0, 2.0, int(hit.sum()))
+        g.loc[hit, "t0_gross"] = rng.normal(-3.0, 2.0, int(hit.sum()))
+        g.loc[hit, "stop"] = ~g.loc[hit, "stop"].astype(bool)
+        g.loc[hit, "nights_held"] = g.loc[hit, "nights_full"]
+        bumped[k] = g
+    other = T.FrameData(bumped)
+
+    def run(d: T.FrameData) -> tuple[pd.DataFrame, T.DC.CostPriors]:
+        col = T.collect(d, plan, seed=T.SEEDS[0])
+        hb = T.hb_from_plans(d, [plan], seed=T.SEEDS[0])
+        res = R.fit_unit(d, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:2])
+        return res.oof[res.oof["year"] == Y].reset_index(drop=True), col.priors[Y].priors(cut_dec)
+    a, pa = run(data)
+    b, pb = run(other)
+    cols = [c for c in a.columns if c.startswith("v_")]
+    assert {"v_L-cw", "v_B8", "v_HB", "v_G-cw", "v_AVG"} <= set(cols) and any("@" in c for c in cols)
+    assert a["v_AVG"].notna().all()
+    for c in cols:
+        assert np.allclose(a[c].to_numpy(float), b[c].to_numpy(float), equal_nan=True), c
+    assert pa == pb
+    assert not np.allclose(T.FrameData(bumped).frame("XAUUSD", "4h", Y)["gross"],
+                           data.frame("XAUUSD", "4h", Y)["gross"]), "the perturbation reached year Y's labels"
+
+
+# ---------------------------------------------------------------------------------------------- H3: read once
+def test_every_sr_v3_unit_is_a_read_once_family_of_learn() -> None:
+    for unit in V.UNITS:
+        assert T.WN.READ_ONCE_FAMILIES[f"sr-v3:{unit}"] == frozenset({T.WN.Window.LEARN}), unit
+    assert {f for f in T.WN.READ_ONCE_FAMILIES if f.startswith("sr-v3:")} == {f"sr-v3:{u}" for u in V.UNITS}
+
+
+def test_a_unit_books_its_learn_read_once(tmp_path: Path) -> None:
+    """Quant N1 on #488: the unit's read-once row is written only by a read; a second read of the unit, under the
+    same key or another, raises AlreadyRead; units are independent."""
+    led = tmp_path / "window_reads.jsonl"
+    ST.book_learn_read(led, "4h", "read-a")
+    rows = T.WN.read_ledger(led)
+    assert len(rows) == 1 and rows[0]["family"] == "sr-v3:4h" and rows[0]["ref"]["read_key"] == "read-a"
+    for key in ("read-a", "read-b"):
+        with pytest.raises(T.WN.AlreadyRead):
+            ST.book_learn_read(led, "4h", key)
+    ST.book_learn_read(led, "1h", "read-b")
+    assert len(T.WN.read_ledger(led)) == 2
+
+
+def test_the_key_of_a_read_is_the_frozen_fit(tmp_path: Path) -> None:
+    rep = {"artifacts": {"L-cw": "a" * 64, "B8": "b" * 64}, "oof_scores_sha256": "c" * 64}
+    k = ST.read_key(rep)
+    assert k == ST.read_key({**rep, "note": "x"}) and len(k) == 64
+    assert k != ST.read_key({**rep, "oof_scores_sha256": "d" * 64})
+    assert k != ST.read_key({**rep, "artifacts": {"L-cw": "e" * 64, "B8": "b" * 64}})
+
+
+def test_only_a_read_store_refuses_an_unbooked_label_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def sealed(*a: object, **k: object) -> None:
+        seen.append("load")
+        raise D.SealedStore("sealed")
+    _sequenced(monkeypatch)
+    monkeypatch.setattr(D, "load_labels", sealed)
+    monkeypatch.setattr(ST.StoreData, "keys", lambda self, *a: ("k" * 64, "f" * 64))
+    led = tmp_path / "l.jsonl"
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    with pytest.raises(D.SealedStore):          # fit-only: consume rows only, no booking needed
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led).frame("XAUUSD", "4h", 2013)
+    assert seen == ["load"]
+    for kw in ({"unit": "4h", "read_key": None}, {"unit": "4h", "read_key": "read-a"}):
+        with pytest.raises(ST.ReadNotBooked):
+            ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, **kw,
+                         read=True).frame("XAUUSD", "4h", 2013)
+    ST.book_learn_read(led, "4h", "read-b")
+    with pytest.raises(ST.ReadNotBooked):            # another read's booking is not this read's
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+                     read_key="read-a", read=True).frame("XAUUSD", "4h", 2013)
+    with pytest.raises(D.SealedStore):
+        ST.StoreData(columns=V.CORE_6, labels=tmp_path, features=tmp_path, tiers_path=tiers, ledger=led, unit="4h",
+                     read_key="read-b", read=True).frame("XAUUSD", "4h", 2013)
+
+
+def test_fit_only_reruns_never_book_and_the_read_books_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Quant N1 on #488: fit-only runs (also after a label spec or trainer code change) write no read-once row and
+    never raise; `--read` books sr-v3:<unit> at the start of phase 3, keyed on the frozen fit, and succeeds once; a
+    second `--read` raises AlreadyRead."""
+    import argparse
+    from types import SimpleNamespace
+    cli = _cli()
+    data, plan = _data(), _plan()
+    store = _FixtureStore(data.frames, gate=ELIGIBLE, cost_version="fixture-ub95")
+    s0 = SimpleNamespace(status="fit", level="L3", body="pooled", model_dump=lambda mode="json": {"level": "L3"})
+    monkeypatch.setattr(cli, "_store", lambda a, unit=None, key=None: store)
+    monkeypatch.setattr(T, "stage0", lambda *a, **k: s0)
+    monkeypatch.setattr(T, "plan_from_stage0", lambda s: plan)
+    tiers = tmp_path / "tiers.csv"
+    tiers.write_text("key,month,tier\nXAUUSD,2013-01,A\n")
+    led = tmp_path / "l.jsonl"
+    a = argparse.Namespace(units="4h", members="XAUUSD,EURUSD", labels=str(tmp_path), features=str(tmp_path),
+                           tiers=str(tiers), rho=str(RHO_FILE), ledger=str(led), out=str(tmp_path / "o"),
+                           stage0_only=False, read=False, cost_manifest=None, trial_id=TRIAL)
+
+    def fit_only() -> None:
+        cli.phase1("4h", a)
+        cli.phase2(["4h"], a)
+        cli.phase3("4h", a)
+    fit_only()
+    monkeypatch.setattr(D, "spec_hash", lambda *x, **k: "f" * 64)          # a label spec change
+    monkeypatch.setattr(T, "code_version", lambda *x, **k: {"files": {"changed": "1"}})   # a trainer code change
+    fit_only()
+    assert not [r for r in T.WN.read_ledger(led) if str(r.get("family", "")).startswith("sr-v3:")]
+    a.read = True
+    out = cli.phase3("4h", a)
+    assert out["mode"] == "read"
+    rows = [r for r in T.WN.read_ledger(led) if r.get("family") == "sr-v3:4h"]
+    assert len(rows) == 1 and rows[0]["ref"]["label_spec_hash"] == "f" * 64
+    ref = rows[0]["ref"]          # rev 9 D1 "Freeze": served columns, tiers sha, lookbacks hash in the booking
+    assert ref["columns"] == list(plan.lcw_columns) and len(ref["tiers_sha256"]) == 64
+    assert len(ref["column_lookbacks_sha256"]) == 64
+    with pytest.raises(T.WN.AlreadyRead):
+        cli.phase3("4h", a)
+
+
+def test_a_read_refuses_without_a_frozen_fit_only_run(tmp_path: Path) -> None:
+    import argparse
+    cli = _cli()
+    a = argparse.Namespace(out=str(tmp_path / "o"), read=True)
+    (tmp_path / "o" / "4h").mkdir(parents=True)
+    (tmp_path / "o" / "4h" / "collected.json").write_text("{}")
+    with pytest.raises(SystemExit, match="fit-only"):
+        cli.frozen_fit("4h", a)
+
+
+def test_a_judged_unit_reads_only_under_a_booked_trial_id() -> None:
+    data, plan = _data(), _plan()
+    assert plan.stage0["judged"]
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.fit_unit(data, plan, hb_by_fold=None, seeds=T.SEEDS[:1], with_harness=False, read=True)
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.learner_read(pd.DataFrame(), "L-cw", trial_id=None, judged=True)
+    with pytest.raises(R.ReadRefused, match="trial"):
+        R.paired_d(pd.DataFrame(), "L-cw", "B8", trial_id=None, judged=True)
+
+
+def test_gcw_hb_and_avg_keep_sealed_scores_only_until_the_zoo_v2_card_is_signed(tmp_path: Path) -> None:
+    data, plan = _data(), _plan()
+    assert R.ZOO_V2_CARD is None
+    res = R.fit_unit(data, plan, hb_by_fold=T.hb_from_plans(data, [plan], seed=T.SEEDS[0]), seeds=T.SEEDS,
+                     read=True, trial_id=TRIAL, harness_rows=20_000)
+    r = res.report
+    assert set(r["learners"]) == {"L-cw"} and set(r["read_learners"]) == {"L-cw", "B8"}
+    assert set(r["withheld"]) == {"G-cw", "HB", "AVG"}
+    assert all("G-cw" not in k and "HB" not in k and "AVG" not in k for k in r["paired_d"])
+    assert "d_vs_gcw" not in r["learners"]["L-cw"]
+    assert set(r["seed_stability"]) <= {"L-cw", "HB", "B8"}
+    h = r["harness"]
+    assert set(h["canaries"]) == set(h["shuffle"]) == set(h["parameter_shift"]) == {"L-cw"} and "seed_s" not in h
+    assert {"v_G-cw", "v_HB", "v_AVG"} <= set(res.oof.columns), "their OOF scores are still written (sealed)"
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    for name in ("G-cw", "HB", "AVG"):
+        assert "s" not in mans[name].results and not mans[name].quality, name
+    assert "s" in mans["L-cw"].results
+
+
+# ---------------------------------------------------------------------------------------------- LOW: guarded fit
+def test_the_fit_path_is_a_guarded_module_and_its_guard_is_clean() -> None:
+    """Quant LOW on #488: sr_v3_train is in objective.GUARDED_MODULES; the read (diagnostics, AUC) and the run record
+    (model_quality, run_manifest) live in sr_v3_report, the stores in sr_v3_store, so nothing on the fit path reaches
+    a banned name or module."""
+    from goldbot.research import model_quality as MQ
+    from goldbot.research import objective as O
+    assert "goldbot.research.sr_v3_train" in O.GUARDED_MODULES
+    assert O.guard_violations("goldbot.research.sr_v3_train") == []
+    assert list(T.SEEDS) == MQ.seed_list(T.MANIFEST_KEY), "the fit path's copy of seed_list's formula"
+    assert R.BUILDER == "goldbot.research.sr_v3_report:build_artifact"
+
+
+# ---------------------------------------------------------------------------------------------- ruling 2: broker
+def test_every_read_states_s_at_the_worse_broker_cost(fitted: tuple) -> None:
+    """Quant ruling (2) on #488: history charges a cell's worse broker; every read says so (serving charges the
+    account's own broker cell)."""
+    r = fitted[2].report
+    assert r["cost_statement"] == R.WORSE_BROKER_STATEMENT == "S at the worse-broker cost"
+    assert "S at the worse-broker cost" in R.report_md(r)
+    assert all(e["read"]["cost_statement"] == R.WORSE_BROKER_STATEMENT for e in r["learners"].values())
+
+
+# ---------------------------------------------------------------------------------------------- pooled costs
+def test_a_pooled_body_read_carries_prior_costs_and_is_never_a_gate_read(fitted: tuple, tmp_path: Path) -> None:
+    """Quant re-verify on #488: FX costs are priors (no measured anchor), so any pooled-body read carries
+    cost_version=prior and is refused as a gate read; a gold-only body keeps its table version."""
+    data, plan, res = fitted
+    r = res.report
+    assert r["cost_version"] == "prior" and r["cost_table_version"] == "fixture-ub95"
+    assert r["gate_read"] is False and "FX" in r["gate_read_block"]
+    frames = T.frames_file(data, tmp_path / "frames.parquet")
+    mans = R.record_unit(res, plan, seeds=T.SEEDS, source={"kind": "frames"}, data_version="x", data_root=tmp_path,
+                         data_files=[frames.name], hb_plans=[plan], root=tmp_path / "m")
+    assert all(m.results["cost_version"] == "prior" and m.results["gate_read"] is False for m in mans.values())
+    gold = _data(("XAUUSD",))
+    g = R.fit_unit(gold, _plan(members=("XAUUSD",)), hb_by_fold=None, seeds=T.SEEDS[:1], read=True, trial_id=TRIAL,
+                   with_harness=False).report
+    assert g["cost_version"] == "fixture-ub95" and g["gate_read"] is True
+
+
+# ---------------------------------------------------------------------------------------------- rev 9: usability
+def _tiers_file(tmp_path: Path, bad: dict[str, str]) -> Path:
+    months = [str(m) for m in pd.period_range("2009-01", "2011-12", freq="M")]
+    p = tmp_path / "tiers.csv"
+    pd.DataFrame({"key": "XAUUSD", "month": months, "tier": [bad.get(m, "A") for m in months],
+                  "r11_id": "r11-test"}).to_csv(p, index=False)
+    return p
+
+
+def _skeleton(start: str, days: int, tf: str = "1h") -> pd.DataFrame:
+    d = pd.bdate_range(start, periods=days, tz="UTC")
+    dec = pd.DatetimeIndex([x + pd.Timedelta(hours=h) for x in d for h in (8, 12, 16)])
+    return pd.DataFrame({"instrument": "XAUUSD", "source": "dukascopy", "tf": tf, "template": "T2", "phase": 0,
+                         "decision_utc": dec, "horizon_end_utc": dec + pd.Timedelta(seconds=V.H_S[tf]),
+                         "label_ok": True, "u": 0.2})
+
+
+def test_stage0_counts_rows_usable_under_each_column_set(tmp_path: Path) -> None:
+    """Rev 9 D1, acceptance (i): a C month 60 days before an A month: core-6 rows > 0 and P30 rows = 0 (P30's d1
+    context reads 129 days back; core-6's longest strict lookback is days)."""
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    ev = ST.prefix_usability(_skeleton("2010-05-10", 15), tiers)
+    core6 = T.stage0_counts(ev, years=(2010,), columns=V.CORE_6)
+    p30 = T.stage0_counts(ev, years=(2010,), columns=V.P30)
+    assert core6 and core6[0].rows == len(ev) and p30 == []
+    assert T.stage0_counts(ev, years=(2010,))[0].rows == len(ev), "the label window alone"
+    assert np.array_equal(T.usable_under(ev, V.P30),
+                          D.attach_tiers(ev, tiers, columns=V.P30)["usable"].to_numpy()), "conjunction = P30 mask"
+
+
+def test_card_test_18_iv_stage0_stays_label_blind_under_per_column_usability(tmp_path: Path) -> None:
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    sk = _skeleton("2010-05-10", 15)
+    a = ST.prefix_usability(sk, tiers)
+    b = ST.prefix_usability(sk.assign(gross_r_raw=np.random.default_rng(1).normal(size=len(sk)),
+                                      barrier_hit="stop"), tiers)
+    cols = [c for c in a.columns if c == "usable" or c.startswith("ok:")]
+    assert a[cols].equals(b[cols]), "usability reads no label value"
+
+
+def test_the_p30_mask_comes_from_attach_tiers_on_the_loaded_rows_not_a_second_load(tmp_path: Path) -> None:
+    """Rev 9 quant C3, test (iv): a C month inside the P30 lookback but outside core-6's: the row is usable for
+    L-cw (core-6) and not for HB / G-cw / AVG (P30), from attach_tiers on the one label load."""
+    from goldbot.research import feature_store as F
+    tiers = F.Tiers.from_csv(_tiers_file(tmp_path, {"2010-03": "C"}), source="dukascopy")
+    sk = _skeleton("2010-05-10", 10)
+    assert D.attach_tiers(sk, tiers, columns=V.CORE_6)["usable"].all()
+    assert not ST.p30_mask(sk, tiers).any()
+    late = _skeleton("2010-09-13", 10)
+    assert ST.p30_mask(late, tiers).all(), "129 days after the C month: P30-usable again"
+
+
+def test_p30_wide_learners_skip_rows_outside_the_p30_mask_and_lcw_keeps_them() -> None:
+    """Rev 9 D1: L-cw trains and scores on rows usable under the served columns; HB and G-cw stay on P30."""
+    data, plan = _data(readable=False), _plan()
+    masked = {}
+    for k, f in data.frames.items():
+        g = f.copy()
+        g["p30_ok"] = pd.DatetimeIndex(g["decision_utc"]).month > 3      # Jan-Mar of each year: not P30-usable
+        masked[k] = g
+    md = T.FrameData(masked)
+    col = T.collect(md, plan, seed=T.SEEDS[0])
+    Y = 2015
+    n_all = sum(int(T.train_mask(md.frame(i, "4h", y), Y).sum()) for i in plan.members for y in V.LEARN_YEARS)
+    n_p30 = sum(int((T.train_mask(f := md.frame(i, "4h", y), Y) & f["p30_ok"].to_numpy(bool)).sum())
+                for i in plan.members for y in V.LEARN_YEARS)
+    assert sum(m.n for m in col.lcw[Y].values()) == n_all
+    assert sum(m.n for m in col.hb[Y].values()) == n_p30 < n_all
+    hb = T.hb_from_plans(md, [plan], seed=T.SEEDS[0])
+    res = T.fit_unit(md, plan, hb_by_fold=hb, col=col, seeds=T.SEEDS[:1])
+    o = res.full
+    off = ~o["p30_ok"].to_numpy(bool)
+    assert off.any() and o.loc[off, "v_L-cw"].notna().all()
+    for name in ("HB", "G-cw", "AVG"):
+        assert o.loc[off, f"v_{name}"].isna().all() and not o.loc[off, f"k_{name}"].any(), name
+        assert o.loc[~off, f"v_{name}"].notna().any(), name
+    assert res.report["rows_per_year"] and res.report["p30_rows_per_year"]
+    assert sum(res.report["p30_rows_per_year"].values()) < sum(res.report["rows_per_year"].values())
+
+
+# ---------------------------------------------------------------------------------------------- gold row cost (N2)
+def _gold_cost_files(tmp_path: Path) -> Path:
+    """A cost manifest like srv3-cost-bb199294...: cost table with ecr_ub95_usd, the Dukascopy gold session spread
+    per month (available the instant after the month) and cost_table.json's commission per oz round trip."""
+    import hashlib
+    import json
+    man = _cost_files(tmp_path)
+    d = tmp_path / "costs"
+    ct = pd.read_parquet(d / "cost_table.parquet")
+    ct["ecr_ub95_usd"] = np.where(ct["instrument"] == "XAUUSD", np.where(ct["broker"] == "icm", 0.28, 0.30), np.nan)
+    ct.to_parquet(d / "cost_table.parquet", index=False)
+    months = [str(m) for m in pd.period_range("2012-10", "2013-06", freq="M")]
+    sp = pd.DataFrame([{"instrument": "XAUUSD", "session": s, "month": mo,
+                        "ub95_usd": 5.0 if mo == "2013-03" else (0.35 if s == "asia" else 0.20),
+                        "available_utc": (pd.Period(mo, "M") + 1).start_time.tz_localize("UTC")}
+                       for s in ("asia", "london", "newyork") for mo in months])
+    sp.to_parquet(d / "gold_spread_table.parquet", index=False)
+    (d / "cost_table.json").write_text(json.dumps({"commission_rt_usd_per_oz": {"icm": 0.08, "vantage": 0.06}}))
+    m = json.loads(man.read_text())
+
+    def sha(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    m["costs"]["path"] = str(d / "cost_table.json")
+    m["costs"]["files"].update({"cost_table_sha256": sha(d / "cost_table.parquet"),
+                                "gold_spread_table": str(d / "gold_spread_table.parquet"),
+                                "gold_spread_table_sha256": sha(d / "gold_spread_table.parquet")})
+    man.write_text(json.dumps(m))
+    return man
+
+
+def test_a_gold_row_is_charged_the_max_of_cell_ecr_and_last_complete_month_spread(tmp_path: Path) -> None:
+    """Data team N2 (cost version srv3-cost-bb199294): per gold row rt = max(cell rt_bp, ECR ub95 USD / entry x 1e4,
+    (Dukascopy spread ub95 of the session's latest COMPLETE month before the decision + commission) / entry x 1e4),
+    at the worse broker; 2013-priced fixture (entry 1,600)."""
+    t = T.CostTable.from_manifest(_gold_cost_files(tmp_path))
+    rows = _cost_rows(hour=2).assign(entry=1_600.0)                # asia, 2013-03-04..07: Feb is the last complete
+    want_icm = max(1.4, 0.28 / 1_600 * 1e4, (0.35 + 0.08) / 1_600 * 1e4)
+    want_vantage = max(0.9, 0.30 / 1_600 * 1e4, (0.35 + 0.06) / 1_600 * 1e4)
+    assert np.allclose(t.rt_bp(rows), max(want_icm, want_vantage))
+    assert t.rt_bp(rows).max() < 5.0 / 1_600 * 1e4, "the decision month's own spread is never used"
+    eur = _cost_rows(inst="EURUSD", hour=10)
+    assert np.allclose(t.rt_bp(eur), 0.9), "non-gold rows keep the cell"
+    assert "gold_spread_table" in t.files
+
+
+def test_the_gold_row_cost_equals_the_data_teams_row_rt_bp(tmp_path: Path) -> None:
+    """Pinned to scripts/research/sr_v3_cost_table.py:row_rt_bp at PR #512 commit 17181d1b (reimplemented here:
+    the guarded fit path imports no script)."""
+    import subprocess
+    import types
+    try:
+        src = subprocess.run(["git", "show", "17181d1b:scripts/research/sr_v3_cost_table.py"], cwd=ROOT,
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("PR #512's commit is not in this clone")
+    mod = types.ModuleType("sr_v3_cost_table_pr512")
+    mod.__dict__["__file__"] = str(ROOT / "scripts" / "research" / "sr_v3_cost_table.py")
+    exec(compile(src, "sr_v3_cost_table.py", "exec"), mod.__dict__)
+    man = _gold_cost_files(tmp_path)
+    t = T.CostTable.from_manifest(man)
+    d = tmp_path / "costs"
+    cost, spread = pd.read_parquet(d / "cost_table.parquet"), pd.read_parquet(d / "gold_spread_table.parquet")
+    rows = pd.concat([_cost_rows(hour=h).assign(entry=1_600.0 + h) for h in (2, 10, 16)], ignore_index=True)
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    sess = np.asarray(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex(rows["decision_utc"]))).astype(str)
+    ref = np.maximum.reduce([mod.row_rt_bp(rows.assign(broker=b, session=sess), cost, spread,
+                                           {"icm": 0.08, "vantage": 0.06}) for b in ("icm", "vantage")])
+    assert np.allclose(t.rt_bp(rows), np.maximum(DC.RT_BP, ref))
+
+
+def test_a_tampered_gold_spread_table_is_refused(tmp_path: Path) -> None:
+    man = _gold_cost_files(tmp_path)
+    p = tmp_path / "costs" / "gold_spread_table.parquet"
+    pd.read_parquet(p).assign(ub95_usd=0.0).to_parquet(p, index=False)
+    with pytest.raises(ValueError, match="sha256"):
+        T.CostTable.from_manifest(man)

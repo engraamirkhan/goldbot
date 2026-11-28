@@ -25,7 +25,7 @@ from goldbot.features import price_action_x6 as X6
 from goldbot.features.registry import COLUMN_LOOKBACKS, column_lookback
 from goldbot.research import column_lookback as CL
 
-TFS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")
+TFS = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w")
 FREQ = {"1m": "1min", "15m": "15min", "4h": "4h", "1d": "1D"}
 FEATURE_OF = {**{c: X6.NAME_CANDLES for c in X6.CANDLE_COLUMNS}, **{c: X6.NAME_STRUCTURE for c in X6.STRUCTURE_COLUMNS},
               **{c: X6.NAME_LEVELS for c in X6.LEVEL_COLUMNS}}
@@ -59,8 +59,8 @@ def test_no_column_changes_when_later_bars_are_appended(tf: str, n: int) -> None
 
 
 # --------------------------------------------------------------------------- bounded memory
-FREQ_ALL = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1D",
-            "1w": "7D"}
+FREQ_ALL = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "2h": "2h", "4h": "4h",
+            "1d": "1D", "1w": "7D"}
 PATHS = ("walk", "trend")          # a random walk on a continuous clock; a trend on a weekday clock (weekend gaps)
 CHUNKS = 6                         # rows T per (tf, path) are split over this many cases (xdist)
 

@@ -27,6 +27,8 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      from its own entry value, so with a constant spread it equals the mid move. The spread is charged once, in
      cost(x).
    - d0 = Wilder ATR14 of the tf's mid bars at the decision, x sqrt(H/h_ref), with **h_ref = H until D-4 freezes it**.
+     D-4 froze it on 2026-11-27 (sr-v3 rev 10, `xt-v1`): h_ref = H of the tf, so the factor is 1 and no value
+     changes; `LabelSpec.h_ref` is the per-tf seconds map and `gate_status` checks `exit_freeze_hash`.
      d0 is floored at 1.5 x the median 1m true range over the 1,440 minutes up to the decision.
    - R is the template's own initial stop (T0: d0).
    - Fills are conservative:
@@ -92,9 +94,15 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
      - A spike bar is displaced whole, open to close, by a random sign.
      - Tightness looks for the bar-just-inside failure on the 8 CI seeds first, then on the rest of the 32, because
        the seed that binds L can be any of them.
-     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`, floor sha256
-       b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166. A test pins this sha, so the floor changes
-       only together with this ADR.
+     - The floor is the declaration this ruling signs: `tests/fixtures/column_lookbacks_floor.json`.
+       floor sha256 a220592dd6700d67e0a0bb3c450d9319cdef2d414c9767a4b4ce5150fca3b845 (2h added 2026-11-26, quant
+       verdict on #485; was b5505ff75cb9f314dd785bb59f30dc6ff214b61a2db05829c63fa874f13f7166). A test pins this sha,
+       so the floor changes only together with this ADR.
+     - 2h (TF-2h, PR #485), quant closing text: "2h lookbacks for every per-tf column are measured by
+       `column_lookback.measure` (two perturbations, 32 seeds; the no-shrink floor fixture gains 2h). The X6
+       structural bounds at 2h use r = 2: (LV_WINDOW + 1)·2 and (LV_RETEST + LV_WINDOW + 1)·2. The all-phase X6 tail
+       test includes 2h." Measured 2026-11-26: every int-declared column measures its declared value at 2h;
+       sess_high_dist_atr 92, sess_low_dist_atr 91.
      - A declared lookback below the floor needs a marker in `registry.COLUMN_LOOKBACK_REREVIEW` (code review LOW-3
        on #478):
        - the marker carries a "PR #N" or "ADR NNNN" reference;
@@ -124,6 +132,19 @@ Status: proposed (data-engineer, 2026-11-25); quant sign-off on the label defini
    - **Template rule:**
      - intraday: A / A-consistent for every template;
      - 1d / 1w: A / A-consistent for barrier templates; T0 also accepts B.
+   - **Rule R-a (quant ruling on PR #486, 2026-11-26), appended verbatim:** "A column declared close-only in the
+     registry (`CLOSE_ONLY_COLUMNS`) accepts lookback months graded B. Every other column needs A or A-consistent
+     over its lookback. The label window (decision month through horizon end) needs A or A-consistent for barrier
+     templates, and also B for T0 at 1d/1w as before. C, F, P and ungraded months are never usable. A row's usability
+     is the conjunction over its requested columns."
+     - Code: `dense_labels.attach_tiers` checks two spans per row: strict = [decision - the lookback of the columns
+       that are not close-only, horizon end] under the template rule, and close = [decision - the lookback of the
+       close-only columns, decision] at A / A-consistent / B. `tier` reports the worst month read.
+     - Proof (`tests/test_close_only_columns.py`): for every column in `CLOSE_ONLY_COLUMNS`, perturbing open, high,
+       low, spread and tick count of every bar with the closes unchanged leaves the value identical (15m, 4h, 1d);
+       a column that fails cannot be declared close-only, and the check bites on range, spread and volume columns.
+     - R-b (same ruling): "HistData XAUUSD does not lift Dukascopy non-A months (it is their reference; disagreement
+       is not arbitrable under r11-v2.1, and source switching breaks A16). GOLD-TIER proceeds via R-a only."
    - **Sources.** The tiers must grade the rows' own source, `<source>:<instrument>` (quant C3 on #462), unless the
      caller passes a `proxy_source`. The D-1 served file (`tiers_served_r11-v2.1.csv`, sha256 ff653ea7..., PR #467)
      grades dukascopy:XAUUSD and histdata:<FX>.

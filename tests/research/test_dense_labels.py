@@ -341,6 +341,16 @@ def test_tier_rules(tmp_path: Path, mins: pd.DataFrame) -> None:
     assert (bd.loc[bd["usable"], "template"] == "T0").all() and bd["usable"].any()   # B: close-to-close only
 
 
+def test_core_12_position_4_is_rv_ratio_and_atr_ratio_14_100_stays_in_p30_after_rev_8() -> None:
+    """Card 3.1 rev 8 (quant ruling 2026-11-26): "core-12 position 4 is `rv_ratio` (replaces `atr_ratio_14_100`, which
+    moves to the rest of P30 in its 3.1 position)". One substitution, the same order at every tf."""
+    core12 = D.COLUMN_SETS["core-12"]
+    assert core12 == ("side", "tsmom_score", "dist_vwap48_atr", "rv_ratio", "er_30", "bb_z_20", "ret_16", "ret_96",
+                      "donchian_pos_20", "adx14", "compression_8_96", "min_since_london_open")
+    assert D.COLUMN_SETS["core-6"] == core12[:6] and "atr_ratio_14_100" not in core12
+    assert {"atr_ratio_14_100", "rv_ratio"} <= set(D.COLUMN_SETS["P30"])     # P30 itself is unchanged
+
+
 def test_column_sets_and_input_lookback() -> None:
     """ADR 0104 4 (quant ruling 2026-11-26): the lookback is the max of each column's declared lookback, x 7/5 below
     1w; a d1_ column reads its base column's 1d lookback in daily bars x 7/5 on a tf with the d1 context."""
@@ -566,6 +576,45 @@ def test_ledger_tolerates_one_torn_final_line_only(tmp_path: Path) -> None:
         D.booked(ledger, "r", "s", [WN.Window.CONFIRM], "sr_v3")
 
 
+def _mixed_tiers(tmp_path: Path, inst: str, by_month: dict[str, str]) -> F.Tiers:
+    p = tmp_path / "tiers_mixed.csv"
+    pd.DataFrame({"key": inst, "month": list(by_month), "tier": list(by_month.values()),
+                  "r11_id": "r11-test"}).to_csv(p, index=False)
+    return F.Tiers.from_csv(p)
+
+
+def test_rule_r_a_close_only_lookbacks_accept_b_months_nothing_else_does(tmp_path: Path) -> None:
+    """R-a (quant ruling on PR #486, ADR 0104 4): B lookback months only for close-only columns; the label window
+    stays A / A-consistent; C never; usability is the conjunction over the requested columns."""
+    m = _minutes("2015-03-26", 8 * 1440).assign(source="histdata:EURUSD")
+    rows = _rows(m, "15m", source="histdata:EURUSD").assign(instrument="EURUSD")
+    lab = D.label_rows(D.Minutes(m), rows, "15m")
+    assert D.close_only("ret_96") and not D.close_only("atr_ratio_14_100") and D.close_only("d1_rv_ratio")
+
+    def month(ts: pd.Series) -> np.ndarray:
+        return D.months_between(pd.Series(ts), pd.Series(ts))[0]
+
+    def starts_in_march(col: str) -> np.ndarray:
+        return month(pd.Series(pd.DatetimeIndex(lab["decision_utc"]) - D.input_lookback("15m", [col]))) == "2015-03"
+    april = (month(lab["decision_utc"]) == "2015-04") & (month(lab["horizon_end_utc"]) == "2015-04")
+    ok = lab["label_ok"].to_numpy(bool) & april
+    reach = starts_in_march("ret_96") & april
+    strict_reach = starts_in_march("spread_rel_median_48")
+    assert (reach & ~strict_reach).any() and (april & ~reach).any() and ok.any()
+    mar_b = _mixed_tiers(tmp_path, "EURUSD", {"2015-03": "B", "2015-04": "A"})
+    close = D.attach_tiers(lab, mar_b, columns=("side", "ret_96", "spread_rel_median_48"))
+    # B only in a close-only lookback: usable; B in the strict column's lookback or the label window: not
+    assert (close["usable"].to_numpy() == (ok & ~strict_reach)).all() and close["usable"].to_numpy()[reach].any()
+    assert set(close.loc[reach, "tier"]) == {"B"}            # reported tier = the worst month read
+    strict = D.attach_tiers(lab, mar_b, columns=("side", "atr_ratio_14_100"))
+    assert starts_in_march("atr_ratio_14_100")[april].all() and not strict["usable"].any()   # strict lookback: B refused
+    both = D.attach_tiers(lab, mar_b, columns=("side", "ret_96", "atr_ratio_14_100"))
+    assert not both["usable"].any()                          # conjunction over the columns
+    mar_c = _mixed_tiers(tmp_path, "EURUSD", {"2015-03": "C", "2015-04": "A"})
+    c = D.attach_tiers(lab, mar_c, columns=("side", "ret_96"))
+    assert not c.loc[reach, "usable"].any() and (c["usable"].to_numpy()[april & ~reach] == ok[april & ~reach]).all()
+
+
 def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
     """ADR 0085 A4 (recorded 2026-11-26, quant R-b on #472): a store read under the recorded tiers file opens on the
     learn window without monkeypatching the seal, and a 2018 read without a booked read id is still refused."""
@@ -583,15 +632,17 @@ def test_a4_recording_unseals_learn_reads_only(tmp_path: Path) -> None:
     lab, meta = D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2015], tiers=served, columns=CORE6,
                               keys={(2015, 0): k15}, window=learn)
     assert len(lab) and meta["tiers_sha256"] == rec and meta["booked_read"] is None
-    # quant A4 on #482: w2-point rows (and h_ref = H) are not a gate read, machine-readably
+    # quant A4 on #482: w2-point rows are not a gate read, machine-readably; D-4 froze the exits (xt-v1), so the
+    # shipped spec carries no D-4 block and the old h_ref = H placeholder (or any other string) does
     assert (lab["cost_version"] == "w2-point").all()
     assert meta["gate_eligible"] is False and any("w2-point" in b for b in meta["gate_block"])
-    assert any("h_ref" in b for b in meta["gate_block"])
+    assert not any("D-4" in b for b in meta["gate_block"])
     with pytest.raises(PermissionError, match="not a gate read"):
         D.require_gate_eligible(meta)
-    assert D.gate_status(lab.assign(cost_version="ecr-ub95"),
-                         D.SPEC.model_copy(update={"h_ref": "frozen-D4"})) == {"gate_eligible": True,
-                                                                                "gate_block": []}
+    assert D.gate_status(lab.assign(cost_version="ecr-ub95")) == {"gate_eligible": True, "gate_block": []}
+    for placeholder in ("H", "frozen-D4"):
+        assert not D.gate_status(lab.assign(cost_version="ecr-ub95"),
+                                 D.SPEC.model_copy(update={"h_ref": placeholder}))["gate_eligible"]
     confirm = (pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2025-10-01", tz="UTC"))
     with pytest.raises(PermissionError, match="booked"):
         D.load_labels(tmp_path, procedure="sr-v3", ledger=tmp_path / "reads.jsonl", instrument="EURUSD", tf="15m", years=[2018], tiers=served, columns=CORE6,

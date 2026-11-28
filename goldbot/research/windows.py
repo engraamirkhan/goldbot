@@ -65,6 +65,14 @@ if sys.platform == "win32":                # pragma: no cover - exercised on the
             except OSError:
                 time.sleep(0.01)
 
+    def _try_lock_fd(fd: int) -> bool:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
     def _unlock_fd(fd: int) -> None:
         os.lseek(fd, 0, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
@@ -78,6 +86,16 @@ else:
         if fcntl is None:
             raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
         fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _try_lock_fd(fd: int) -> bool:
+        """One non-blocking attempt at the exclusive lock: True when taken."""
+        if fcntl is None:
+            raise LedgerLockUnavailable("no fcntl on this platform: the read ledger cannot be locked")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
 
     def _unlock_fd(fd: int) -> None:
         if fcntl is not None:
@@ -230,6 +248,9 @@ class AlreadyRead(PermissionError):
 READ_ONCE_FAMILIES: dict[str, frozenset[Window]] = {
     # H-101, prereg-2026-11-25-model-zoo-fusion.md: Stage L (learn labels), Stage C, Stage T
     "model_zoo_fusion": frozenset({Window.LEARN, Window.CONFIRM, Window.TEST_OLD}),
+    # sr-v3, prereg-2026-11-26-sr-v3.md (quant H3 on #488): each unit's learn-label read (Stage L) is read once,
+    # booked by the trainer before its first label read; one family per unit (= sr_v3.UNITS, pinned by a test)
+    **{f"sr-v3:{u}": frozenset({Window.LEARN}) for u in ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d+1w")},
 }
 READS_LEDGER = "window_reads.jsonl"     # beside the research registry (state/), never committed
 

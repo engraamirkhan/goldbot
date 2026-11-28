@@ -58,6 +58,15 @@ with the artefacts they describe.
    previous model that would not serve; the alarmed champion is retired and health `model_watch` fails. Code review:
    rollback-model runs under a registry file lock and keeps the demoted champion as `previous` (roll forward with the
    same command); a recalibration keeps the fitted sha in its first record; threadpoolctl is a declared dependency.
+   Round 2: the Saturday retrain records a manifest over 5 seeds and registers only a servable refit (so the retrain
+   loop does not stop silently at the cutoff); `promote` refuses an unservable challenger; a blackout re-score with no
+   served model is recorded and health-warned; health `model_serving` fails on a refused champion; registry writes
+   re-read the file under the registry lock (a long-lived instance cannot undo a rollback).
+   Round 3: the engine waits at most 1 s for the registry lock (a rule challenger is then created at a later reload)
+   and checks for an existing entry before locking; `entries` re-reads a changed file; one failed recalibration is
+   reported and the job goes on. The Saturday refit's `data_version` hashes the decision bars and every context frame
+   in sorted label order. Its `scaler_fit_end` is the train end: no fitted transform reads features past the last
+   decision instant; the calibrator learns from outcomes that resolve by `label_end_max`, recorded separately.
 
 ## Consequences
 - A model trained after 2026-11-27 without a manifest does not reach the engine. Before `specialist_retrain` is

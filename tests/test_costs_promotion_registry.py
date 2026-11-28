@@ -5,7 +5,6 @@ import pytest
 from goldbot.execution.costs import CostTable, build_cost_table, slippage_table, spread_table
 from goldbot.research.as_if_sizing import AsIfReport
 from goldbot.research.model import MetaLabelModel
-from goldbot.research.model_quality import MANIFEST_REQUIRED_FROM
 from goldbot.research.model_registry import ModelRegistry
 from goldbot.research.promotion import PairedRead, PerfStats, evaluate_promotion
 
@@ -146,13 +145,13 @@ def test_registry_lifecycle_and_restore(tmp_path):
 
 
 def test_tampered_artefact_is_refused_for_serving_and_other_champions_still_serve(tmp_path):
-    """ADR 0109 / PR #494 safety H1: one bad artefact refuses only its own model; serving never raises. Both fits
-    predate MANIFEST_REQUIRED_FROM, so only the checksum decides (a wall-clock fit would need a run manifest)."""
+    """ADR 0109 / PR #494 safety H1: one bad artefact refuses only its own model; serving never raises. Fitted before
+    MANIFEST_REQUIRED_FROM (a fixed instant), so the result does not depend on the date the suite runs."""
     reg = ModelRegistry(tmp_path)
-    before = (MANIFEST_REQUIRED_FROM - pd.Timedelta(days=1)).to_pydatetime()
-    e = reg.add_challenger(_model("a"), family="session_open", agent_id="x", backtest={}, now=before)
+    t0 = pd.Timestamp("2026-10-03 06:00", tz="UTC")
+    e = reg.add_challenger(_model("a"), family="session_open", agent_id="x", backtest={}, now=t0)
     reg.promote(e.version)
-    ok = reg.add_challenger(_model("b"), family="session_open", agent_id="y", backtest={}, now=before)
+    ok = reg.add_challenger(_model("b"), family="session_open", agent_id="y", backtest={}, now=t0)
     reg.promote(ok.version)
     (tmp_path / e.artefact).write_bytes(b"not the model")
     with pytest.raises(ValueError, match="checksum"):

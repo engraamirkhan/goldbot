@@ -5,6 +5,191 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
+  20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
+  - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also
+    inside a day that has minutes (`BrokerRates.closures`); a run the pull does not reach past (the live tail) never.
+  - A closure one pull found is memory-only (trading-safety LOW: the terminal's local 1m history may hold an
+    un-resynced disconnect hole). It is re-pulled 1 h later (or once it ended a day ago) and recorded in aux.db
+    `history_closures` (migration aux 46, loaded at warm start) only when that second clean pull finds the same
+    empty run; a second pull that finds minutes there un-marks it.
+  - A hole wholly older than the fill floor that no pull covered, with <= `history_stale_gap_max_min` (240) open
+    minutes, is a closure for the refusal, logged once; off when either setting is 0. Quant hardening: the old
+    holes cleared inside one decision frame may not sum past that cap, or the frame is refused. Holes in the fill window and
+    longer old holes still refuse. Needs trading-safety + quant review.
+- 2026-11-27 session split reporting: the engine log and the `entry_silence:<account>` health reason show replay-only
+  control candidates beside the edge ones ("session split from 0 edge of 0; 62 replay-only control"), so an account
+  with no edge candidate no longer reads as dead. `exploration_budget.SplitCounts` / `split_counts`; the split itself
+  is unchanged (edge candidates only).
+- 2026-11-27 health `learning:cost_cells` is judged by its input, not the clock: daily_review refits a (broker,
+  session) cell only after `refit_min_fills` (200) eligible fills since its fit, and at ~40 fills a day the 9-day
+  silence read as a dead learner (WARN, FAIL 48 h later).
+  - `daily_review.pending_trades`/`pending_fills` (one rule for refit and health); `refit_cells` uses it, output unchanged.
+  - All cells below 200: ok, "waiting on fills: most-filled cell <broker> <session> n/200 since its fit <age> ago; at 0:
+    <brokers>". A cell at 200 whose daily_review ran with no new row: WARN, FAIL 48 h after that run.
+  - Counted over `HealthContext.learning_hosts` (enabled exploring accounts), cached 15 min; none or unreadable: clock.
+  - `learning:arm_lifecycle_verdicts` stays on the clock: one verdict per settled candidate, no count threshold.
+- 2026-11-27 run manifest hardening (security follow-up to #494): a manifest's `builder` must be
+  `goldbot.<module>:<function>` or `tests.rebuild_builders:<function>` (public name, defined in that module); anything else (`os:system`, `json:loads`)
+  fails validation and `build` refuses it before any import. `ModelEntry.manifest_id` must be 64 lowercase hex.
+  `rebuild` refuses a `data_files` key that resolves outside the data root (`../x`) before hashing or fitting.
+- 2026-11-27 health `self_retrain` reasons lead with "next slot <slot> UTC" (computed from scheduler.self_retrain).
+  - The late-start WARN fires only while the newest run is under a day old: the 11-24 run (slot 11-22,
+    `run_if_never_run`) no longer reads "40.9 h late" every day, which the 4 h cycle took for "self_retrain stopped".
+  - `model_influence` names the active/shadow models shadow scoring refuses, judged by the scorer's own
+    `provenance_problem` (now public), e.g. "0 served: 1 rows refused (no provenance, trained before migration 45)".
+    No provenance backfill.
+- sr-v3 card D-3, cost part (2026-11-27, microstructure-researcher). Quant review of #515 (CHANGES, F1-F5, F7)
+  applied; re-review routed to `quant-reviewer`, and `code-reviewer`.
+  - Today's fit-only gate block "cost_version w2-point: the ub95 cost of record per cell is not frozen (D-3)" comes
+    from the label rows, not the trainer: `dense_labels.label_rows` stamps every row w2-point and
+    `dense_labels.gate_status` refuses it (quant A4 on #482).
+  - Frozen cost of record `srv3-cost-2b3628372a9b3bfa` (content sha256 2b3628372a9b3bfa…dfa684): record file
+    `config/research/srv3_cost_record/srv3-cost-2b3628372a9b3bfa.yaml` (table file sha256s, ECR ecr-2026-11-20.2 and
+    its sha256, charge rule ub95, history months 2003-01..2025-09, 54 gold cells with rt_bp, ECR ub95 and slip_x,
+    class basis per instrument, `wait_charged_tfs` empty), and a recording line in ADR 0098 R-H. The unread draft
+    srv3-cost-bb199294 (era term without slippage) was never recorded. Table files are local
+    (`~/tmp/sr-v3-trainsets/costs-v2`); swap and spread are byte-identical to #512's, the cost table adds `slip_x_usd`.
+  - `goldbot/research/srv3_cost_record.py`: `apply(labels, meta, version, paths, *, rt_bp, spec)` hashes the three
+    table files' bytes itself, reads the spread from the verified file, refuses any measured row whose charge is not
+    `gold_row_bp` within 1e-6 bp (quant R1; `charge_floor` is a diagnostic), re-stamps gold rows,
+    (code review of #515) recomputes the content sha256 and the gold cells from the parsed file bytes, checks the
+    record's own `record_sha256` (416adbd8…; on the ADR line) on load, refuses a NaN era spread, other spread session
+    names and a NaT decision, keeps every other block, blocks every prior-class row (named) and gold 1m/5m (D-15).
+    `gold_row_bp(rows, record, spread)` is the per-row charge of record (point in time). `dense_labels.py` untouched.
+  - Read requirements (card 9a): first cost version read is the version of record (another is K+1); S by year and the
+    share of rows where the ECR term bound; 15m reads report S at the vantage cell charge (descriptive); holdout read
+    needs a new version; a 15m re-measure only as a new version with n ≥ 100 per cell before the first read.
+  - Next: #512 adds slip_x to `gold_rows`/`row_rt_bp` (patch in the #515 report) and re-issues the manifest at
+    srv3-cost-2b3628372a9b3bfa; #488 adds slip_x to `CostTable._gold_row_bp` (or calls `gold_row_bp`) and wires
+    `apply` after `load_labels`. Gold 15m-1w units then block on D-4 only; 1m/5m also on D-15.
+- 2026-11-27 sr-v3 D-4 (card rev 10, label-blind, K 0): the exit templates T0-T7 are frozen as `xt-v1`
+  (`dense_labels.exit_freeze()`, sha256 b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826), exactly
+  the card 2.1 table, with the W2-2 h_ref = H of the tf (factor 1). Reasons:
+  `docs/research/prereg-amendment-2026-11-27-sr-v3-d4-exit-freeze.md`.
+  - `gate_status` now blocks on `exit_freeze_hash(spec) != EXIT_FREEZE_SHA256` instead of `h_ref == "H"`; the
+    shipped spec clears the D-4 block. The D-3 block (w2-point cost rows) is unchanged.
+  - `LabelSpec.h_ref` is a per-tf seconds map and d0 = max(ATR14 x sqrt(H/h_ref), floor) is now computed, not
+    implied. Label values are numerically unchanged, but spec and code hashes change: every dl-v1 partition re-keys
+    and the label factory must re-run before the next trainer read.
+  - Quant review of #514 (changes applied): the freeze hashes the exit mechanics too (`behaviour_sha` over
+    first_passage, decision_bars/floor_at, entry_and_horizon on a fixed synthetic set); every row and manifest carries
+    `exit_freeze_sha` and `gate_status` checks the rows, not only the spec.
+  - D-12 bindings do not carry over to xt-v1 (new card item D-12-xt, ml-researcher, before Stage 0); the rho
+    validator refuses a file without the xt-v1 sha for gate/power reads (`check_rho_measurement(gate_read=True)`);
+    fit-only reads keep the recorded values.
+  - Quant re-verify of #514: one entry point for Stage 0 / power reads, `data_sufficiency.require_power_read_rho`
+    (rho_u,inst via `measured_rho(gate_read=True)` through `_rho_row`/`unit_rows`, and the rho_day file); the
+    sufficiency table flags `fx10` and `gold_fx` as "pre-xt-v1 rho_u,inst: fit-only, not a power read". The d0
+    composition (`_base_distance` inside `_label_core`) is in the behaviour sha; xt-v1 sha256 is now b68e2f7bbce9.
+- 2026-11-27 sr-v3 trainer (PR #488): the quant review's 11 findings are fixed, one commit each. The trainer now runs
+  fit-only by default; reads are gated.
+  - Fit-only (H2): writes artifacts and `oof_scores.parquet` (no label column; its sha is in the report and every
+    manifest) and no S, kept mean, S at 2x cost, D or net-based verdict. `--read` needs every load_labels read
+    gate_eligible, the ub95 cost table, and `--trial-id <booked registry trial>` for a judged unit (H3).
+  - Read-once (H3, N1): only `--read` books the unit's learn read, at the start of phase 3, in the ledger beside the
+    research registry (H4) as family `sr-v3:<unit>`, keyed on the frozen fit-only run (artifact shas, sealed OOF
+    scores sha, label spec hash); it needs that fit-only run, refuses a refit that does not reproduce it, and a
+    second `--read` raises AlreadyRead. Fit-only runs never book (consumption rows only), so refits after a spec or
+    code change never burn the read. G-cw, HB and AVG stay sealed (scores only) until the zoo-v2 card is signed
+    (`sr_v3_report.ZOO_V2_CARD`).
+  - Costs (H1, M2): `--cost-manifest` (default ~/tmp/sr-v3-trainsets/manifest.json) charges max(W2, ecr ub95) per
+    instrument x session x tf at the worse broker, plus the instrument's own swap; a row with no cell is refused.
+    Reads use the realised net_read (RT_ub95 + overshoot on stops + nights held x swap); keeps use cost(x). Every
+    read states "S at the worse-broker cost" (serving charges the account's own broker). A pooled body (any non-gold
+    member) carries cost_version=prior and is never a gate read until FX has a measured cost anchor.
+  - Gap (quant ruling 1, clarification of card R-B, K 0): per unit max(1 d, max H over the unit's tfs): 1 d for
+    1m-1h, 5 d for 4h, 20 d for 1d+1w; the M1 input-lookback term was withdrawn.
+  - Also: collected.json keeps train_end/label_end_max; manifests are recorded before outputs (H5); each G-cw seed
+    is its own 90 % resample (M4); N6 shifts whole days circularly by >= 20 trading days and passes per
+    (instrument x tf, session) cell (M3); an
+    end-to-end truncation test (M5).
+  - Modules (LOW): `sr_v3_train` (guarded fit path), `sr_v3_store` (stores and refusals), `sr_v3_report` (read,
+    run record, `build_artifact`).
+- 2026-11-27 sr-v3 Stage 0 "NOT STARTED (data)" resolved label-blind (research-director):
+  `docs/research/prereg-amendment-2026-11-27-sr-v3-stage0-usability.md` (rev 9, K 0, quant signs).
+  - Cause: the trainer masked every row by P30's 129-day lookback (d1 context / atr_ratio_14_100); the card (2.3) and
+    ADR 0104 §4 make usability per column set. Core-6/core-12 read 11 h (1m) to 112 d (4h).
+  - Decision: usability per ladder prefix / served body / learner; folds, first OOF 2012, the gap and the tier rule
+    unchanged; options (a) fold move, (b) B/C rule change and (c) 2003-05 refused.
+  - Gold fold 2010-11 core-6 rows: 1m 377,337, 5m 74,046, 15m 23,072, 30m 10,462, 1h 4,173, 2h 1,459, 4h 552
+    (P30 today: 0). Re-derived from the served tiers file; matches the trainer's P30 Stage 0 counts within 0.2 %.
+- sr-v3 trainer on the D-3 cost of record (quant F6 on #515) and the D-12-xt rho guard (code review of #514).
+  `sr_v3_store.cost_table(manifest)` builds the trainer's `CostTable` (the training script and the run_manifest
+  rebuild, `sr_v3_report.build_artifact`, both use it); for a version recorded under
+  `srv3_cost_record` it verifies the table files from their bytes and charges gold rows the record's own
+  `gold_row_bp` (slip_x included), and refuses a recorded manifest without its gold_spread_table.
+  `StoreData._learn_frame` passes every label load through `srv3_cost_record.apply`, so the stored gate status is
+  the record's (gold 15m-1w gate-eligible on cost; 1m/5m blocked "(D-15)"; non-gold blocked). The guarded fit path
+  (`sr_v3_train`) never imports `srv3_cost_record`: the charge is injected as `CostTable.gold_charge`. A recorded
+  table loaded with plain `CostTable.from_manifest` keeps the legacy charge, which `apply` refuses (fail closed).
+  `srv3_cost_record.py` is in the trainer's CODE_FILES.
+- Pooled Stage 0 (`sr_v3.rho_inputs`, body != gold) refuses a rho file whose `exit_freeze_sha` is not xt-v1; the
+  caller passes `dense_labels.EXIT_FREEZE_SHA256` (`stage0(..., freeze_sha=)`, scripts/research/train_sr_v3.py), and
+  no sha refuses. Gold reads neither rho_u,inst nor tau_a and is unaffected. Until D-12-xt re-runs the grid at
+  xt-v1, pooled Stage 0 is refused (quant ruling on #514).
+- Read rules (code review of #515, LOW): gold rows before the first complete spread month have no era term, so
+  `apply` refuses them; the spread table of record starts at 2003-05, so a test_old (2003-09) read drops or embargoes
+  rows decided before 2003-06-01 first. The learn window (2010-17) is fully covered. The record's content
+  sha256 uses `pd.util.hash_pandas_object`: a pandas upgrade that changes its hashing makes every read refuse (fail
+  closed) until the record is re-issued under a new version.
+- 2026-11-27 refit cost cells (aux.db `exploration_cost_cells`) age: a cell whose fills end more than 14 days before
+  the label's slot (`slot - through_ns`, `daily_review.CELL_MAX_AGE`; exactly 14 d is still fresh, and a late fit of
+  old fills is still stale) is stale.
+  - A stale cell keeps charging its broker's last measurement (H-60 "never credited": a host that stopped filling has
+    not shown cheaper slippage). When it sets the charge, `cost_model_version` records `+cells-stale:<newest stale
+    day>` and `effective_utc` moves to that cell's fitted time (no migration). Vantage (replay-only since PR #505,
+    newest cells 11-06/07) is the case this covers.
+  - The bias is conservative only: a stale cell can raise a label's cost, never lower it.
+  - The one cross-broker label read, the autodisc discovery priors (`read_demo_obs`), drops tagged labels
+    (`exploration_data.drop_stale_cost_labels`), so pooled priors use only freshly measured cost bases. Per-broker
+    learners keep them. Labels written before this change carry no tag and are not relabelled; r2 versions inherit
+    the tag, which describes r1's cost.
+  - Point in time: a cell fitted after the slot, or resting on fills after the slot (`through_ns > slot`), is never
+    read. Same-day merged rows can still hide an earlier fit: backlog 276 (append-only rows). The table's own age:
+    backlog 275.
+- 2026-11-27 R7-VANTAGE-REVIEW decided (research-director): **option (i), vantage-demo stays replay-only, "no broker
+  arm by design"**. (ii) is not started (fails the cost card), (iii) is rejected. No config change in this PR.
+  - Facts re-derived from config at fa11faf2 (not relayed): vantage-demo lists 70 exploration arms, 68 retired (36
+    controls, 20 edge, 12 learning) and 2 running (VEX15, VEX1H), both `control_mode: replay_only`, so **0
+    order-capable arms**; `cost_probe.enabled: false`, `scheduled.enabled: false`, `daily_review.probe_plan: {}`.
+    vantage-247 is the same (2 replay-only controls, account disabled). Money: £0/day traded, host ~£4.52/month
+    (~£0.15/day).
+  - Wording fix: it is **not** "cost measurement". With probes off there are no Vantage fills, so no slippage or
+    commission is measured; the VEX replay labels record only Vantage's quoted spread at signal time. Report it as
+    "replay-only (quoted spread), no broker arm by design".
+  - Why not (ii), a GD-1 twin on Vantage (rule 2 cost card): GD-1's own prereg (prereg-amendment-2026-11-20-gd1-asia-
+    learning.md s1) puts the edge at ~1-2 bp/day historical drift, **+0.9 bp/day excess over drift, 95 % CI -0.42 to
+    +2.25**, "learning, not money", about $0.05/day at 0.01 lot. Vantage's last measured cost: probes -£65.8 on 306
+    fills = **£0.215/fill** (re-derived from the 11-07 record in config/accounts.yaml), ~0.7 bp round trip at 1 oz.
+    Excess 0.9 bp < 2 x 0.7 = 1.4 bp: not started. It is also the same bet on the same bars as GD1D/GD1P (no
+    independent edge evidence), and at ~23 fills per run it never reaches GD-1's 40-fill cost check before
+    2027-01-04, so it would not even deliver a decision-grade Vantage cost read. A third copy adds risk, not learning.
+  - Why not (iii): scheduled probes are random-time orders with no edge. They were 22.9 % of vantage-demo's loss at
+    11-07 (prereg-amendment-2026-11-07-kill-only.md s4), and trading-safety F1 switched them off on 11-22 under "only
+    arms with evidence place orders". Nothing consumes a fresh Vantage cost cell today: docs/research/live-candidates.md
+    is empty (re-checked), so no venue question is open. Paying to measure a cost nobody reads is a leak (rule 1a).
+  - ADR 0106: survival is untouched by every option (demo money); consistency and return favour (i): zero orders
+    without evidence beats correlated or random orders on a second venue.
+  - Leak to fix (code, not config): Vantage `exploration_cost_cells` last refreshed 11-06/07 and are frozen. Until a
+    fix lands, Vantage replay labels are **stale-cost** and excluded from any cross-broker or ICM-vs-Vantage read.
+    Owner: data-engineer with quant-reviewer; acceptance: a cell older than 14 days is flagged `stale` on the label
+    row and the label falls back to the documented prior, with a test.
+  - Pre-registered trigger to reopen (ii), no K until it fires: the **first** entry on docs/research/live-candidates.md
+    that names vantage-live as its venue. On the trigger the twin is that candidate's rule (not GD-1 by default), with
+    its own card, K row and 1:1 replay control. If there is no trigger by 2027-01-04, the CFO reviews keeping the host
+    (£4.52/month) against the quoted-spread labels it produces; vantage-live-obs and vantage-live are unaffected.
+  - Change set for an implementer **when the trigger fires** (GD-1 rows as the template; swap in the candidate's
+    rule): `config/exploration_arms.yaml` adds `{ id: <X>V, twin_of: <X>D, rule/timeframe/params as the ICM arm,
+    role: learning, learning: {prereg, control: <X>CV, loss_cap_gbp, since, until} }` and `{ id: <X>CV, ..., role:
+    control, control_mode: replay_only }` (hashes from the loader); `config/accounts.yaml` vantage-demo
+    `exploration.arms` gains `<X>V: { style: swing, max_loss: 40.0 }` and `<X>CV: { style: swing, max_loss: 40.0,
+    control_share: 0.01 }` (swing pot stays 2 slots); `config/arm_stops.yaml` adds a `<X>V` stop copying the ICM
+    arm's kill rule and `follows: { <X>CV: <X>V }`; K rows via `scripts/record_learning_k_rows.py`; a prereg amendment
+    naming the venue read. `daily.max_per_day` stays 40 and `probe_plan` stays `{}`
+    (tests/test_exploration_daily_budget.py unchanged). Reviewers: quant-reviewer (card, K, control), trading-safety-
+    reviewer (new order path on vantage-demo), code-reviewer; sre for the restart. (iii) would also need trading-
+    safety to reverse F1 in writing and CFO sign-off on the probe budget; not recommended.
 - 2026-11-26 ADR 0085 A4 records the D-1 served tiers file `tiers_served_r11-v2.1.csv` (sha256 ff653ea7…, rule blob
   c6f283d7), using the quant's text R-b on #472 verbatim.
   - `dense_labels.RECORDED_TIERS_SHA256` now holds it, which unseals learn-window label reads only.
@@ -34,6 +219,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - Until lane 1's reference ADV is wired into `run.py gates`, `as_if_real_money` is unmet (fail closed).
   - Confirm reads (`promotion_confirm.run_batch`) write buy-and-hold beside the random twin. This is report only:
     the frozen cards, G3 and N10 do not move.
+- 2026-11-26 ADR 0106 decision 2: the owner's real-money limits are in the RiskGate as code constants
+  (`goldbot/risk/real_money.py`, `Final`, no settings key): 1 % a trade with its round trip (`rm_risk_per_trade`), each
+  entry sized down to what is left of the day's 2 % after the loss so far and the open risk (`rm_daily_projected` below
+  the minimum lot; open risk must be known), a 2 % day latched to the risk-day roll and kept across restarts (`rm_daily_stop`), a halt at min(dd_stage2, 15 %)
+  (`rm_drawdown_halt`), and an order within 1 % of the instrument's reference daily volume (`rm_volume`; unknown refuses
+  `rm_volume_unknown`). They apply after every profile, override, dynamic term and pilot rule on a real-money account
+  (`RiskLimits.real_money`, set by `engine_limits` for a live account's real terminal); demo is unchanged.
+  - The ADR 0055 pilot block is bounded by them at load (max_risk_frac <= 0.01, daily_cap_frac <= 0.02, stages always
+    on; icm-live now 0.01 / 0.02 / true). At 1 % the £50 pilot cannot trade (needs about £280); ADR 0055 amended.
+  - `config/data/adv_reference.yaml` is a placeholder (XAUUSD `adv_notional: null`): every real-money entry is refused
+    until the data engineer fills it with source and date (finding ADV-REFERENCE-XAUUSD). No live account is enabled.
+  - Trading-safety review of #491: real money also by the terminal's own report (`AccountState.terminal_trade_mode`,
+    a real login under a demo id gets every limit and no ADR 0097 freeze); the day latches only on two agreeing
+    comparable account reads; the ADV reference's age is judged at every entry; on real money the sizing target leaves
+    room for the round trip (1 % is a ceiling, not a refusal); the pilot weekly cap is back to 5 %; an engine start
+    without the limits on a live or real-terminal account forces them on and winds down (exits run). RUNBOOK: withdraw
+    from a real-money account only when flat, then re-arm. Rollback floor for live hosts: finding ADR0106-ROLLBACK-FLOOR.
 - 2026-11-26 ADR 0106 lane 3, reproducibility and model quality (ADR 0109). Every training run can now record one
   immutable run manifest (`goldbot/research/run_manifest.py`, `models/manifests/<sha256>.json`). It holds the data
   version and per-file sha256, the settings and their hash, the seeds, the git HEAD and whether the tree was clean, the
@@ -59,6 +261,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     registry lock and keeps the demoted one as previous (run it again to roll forward); it refuses when there is none or
     when that one would not serve. A CUSUM alarm whose previous model would not serve retires the champion and fails
     health `model_watch`.
+  - Safety review round 2: the Saturday retrain (`saturday_retrain`, off while `research.specialist_retrain` is false)
+    fits seed_list(key) 5 seeds, records a family-C manifest with a seed_stability verdict, and registers seed 0 only
+    when the serving rule admits it (else it reports why and registers nothing). `promote` refuses a challenger the
+    serving rule refuses. A blackout re-score with no served model writes `blackout_rescore_no_model` and the engine
+    publishes `open_without_model` (health `engine:<account>` warns); exits untouched. New health check
+    `model_serving` fails while a champion is refused and warns for a refused challenger. Registry writes re-read
+    registry.json under `registry.lock`, so a long-lived scheduler or engine instance can no longer undo a
+    rollback-model. Other trainers are not affected: self_retrain (aux.db) and the nightly classifier never touch
+    the model registry.
+  - Round 3: the engine's registry lock wait is bounded at 1 s (`ENGINE_REGISTRY_LOCK_S`, `rule_shadow_set`), so a
+    stalled writer can no longer freeze the engine loop; `ModelRegistry.entries` re-reads a changed file; a failed
+    recalibration of one model no longer aborts the weekly job; the refit's data_version covers the context bars.
   - Not yet wired: `engine/shadow_scoring` (aux.db self_retrain_models) does not call `require_servable`. The sr-v3
     and seq hook PRs add it under trading-safety review.
   - Deploy: goldbot/config.py is a bridge file, so this deploys in the 21:10-23:30 UTC window. The scheduler restart
@@ -94,6 +308,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   records `label_end_max`, and `seq1_quality` reads both verdicts on one rows_key with the folds, block horizon and
   booked trial (PR #494 quant Q1-Q4); this branch merges PR #494 and lands after it. Open: quant ruling on the validation stop (ADR 0107 1), the GBT keep from the
   tabular trainer for SEQ-1's paired D, a runner script for the first real fit.
+- **sr-v3 history trainer is built. It has not run on real labels.** The pipeline is Stage 0 (label-blind Riley
+  ladder, level and served orders, tie rule, λ_a), then walk-forward fits of L-cw, G-cw (GBT baseline), HB and AVG
+  with the D-40 dense prior, then a training report and one run manifest (ADR 0109) per v0 artifact.
+  - CLI: `scripts/research/train_sr_v3.py`. Modules: `goldbot/research/sr_v3.py`, `learners.py`, `sr_v3_train.py` and
+    `sr_v3_serve.py`. Decisions are in ADR 0108.
+  - Quant sequencing (binding): the store refuses every label read and Stage 0 statistic
+    (`sr_v3_store.sequencing_gaps`, `SequencingRefused`) until #482 (A4), #484 (X6), card rev 8 (`rv_ratio` at core-12
+    position 4) and `price_action_x6.X6_MERGED_UTC` are all on main; the CLI stops before any phase on the same check.
+  - Core-12 follows card rev 8: `rv_ratio` replaces `atr_ratio_14_100` at position 4 (charged at ρ_x = 1 until the
+    D-12a file measures it).
+- 2026-11-26 sr-v3 card rev 8 (quant ruling, label-blind, before any sr-v3 label read): `rv_ratio` replaces
+  `atr_ratio_14_100` at core-12 position 4, at every tf; `atr_ratio_14_100` stays in P30. K 0.
+  - Code: `dense_labels.CORE12`, so `COLUMN_SETS` core-6 and core-12. The trainer's `sr_v3.CORE_12` follows in PR #488.
+  - Counts re-run once and taken as they come (`config/data/sufficiency.yaml`, docs/data/sufficiency.md): gold learn
+    core-12 T2 n_eff 5,233 · 3,913 · 2,854 · 1,852 · 1,331 · – · 209 · 0 · 0 (re-counted at the main merge
+    with R-a, which admits rv_ratio's B lookback months). Gold 1d/1w stay NOT STARTED (data).
+  - No label value was read.
+  - This is the later merge behind `price_action_x6.X6_MERGED_UTC`: the one-line follow-up sets it to this PR's
+    merge commit committer time (UTC), the later of it and #484's (quant sequencing on #482).
 - **Performance by asset class (owner 2026-11-25, BACKLOG 270, R178).**
   - **Mapping.** Every trading-performance read now groups by asset class and by family x class, through one mapping,
     `goldbot.ops.class_breakdown.asset_class_of`. Arm ids use their suffix (S0-SUGAR) or, for a gold arm, the spec row.

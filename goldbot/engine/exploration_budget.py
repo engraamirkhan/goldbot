@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import pandas as pd
 
+from goldbot.base import FrozenRecord
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.instruments import GOLD
 
@@ -235,8 +236,23 @@ def apportion(max_per_day: int, by: Mapping[str, int]) -> dict[str, int]:
     return out
 
 
+class SplitCounts(FrozenRecord):
+    """What a session split was read from (reporting only; the split takes `edge` alone): the active arms' edge
+    candidates no static refusal refused, of `candidates` edge candidates, and the account's `control` candidates over
+    the same trailing days (replayed, never a share). Vantage-demo 2026-11-26: "0 of 0 candidates" read as a dead
+    account while its controls were replayed."""
+    edge: int
+    candidates: int
+    control: int
+
+    def line(self) -> str:
+        return f"{self.edge} edge of {self.candidates}; {self.control} replay-only control"
+
+
+SplitKey = tuple[str, str, int, str]
 # (ledger path, account, UTC day ns, active arm set digest) -> the split: one read a day for every book of the account
-SHARES: dict[tuple[str, str, int, str], dict[str, int]] = {}
+SHARES: dict[SplitKey, dict[str, int]] = {}
+COUNTS: dict[SplitKey, SplitCounts] = {}       # the same key -> what that split was read from (`split_counts`)
 _clock = time.perf_counter
 
 
@@ -248,16 +264,17 @@ def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start
     refusal per read). Cached per (ledger, account, UTC day, active arm set): every book reads the same split, and an
     arm retired, unqualified or refused during the day (or a restart with another active set) re-reads it."""
     from goldbot.engine import entry_refusals
-    digest = hashlib.sha1(",".join(sorted(arms)).encode()).hexdigest()
-    key = (str(getattr(ex.db, "path", id(ex.db))), str(eng.cfg.account_id), _ns(day_start), digest)
+    key = _split_key(eng, ex, day_start, arms)
     if (got := SHARES.get(key)) is not None:
         return dict(got)
     started = _clock()
+    span = (eng.cfg.account_id, _ns(trailing_start(day_start)), _ns(day_start))
     with ex.db.connection() as conn:
         rows = [(str(a), int(t)) for a, t in conn.execute(
             "SELECT arm_id, decision_ns FROM exploration_obs WHERE account_id = ? AND is_control = 0 "
-            "AND decision_ns >= ? AND decision_ns < ?",
-            (eng.cfg.account_id, _ns(trailing_start(day_start)), _ns(day_start))) if str(a) in arms]
+            "AND decision_ns >= ? AND decision_ns < ?", span) if str(a) in arms]
+        control = int(conn.execute("SELECT COUNT(*) FROM exploration_obs WHERE account_id = ? AND is_control = 1 "
+                                   "AND decision_ns >= ? AND decision_ns < ?", span).fetchone()[0])
     # every static refusal's window is whole minutes: one verdict per arm and minute
     minute = 60_000_000_000
     verdict: dict[tuple[str, int], bool] = {}
@@ -278,14 +295,27 @@ def session_budgets(eng: Engine, ex: Exploration, daily: DailyEntries, day_start
     for seg in _segments(ns):
         by[SEGMENTS[seg]] += 1
     out = apportion(daily.max_per_day, by)
+    counts = SplitCounts(edge=len(ns), candidates=len(rows), control=control)
     took = _clock() - started
     (log.warning if took > SLOW_READ_S else log.info)(
-        "session split of %s for %s: %s from %d of %d candidates in %.2f s", eng.cfg.account_id,
-        pd.Timestamp(day_start).date(), out, len(ns), len(rows), took)
+        "session split of %s for %s: %s from %s candidates in %.2f s", eng.cfg.account_id,
+        pd.Timestamp(day_start).date(), out, counts.line(), took)
     for old in [o for o in SHARES if o[2] != _ns(day_start)]:
         del SHARES[old]
-    SHARES[key] = out
+    for old in [o for o in COUNTS if o[2] != _ns(day_start)]:
+        del COUNTS[old]
+    SHARES[key], COUNTS[key] = out, counts
     return dict(out)
+
+
+def _split_key(eng: Engine, ex: Exploration, day_start: pd.Timestamp, arms: Mapping[str, Arm]) -> SplitKey:
+    digest = hashlib.sha1(",".join(sorted(arms)).encode()).hexdigest()
+    return str(getattr(ex.db, "path", id(ex.db))), str(eng.cfg.account_id), _ns(day_start), digest
+
+
+def split_counts(eng: Engine, ex: Exploration, day_start: pd.Timestamp, arms: Mapping[str, Arm]) -> SplitCounts | None:
+    """The counts behind the split `session_budgets` read for these arguments (None until it has read one)."""
+    return COUNTS.get(_split_key(eng, ex, day_start, arms))
 
 
 def cell_fills(eng: Engine, ex: Exploration, now: pd.Timestamp) -> dict[str, int]:

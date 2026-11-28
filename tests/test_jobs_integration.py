@@ -81,13 +81,29 @@ def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
     assert json.loads((tmp_path / "classifier_icm-demo.json").read_text())["class"] == row["account_class"]
 
 
-def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
+@pytest.fixture
+def servable_refits(tmp_path, monkeypatch):
+    """The Saturday refit records its run manifest from a clean checkout, and every seed reads a positive OOF edge:
+    synthetic bars carry no edge by construction, so the seed_stability verdict would refuse every refit and there
+    would be no lifecycle to test. The manifest, the verdict and the serving rule themselves run for real (the edge
+    rule is covered by tests/test_ml_review_cleanup.py)."""
+    from goldbot.ops import jobs
+    from goldbot.research import run_manifest as rm
+    from tests.test_run_manifest import git_repo
+    monkeypatch.setattr(rm, "ROOT", git_repo(tmp_path / "repo"))
+    monkeypatch.setattr(jobs, "_net_edge", lambda res: 0.1)
+
+
+def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path, servable_refits):
     ctx = _ctx(bars_store, tmp_path, specialist_retrain=True)   # the retired retrain, switched on
     sat = pd.Timestamp("2025-09-27 06:00", tz="UTC")
     founder = AgentIdentity(family="session_open", config=dict(SPECIALISTS["session_open"].default_config)).agent_id
     first = saturday_retrain(ctx, sat)[founder]
     version = first["retrain"]["challenger"]
-    assert ctx.models.get(version).status == "challenger"
+    entry = ctx.models.get(version)
+    # PR #494 safety HIGH-1: the refit carries its run manifest, so the serving rule admits it whatever the date
+    assert entry.status == "challenger" and entry.manifest_id == first["retrain"]["manifest"]
+    assert ctx.models.serving_refusal(entry) is None and version in ctx.models.shadow_models()
     # a challenger in shadow blocks the next retrain from replacing it
     nxt = saturday_retrain(ctx, sat + pd.Timedelta(weeks=1))[founder]
     assert nxt["retrain"].startswith("skipped") and nxt["challengers"][0]["action"] == "waiting"
@@ -121,7 +137,7 @@ def long_bars_store(tmp_path_factory) -> Path:
     return root
 
 
-def test_a_4h_agent_retrains_into_a_challenger(long_bars_store, tmp_path):
+def test_a_4h_agent_retrains_into_a_challenger(long_bars_store, tmp_path, servable_refits):
     # settings.walkforward["4h"] (48/6/6, proposal P4): the Saturday retrain trains a 4h shadow agent into a challenger
     # on 4h bars with daily context, instead of skipping it as it did when only 15m and 1h had windows
     ctx = _ctx(long_bars_store, tmp_path, specialist_retrain=True)

@@ -38,6 +38,7 @@ import importlib
 import json
 import math
 import platform
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from importlib import metadata
@@ -59,6 +60,9 @@ DEFAULT_ROOT = Path("models") / "manifests"        # relative to the service's w
 Schedule = Literal["adhoc", "daily", "weekly", "monthly_walkforward"]
 RUNTIME_PACKAGES = ("numpy", "pandas", "scikit-learn", "scipy", "lightgbm", "torch")
 _HEX64 = r"^[0-9a-f]{64}$"
+# A builder is a public `module:function` defined under goldbot. or in the test builders, nothing else (security
+# follow-up to #494): a manifest is data, and data must never choose an arbitrary module to import and call.
+_BUILDER = r"^(goldbot(\.[A-Za-z_]\w*)+|tests\.rebuild_builders):[A-Za-z]\w*$"
 
 
 class ManifestError(ValueError):
@@ -170,7 +174,7 @@ class RunManifest(FrozenRecord):
     label_end_max: UtcTimestamp                      # the latest label horizon end among the training rows
     scaler_fit_end: UtcTimestamp                     # the last instant any fitted transform saw (<= train_end)
     artifact_sha256: str = Field(pattern=_HEX64)
-    builder: str | None = Field(None, pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
+    builder: str | None = Field(None, pattern=_BUILDER)
     results: dict[str, Any] = Field(default_factory=dict)
     quality: list[QualityVerdict] = Field(default_factory=list)
 
@@ -294,6 +298,10 @@ class BuildSpec(FrozenRecord):
 
 
 def _builder(ref: str) -> Callable[[BuildSpec], bytes]:
+    """Import the builder only after `ref` matches _BUILDER, so a manifest can never name os:system or the like."""
+    if not re.fullmatch(_BUILDER, ref):
+        raise RebuildRefused(f"{ref!r} is not an allowed builder: only goldbot.<module>:<function> or "
+                             "tests.rebuild_builders:<function> are imported")
     mod, _, fn = ref.partition(":")
     try:
         f = getattr(importlib.import_module(mod), fn)
@@ -301,6 +309,10 @@ def _builder(ref: str) -> Callable[[BuildSpec], bytes]:
         raise RebuildRefused(f"builder {ref} cannot be imported: {exc}") from exc
     if not callable(f):
         raise RebuildRefused(f"builder {ref} is not callable")
+    home = getattr(f, "__module__", None) or ""
+    if not (home.startswith("goldbot.") or home == "tests.rebuild_builders"):
+        raise RebuildRefused(f"builder {ref} is defined in {home or 'an unknown module'}, not goldbot: a re-exported "
+                             "foreign function is refused")
     return f
 
 
@@ -367,6 +379,10 @@ def rebuild(m: RunManifest, *, repo: Path | str = ROOT, data_root: Path | str) -
         raise RebuildRefused(f"HEAD is {sha[:12]}, the run was built at {m.code_sha[:12]}: "
                              f"`git worktree add <dir> {m.code_sha}` and rebuild there")
     data_root = Path(data_root)
+    top = data_root.resolve()
+    for f in m.data_files:
+        if not (data_root / f).resolve().is_relative_to(top):
+            raise RebuildRefused(f"data file {f} resolves outside the data root {data_root}: refused")
     for f, want in m.data_files.items():
         p = data_root / f
         got = file_sha256(p) if p.is_file() else "missing"

@@ -1,4 +1,4 @@
-id: R190
+id: R188
 requirement: 'Run manifest of every training run (ADR 0106 decision 7 and goal "any past model can be rebuilt exactly from logs"; objective "log every run: data version, settings, seed, results"; objective "normalise features using past data only"; ADR 0109): data version + per-file sha256, settings + hash, seeds, code sha + clean flag, uv.lock hash, runtime, train end, scaler fit end <= train end, artifact sha256, builder, results, quality verdicts; content-addressed and refused when edited; rebuild byte-identical or refused/mismatch; registry stores the manifest id and model family with every artefact'
 status: in review
 code: 'goldbot/research/run_manifest.py (`record`, `fit_and_record`, `build`, `rebuild`, `load`, `resolve`, `store`, `RunManifest`, `BuildSpec`); goldbot/research/model_registry.py `ModelEntry.manifest_id`, `ModelEntry.model_family`, `add_challenger(manifest=)`; scripts/research/rebuild_model.py'

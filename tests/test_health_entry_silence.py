@@ -394,3 +394,18 @@ def test_aux_is_opened_read_only_through_a_file_uri(tmp_path, monkeypatch):
     monkeypatch.setattr(es.sqlite3, "connect", spy)
     es.evaluate(supply(_lb()), tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
     assert seen and set(seen) == {(tmp_path / "aux.db").resolve().as_uri() + "?mode=ro"}   # the split reads too
+
+
+def test_the_check_reason_shows_replay_only_control_candidates_beside_the_edge_ones(tmp_path):
+    """Reporting: an account whose split has no edge candidate but replays controls reads '0 edge of 0; N replay-only
+    control', not a bare '0 of 0' (vantage-demo 2026-11-26)."""
+    db = exploration.ledger_db(str(tmp_path))
+    gold = _engine_arm("G9")
+    for k in range(5):
+        ed.record_candidate(db, candidate_id=f"q{k}", account_id=VANTAGE, broker="vantage", arm_id="G9C", family="f",
+                            style="intraday", tf="15m", side=1, decision_utc=at("09:00", MON - pd.Timedelta(days=1 + k)),
+                            stop_dist=1.0, target_dist=1.0, max_hold_s=60, taken=True, is_control=True)
+    s = supply_of([gold], DailyEntries(max_per_day=10, thin_control_fills=None), broker="vantage")
+    v = es.evaluate(s, tmp_path / "aux.db", VANTAGE, at("12:00"), health.DEFAULT_SESSIONS)
+    assert v.split == budget.SplitCounts(edge=0, candidates=0, control=5)
+    assert "session split from 0 edge of 0; 5 replay-only control" in es.describe(v)
