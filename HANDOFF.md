@@ -20,11 +20,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (each bundles libomp; two runtimes segfault the first multi-threaded epoch) - `seq1.TorchState` now refuses more than
   one thread when `omp_before_torch()` names a clash, and the runner and rebuild_model.py import torch first. SEQ-1
   judges 1h-1d only (15m is refused by design, R11).
-  First fits (gold xt-v1, learn 2010-17, 8 threads, commit 607717a9, outputs in ~/tmp/seq1-embed-2026-11-28, local):
-  1h - 47,280 rows, manifest 1a19fd2b..., weights sha ac9974fd..., rebuilt byte-identical by rebuild_model.py;
-  outer fold (train < 2016, test 2016-17) pretext loss 0.874 fit / 0.994 val / 0.886 out of fold vs zero-prediction
-  2.09 / 2.18 / 2.02; 5-seed mean linear CKA 0.920 (min 0.906). Pooled 1h+2h+4h+1d - 87,252 rows, manifest
-  a3ba2a92..., weights sha 412c109a...; 0.863 / 0.977 / 0.881 out of fold vs 2.08 / 2.16 / 2.00. No label read, no K.
+  Quant review of #489 (2026-11-28, fixed in this lane): `seq1.read` and `rl_exits.run` are gate reads - refused
+  before scoring unless the read id is booked (`windows.require_booked_read`, family registered with the signed study
+  plan) and every row is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`); RL costs are never
+  defaulted; RL-X1 adds baseline (ii) (best fixed template T0-T7 chosen on training episodes), `delta_vs_best`, a 2x
+  cost read, episode decision/end times with a train/test embargo refusal and the per-row swap of record
+  (`swap_rate`, = cost_parts per night); agg-v1 applies a round only after it closes (`replay`), `history_rounds`
+  refuses non-OOF keeps, `mix_keep` takes n; embeddings carry `train_end`, `embed_after` refuses rows inside
+  train_end + window x tf, `fold_embed` is forward-only; ADR 0107 point 1 restated and accepted. Lesson: never edit
+  `decision_cost.py` (or any `dense_labels.CODE_FILES` file) in a non-label change: it re-keys every built partition.
+  Fits (gold xt-v1, learn 2010-17, 8 threads, commit e54c3f33, ~/tmp/seq1-embed-2026-11-28b, local; pretext loss
+  fit / val / out of fold, baselines on the same out-of-fold rows: zero, fit mean, trailing range):
+  1h - 47,280 rows, manifest 73341c09..., rebuilt byte-identical; 0.881 / 0.996 / 0.887 vs 2.02 / 0.987 / 1.103;
+  5-seed mean linear CKA 0.925 (min 0.912). Pooled 1h+2h+4h+1d - 87,252 rows, manifest 51167a36...; 0.872 / 0.953 /
+  0.881 vs 2.00 / 0.977 / 1.158. The learned pretext beats the best constant by about 10 % out of fold. No label
+  read, no K.
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also
