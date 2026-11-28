@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import pickle
+import re
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -927,10 +928,18 @@ class PowerFirstSettings(_Section):
 
     @model_validator(mode="after")
     def _rho_xt_pinned(self) -> PowerFirstSettings:
+        """Format only, NO file read (code review HIGH on #525: the deploy check and every service, the MT5 bridge
+        included, validate Settings without docs/research): repo-relative path, sha256 as 64 hex. The file and its
+        sha are checked lazily on first use (`rho_day_for`, `rho_classes`)."""
         if (self.rho_xt_measurement is None) != (self.rho_xt_measurement_sha256 is None):
             raise ValueError("rho_xt_measurement and rho_xt_measurement_sha256 are set together or not at all")
-        if self.rho_xt_measurement is not None and self.rho_xt_measurement_sha256 is not None:
-            _rho_day_by_tf(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
+        if self.rho_xt_measurement is not None:
+            rel = Path(self.rho_xt_measurement)
+            if rel.is_absolute() or ".." in rel.parts or "\\" in self.rho_xt_measurement:
+                raise ValueError(f"rho_xt_measurement {self.rho_xt_measurement!r}: a repo-relative path only")
+        if self.rho_xt_measurement_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}",
+                                                                           self.rho_xt_measurement_sha256):
+            raise ValueError("rho_xt_measurement_sha256 must be 64 lower-case hex characters")
         return self
 
     def rho_classes(self) -> dict[str, tuple[str, ...]]:
@@ -943,20 +952,20 @@ class PowerFirstSettings(_Section):
     def rho_day_for(self, hold_days: float, rho_class: str | None = None) -> float:
         """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value.
         With `rho_class` (gold, metals, fx10, pooled, gold+fx10) and the pinned D-12-xt file (quant F2 on #525):
-        max(the prior rule above (0.25 shipped), that file's binding rho_u,day of the class at the tf whose H is the hold; a hold that is no tf's H
-        takes the largest binding over the tfs with H <= the hold). None at H >= 1 d (design effect 1) adds nothing.
-        Unknown class: ValueError."""
+        max(the prior rule above, the largest binding rho_u,day of the class over the tfs with H <= the hold), so it is
+        monotone in the hold; a hold >= 1 d keeps the prior (design effect 1). The file is read on first use (cached;
+        a failure is not cached). Unknown class: ValueError."""
         base = self.rho_day_le_60m if hold_days * 1440.0 <= 60.0 + 1e-9 else self.rho_day
         if rho_class is None or self.rho_xt_measurement is None or self.rho_xt_measurement_sha256 is None:
             return base
         if rho_class not in RHO_CLASSES:
             raise ValueError(f"rho_day_for: unknown rho class {rho_class!r} (one of {RHO_CLASSES})")
+        if hold_days >= 1.0 - 1e-12:            # H >= 1 d: one label a day, design effect 1 (ruling 1 on #525)
+            return base
         by = _rho_day_by_tf(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
         hold_s = hold_days * 86_400.0
-        tfs = [k[2:] for k, h in by.items() if k.startswith("h:") and h is not None]
-        exact = [tf for tf in tfs if abs(float(by[f"h:{tf}"] or 0) - hold_s) < 1.0]
-        pick = exact or [tf for tf in tfs if float(by[f"h:{tf}"] or 0) <= hold_s + 1.0]
-        vals = [v for tf in pick if (v := by.get(f"{rho_class}|{tf}")) is not None]
+        tfs = [k[2:] for k, h in by.items() if k.startswith("h:") and h is not None and float(h) <= hold_s + 1.0]
+        vals = [v for tf in tfs if (v := by.get(f"{rho_class}|{tf}")) is not None]
         return max([base, *vals])
 
     def sd_r(self, timeframe: str) -> float:

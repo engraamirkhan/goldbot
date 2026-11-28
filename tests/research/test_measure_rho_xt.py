@@ -270,9 +270,10 @@ def test_rho_day_for_reads_the_class_binding_at_the_tf_from_the_pinned_xt_file()
         pf.rho_day_for(8 / 24, "crypto")
     with pytest.raises(ValueError, match="together"):
         PowerFirstSettings.model_validate({"rho_xt_measurement": pf.rho_xt_measurement})
-    with pytest.raises(ValueError, match="differs"):
-        PowerFirstSettings.model_validate({"rho_xt_measurement": pf.rho_xt_measurement,
-                                           "rho_xt_measurement_sha256": "0" * 64})
+    wrong = PowerFirstSettings.model_validate({"rho_xt_measurement": pf.rho_xt_measurement,
+                                               "rho_xt_measurement_sha256": "0" * 64})     # load: format only
+    with pytest.raises(ValueError, match="differs"):                                     # first use: sha checked
+        wrong.rho_day_for(8 / 24, "gold")
 
 
 def test_a_pinned_sha_and_the_cells_file_guard_every_gate_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,7 +403,7 @@ def test_power_cards_take_the_class_rho_day_at_their_tf() -> None:
     assert of(["XAUUSD@dukascopy"]) == "gold" and of(["XAUUSD", "XAGUSD"]) == "metals" and of(["XAGUSD"]) == "metals"
     assert of(["EURUSD", "GBPUSD"]) == "fx10" and of(["XAUUSD", "EURUSD"]) == "gold+fx10"
     assert of(["XAUUSD", "XAGUSD", "EURUSD"]) == "pooled" and of(["XAGUSD", "EURUSD"]) == "pooled"
-    assert of(["XAUUSD", "US500"]) is None and P.rho_class_of(["XAUUSD"], {}) is None    # outside / no file: prior
+    assert of(["US500"]) is None and P.rho_class_of(["XAUUSD"], {}) is None    # nothing measured / no file: prior
     metals = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD", "XAGUSD"]), st)
     assert metals.rho_day == pytest.approx(0.29928)                 # quant R1b on #525
     with pytest.raises(ValueError, match="looser"):                           # a verdict on the 0.25 prior is refused
@@ -421,3 +422,50 @@ def test_pooled_rho_inputs_recompute_the_per_tf_binding_from_the_cells(tmp_path:
     bad.write_text(json.dumps(d))
     with pytest.raises(ValueError, match="recomputed"):
         S.rho_inputs(bad, body="pooled", members=["XAUUSD", "EURUSD"], tf="15m", freeze_sha=D.EXIT_FREEZE_SHA256)
+
+
+def test_settings_validate_from_an_archive_of_goldbot_and_config_only(tmp_path: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code review HIGH on #525: the deploy check (goldbot-deploy.sh settings_problems) validates Settings from
+    `git archive goldbot config [docs/decisions]`. No research file may be read at Settings validation: the pinned
+    D-12-xt file (and the shipped rho_day_measurement setting) are checked lazily, on first use."""
+    import shutil
+
+    import goldbot.config as C
+    for d in ("goldbot", "config"):
+        shutil.copytree(ROOT / d, tmp_path / d, ignore=shutil.ignore_patterns("__pycache__", "*.local.yaml"))
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    C._rho_day_by_tf.cache_clear()
+    C._rho_xt_classes.cache_clear()
+    st = C.load_settings(tmp_path / "config" / "settings.yaml")       # docs/research absent: still valid
+    pf = st.research.power_first
+    assert pf.rho_xt_measurement and pf.rho_day_measurement is None
+    with pytest.raises(ValueError, match="missing or differs"):       # first use fails loudly, and is not cached
+        pf.rho_day_for(8 / 24, "gold")
+    monkeypatch.setattr(C, "ROOT", ROOT)
+    assert pf.rho_day_for(8 / 24, "gold") >= 0.44691
+    for bad in ({"rho_xt_measurement": "/abs/x.json", "rho_xt_measurement_sha256": "a" * 64},
+                {"rho_xt_measurement": "../x.json", "rho_xt_measurement_sha256": "a" * 64},
+                {"rho_xt_measurement": "docs/x.json", "rho_xt_measurement_sha256": "xyz"}):
+        with pytest.raises(ValueError):
+            PowerFirstSettings.model_validate(bad)
+    PowerFirstSettings.model_validate({"rho_xt_measurement": "docs/missing.json",
+                                       "rho_xt_measurement_sha256": "a" * 64})        # format only at load
+
+
+def test_rho_day_for_is_monotone_and_conservative() -> None:
+    """Code review LOW 1 and LOW 2 on #525: holds >= 1 d keep the prior (design effect 1); below, the max over the
+    tfs with H <= the hold; a card mixing a measured and an unmeasured instrument takes the measured subset's class."""
+    from goldbot.config import load_settings
+    from goldbot.research import power_first as P
+    from tests.research.test_power_first import card
+    st = load_settings()
+    pf = st.research.power_first
+    assert pf.rho_day_for(0.99, "gold") >= 0.44691 and pf.rho_day_for(16 / 24, "gold") >= 0.44691
+    assert pf.rho_day_for(1.0, "gold") == 0.25 and pf.rho_day_for(1.01, "gold") == 0.25
+    holds = [1 / 24, 2 / 24, 4 / 24, 8 / 24, 12 / 24, 16 / 24, 0.99]
+    vals = [pf.rho_day_for(h, "gold") for h in holds]
+    assert vals == sorted(vals)
+    assert P.rho_class_of(["XAUUSD", "US500"], pf.rho_classes()) == "gold"
+    mixed = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD", "US500"]), st)
+    assert mixed.rho_day == pytest.approx(0.44691)

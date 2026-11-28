@@ -32,6 +32,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   None outside them keeps the prior), so a gold 15m card with an 8 h hold carries rho_day 0.44691 and gold + XAG 0.29928. A pooled `sr_v3.rho_inputs(freeze_sha=...)` runs
   `verify_inst_by_tf` before reading. Backlog 281 (also recompute tau_a(tf) and the vs-gold level from the cells) and
   282 (the drivers must call `require_power_read_rho`, which has no production caller) are open.
+- Code review of #525: Settings validation reads no research file. `rho_xt_measurement` and its sha256 are
+  format-checked at load (repo-relative, 64 hex) and checked against the file lazily, on the first `rho_day_for` /
+  `rho_classes` call. That keeps the deploy check (`git archive goldbot config`) and every service, the MT5 bridge
+  included, valid without docs/research; a test validates Settings from a copy of goldbot/ and config/ alone.
+  `rho_day_for` is monotone: holds >= 1 d keep the prior, and shorter holds take the max over the tfs with H <= the
+  hold. `rho_class_of` sets unmeasured instruments aside (XAUUSD + US500, 8 h hold -> 0.44691).
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also

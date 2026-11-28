@@ -275,9 +275,12 @@ def rho_class_of(instruments: Sequence[str], classes: Mapping[str, Sequence[str]
     """The D-12-xt rho class of a card (quant R1b on #525): the SMALLEST measured class containing every instrument
     ({gold} -> gold; within gold + XAG -> metals; within FX10 -> fx10; within gold + FX10 -> gold+fx10; else within the
     pooled members -> pooled). `classes` is the pinned file's (`PowerFirstSettings.rho_classes()`); a
-    `<symbol>@<source>` id counts as its symbol. None when an instrument is in no measured class or no file is
-    pinned: `rho_day_for` then keeps the prior. Not `sr_v3.rho_class`, which names bodies, not cards."""
-    syms = {str(i).split("@")[0].upper() for i in instruments}
+    `<symbol>@<source>` id counts as its symbol. Conservative on a mixed card (code review LOW 2 on #525): an
+    instrument in no measured class is set aside and the measured subset's class is used (`rho_day_for` takes
+    max(prior, its binding)); None only when no instrument is measured or no file is pinned (the prior alone).
+    Not `sr_v3.rho_class`, which names bodies, not cards."""
+    measured = {m for ms in classes.values() for m in ms}
+    syms = {str(i).split("@")[0].upper() for i in instruments} & measured
     fits = [(len(set(ms)), c) for c, ms in classes.items() if syms and syms <= set(ms)]
     return min(fits)[1] if fits else None
 
