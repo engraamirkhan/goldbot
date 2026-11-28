@@ -13,3 +13,8 @@
   (each bundles libomp; two runtimes segfault the first multi-threaded epoch) - `seq1.TorchState` now refuses more than
   one thread when `omp_before_torch()` names a clash, and the runner and rebuild_model.py import torch first. SEQ-1
   judges 1h-1d only (15m is refused by design, R11).
+  First fits (gold xt-v1, learn 2010-17, 8 threads, commit 607717a9, outputs in ~/tmp/seq1-embed-2026-11-28, local):
+  1h - 47,280 rows, manifest 1a19fd2b..., weights sha ac9974fd..., rebuilt byte-identical by rebuild_model.py;
+  outer fold (train < 2016, test 2016-17) pretext loss 0.874 fit / 0.994 val / 0.886 out of fold vs zero-prediction
+  2.09 / 2.18 / 2.02; 5-seed mean linear CKA 0.920 (min 0.906). Pooled 1h+2h+4h+1d - 87,252 rows, manifest
+  a3ba2a92..., weights sha 412c109a...; 0.863 / 0.977 / 0.881 out of fold vs 2.08 / 2.16 / 2.00. No label read, no K.
