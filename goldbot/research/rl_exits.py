@@ -27,10 +27,12 @@ The problem, as coded:
   against (i) the fixed exits of record (hold to the T2 exit) and (ii) the best fixed template T0-T7 chosen on the
   training episodes only (`baseline_ii`, `fixed_template`), `delta_vs_best` = policy - max(i, ii), per trade and per
   session day with a day-block bootstrap lower bound, the shuffled-state control (the same fit on permuted states; a
-  real policy must beat it) and the same read at 2x every cost (round trip, overshoot, slippage, swap). Descriptive:
+  real policy must beat it) and the same read at 2x cost: every cost term doubled (round trip, ub95 slippage, overshoot, every bar's swap), baseline
+  (ii) re-chosen on the training episodes at that cost, the policy not refit (label-blind, K 0). The day-block lower
+  bound is reported against (i) and against the better of (i) and (ii) (`delta_vs_best_per_day_lo`). Descriptive:
   ml-5's seven PASS legs and the K booking are the card's, not this module's.
-- `run` is a gate read (quant 1-4 on #489): it computes outcome statistics, so it refuses before scoring unless the
-  read id is booked in the read-once ledger (`windows.require_booked_read`, family registered with the study plan),
+- `run` is a gate read (quant 1-4, B2 on #489): it computes outcome statistics, so it refuses before scoring unless the
+  read id is this read's `read_key` and is booked in the read-once ledger (`windows.require_booked_read`, family registered with the study plan),
   every episode is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`: a w2-point row is never
   charged at the simulator's constant inside a read) and no test episode decides within the training episodes' last
   horizon end + windows.label_embargo. Costs are never defaulted on any path. The fit-only paths (`transitions`,
@@ -47,6 +49,7 @@ The problem, as coded:
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -477,6 +480,9 @@ class RlReport(FrozenRecord):
     best_template: str              # baseline (ii): the best fixed template on the training episodes
     best_fixed_mean: float
     delta_vs_best: float            # policy - max(fixed (i), best fixed (ii)), net R per trade
+    delta_vs_best_per_day: float    # policy - the better of (i) and (ii) per episode, summed per day, mean over days
+    delta_vs_best_per_day_lo: float | None   # its day-block one-sided 95 % lower bound
+    best_template_2x: str           # baseline (ii) re-chosen on the training episodes at 2x cost
     policy_mean_2x: float           # the same read with every cost doubled
     fixed_mean_2x: float
     best_fixed_mean_2x: float
@@ -506,6 +512,27 @@ def shuffled(tr: Transitions, seed: int) -> Transitions:
     return tr.model_copy(update={"S": tr.S[perm], "S2": tr.S2[perm], "OK2": tr.OK2[perm]})
 
 
+def episodes_sha(eps: Sequence[Episode]) -> str:
+    """sha256 of episodes' content: every bar array, k, day, weight, round trip, cost version and times."""
+    h = hashlib.sha256()
+    for e in eps:
+        for f in ("open_r", "high_r", "low_r", "close_r", "swap_r"):
+            h.update(np.ascontiguousarray(getattr(e, f), dtype=float).tobytes())
+        meta = [e.k, e.day, e.weight, e.rt_bp, e.cost_version,
+                *("" if t is None else pd.Timestamp(t).isoformat() for t in (e.decision_utc, e.end_utc))]
+        h.update(json.dumps(meta).encode())
+    return h.hexdigest()
+
+
+def read_key(spec: RlSpec, costs: SimCosts, cost_version: str, train: Sequence[Episode],
+             test: Sequence[Episode]) -> str:
+    """The id an RL-X1 read is booked under (quant B2 on #489, read_key style of sr_v3_store): sha256 over the spec,
+    the simulator costs, the cost version and the sha of the train and test episodes."""
+    blob = {"spec": spec.model_dump(mode="json"), "costs": costs.model_dump(mode="json"),
+            "cost_version": cost_version, "train": episodes_sha(train), "test": episodes_sha(test)}
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
+
+
 def _refuse_overlap(train: Sequence[Episode], test: Sequence[Episode]) -> None:
     """Quant 4 on #489: every test episode decides after the training episodes' last horizon end + label_embargo."""
     for name, eps in (("train", train), ("test", test)):
@@ -528,8 +555,12 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC, 
     any episode not charged at one cost of record, a test episode inside the training horizon + embargo."""
     if costs is None:
         raise COR.CostNotOfRecord("RL-X1 run: no costs: a gate read is charged at the D-3 cost of record")
-    WN.require_booked_read(ledger, family, booked_read)
     version = COR.require_cost_of_record([e.cost_version for e in (*train, *test)], "RL-X1 run")
+    key = read_key(spec, costs, version, train, test)
+    if booked_read != key:
+        raise WN.ReadNotBooked(f"RL-X1 run: booked id {booked_read[:12]} is not this read's read_key {key[:12]} "
+                               "(spec, costs, cost version and episodes are bound to the booking)")
+    WN.require_booked_read(ledger, family, booked_read)
     _refuse_overlap(train, test)
     tr = transitions(train, spec, costs=costs)
     pol = fit(tr, spec, n_episodes=len(train))
@@ -540,9 +571,12 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC, 
     c2 = cost_multiple(costs, 2.0)
     test2 = [at_cost_multiple(e, 2.0) for e in test]
     p_2, f_2, _ = evaluate(pol, test2, costs=c2)
-    _, f2_2 = baseline_ii([at_cost_multiple(e, 2.0) for e in train], test2, costs=c2)
+    best_2x, f2_2 = baseline_ii([at_cost_multiple(e, 2.0) for e in train], test2, costs=c2)
     d = p - f
-    days = pd.Series(d).groupby(np.array([e.day for e in test])).sum().to_numpy()
+    day_of = np.array([e.day for e in test])
+    days = pd.Series(d).groupby(day_of).sum().to_numpy()
+    f_best = f2 if f2.mean() > f.mean() else f           # the better baseline by mean, per episode (quant B1)
+    days_best = pd.Series(p - f_best).groupby(day_of).sum().to_numpy()
     return pol, RlReport(spec_id=spec.spec_id, policy_sha=pol.sha256, n_train_episodes=len(train),
                          n_test_episodes=len(test), n_test_days=len(days), fixed_mean=float(f.mean()),
                          policy_mean=float(p.mean()), delta_mean=float(d.mean()), delta_per_day=float(days.mean()),
@@ -551,6 +585,10 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC, 
                          shuffled_delta_mean=float((pc - f).mean()), action_counts=counts, best_template=best,
                          best_fixed_mean=float(f2.mean()),
                          delta_vs_best=float(p.mean() - max(f.mean(), f2.mean())),
+                         delta_vs_best_per_day=float(days_best.mean()),
+                         delta_vs_best_per_day_lo=_day_block_lo(days_best, boot=spec.boot, seed=spec.seed,
+                                                                mean_block=spec.mean_block_days),
+                         best_template_2x=best_2x,
                          policy_mean_2x=float(p_2.mean()), fixed_mean_2x=float(f_2.mean()),
                          best_fixed_mean_2x=float(f2_2.mean()),
                          delta_vs_best_2x=float(p_2.mean() - max(f_2.mean(), f2_2.mean())),

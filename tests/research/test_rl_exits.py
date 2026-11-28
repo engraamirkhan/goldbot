@@ -99,8 +99,11 @@ def _world(n: int, seed: int, *, reverting: bool, start: str = "2014-01-06") -> 
     return out
 
 
-def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str = "read-1") -> dict[str, Any]:
+def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, train: list[X.Episode], test: list[X.Episode],
+            spec: X.RlSpec = X.SPEC, costs: SimCosts = FREE) -> dict[str, Any]:
+    """Book this read's own key (quant B2: the id is bound to spec, costs and the episodes read)."""
     fam = "rl-x1:test"                     # a fixture family: real ones are registered with the signed study plan
+    key = X.read_key(spec, costs, REC, train, test)
     monkeypatch.setitem(WN.READ_ONCE_FAMILIES, fam, frozenset({WN.Window.LEARN}))
     led = tmp_path / "reads.jsonl"
     WN.record_read_once(led, fam, WN.Window.LEARN, ref={"read_key": key})
@@ -110,8 +113,8 @@ def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str = "read-1"
 def test_the_policy_learns_to_exit_a_planted_reversal_and_beats_the_fixed_exits_and_the_control(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     spec = X.SPEC.model_copy(update={"boot": 200})
-    pol, rep = X.run(_world(200, 1, reverting=True), _world(120, 2, reverting=True, start="2015-01-05"), spec,
-                     costs=FREE, **_booked(tmp_path, monkeypatch))
+    train, test = _world(200, 1, reverting=True), _world(120, 2, reverting=True, start="2015-01-05")
+    pol, rep = X.run(train, test, spec, costs=FREE, **_booked(tmp_path, monkeypatch, train, test, spec))
     assert rep.delta_mean > 0.5 and rep.delta_per_day_lo is not None and rep.delta_per_day_lo > 0
     assert rep.shuffled_delta_mean < rep.delta_mean
     assert rep.action_counts["close"] + rep.action_counts["breakeven"] > 0
@@ -121,8 +124,8 @@ def test_the_policy_learns_to_exit_a_planted_reversal_and_beats_the_fixed_exits_
 def test_on_a_random_walk_the_policy_finds_no_edge_over_the_fixed_exits(tmp_path: Path,
                                                                         monkeypatch: pytest.MonkeyPatch):
     spec = X.SPEC.model_copy(update={"boot": 200})
-    _, rep = X.run(_world(300, 3, reverting=False), _world(200, 4, reverting=False, start="2015-01-05"), spec,
-                   costs=FREE, **_booked(tmp_path, monkeypatch))
+    train, test = _world(300, 3, reverting=False), _world(200, 4, reverting=False, start="2015-01-05")
+    _, rep = X.run(train, test, spec, costs=FREE, **_booked(tmp_path, monkeypatch, train, test, spec))
     assert abs(rep.delta_mean) < 0.1
 
 
@@ -227,8 +230,8 @@ def test_cost_of_record_entries_refuse_a_second_slippage_term_the_record_already
 
 # ------------------------------------------------------------------------------------------------ quant on #489
 def test_a_gate_read_refuses_costs_none_and_point_cost_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    book = _booked(tmp_path, monkeypatch)
     train, test = _world(40, 1, reverting=True), _world(20, 2, reverting=True, start="2015-01-05")
+    book = _booked(tmp_path, monkeypatch, train, test)
     with pytest.raises(COR.CostNotOfRecord, match="no costs"):
         X.run(train, test, costs=None, **book)                        # type: ignore[arg-type]
     point = [e.model_copy(update={"cost_version": None, "rt_bp": None}) for e in test]
@@ -236,6 +239,35 @@ def test_a_gate_read_refuses_costs_none_and_point_cost_rows(tmp_path: Path, monk
         X.run(train, point, costs=FREE, **book)
     with pytest.raises(WN.ReadNotBooked):
         X.run(train, test, costs=FREE, **{**book, "booked_read": "another-read"})
+
+
+def test_a_booked_id_does_not_cover_another_spec_or_other_episodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    train, test = _world(40, 1, reverting=True), _world(20, 2, reverting=True, start="2015-01-05")
+    book = _booked(tmp_path, monkeypatch, train, test)
+    other = X.SPEC.model_copy(update={"ridge": 2.0})
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        X.run(train, test, other, costs=FREE, **book)
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        X.run(train, test[:-1], costs=FREE, **book)
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        X.run(train, test, costs=W2, **book)
+
+
+def test_the_day_block_lower_bound_is_against_the_best_fixed_exit_t0_when_it_beats_t2(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def dip(day: str) -> X.Episode:          # stops T2 at -1 R, then recovers: holding to the time exit (T0) wins
+        return _ep([0.3, -1.2, 0.4, 1.0, 1.5], day=day)
+    train = [dip(str(pd.Timestamp("2014-01-06") + pd.Timedelta(days=i // 4))[:10]) for i in range(60)]
+    test = [dip(str(pd.Timestamp("2015-01-05") + pd.Timedelta(days=i // 4))[:10]) for i in range(40)]
+    spec = X.SPEC.model_copy(update={"boot": 300})
+    pol, rep = X.run(train, test, spec, costs=FREE, **_booked(tmp_path, monkeypatch, train, test, spec))
+    assert rep.best_template == "T0" and rep.best_fixed_mean > rep.fixed_mean
+    p, _, _ = X.evaluate(pol, test, costs=FREE)
+    f0 = np.array([X.fixed_template(e, TEMPLATES[0], costs=FREE) for e in test])
+    days = pd.Series(p - f0).groupby(np.array([e.day for e in test])).sum().to_numpy()
+    assert rep.delta_vs_best_per_day == pytest.approx(float(days.mean()))
+    assert rep.delta_vs_best_per_day_lo is not None and rep.delta_vs_best_per_day_lo <= rep.delta_vs_best_per_day
+    assert rep.best_template_2x in {t.name for t in TEMPLATES}
 
 
 def test_a_template_replay_reproduces_the_t2_fixed_exit_and_the_stop_less_t0_time_exit():
@@ -265,8 +297,9 @@ def test_the_report_carries_baseline_ii_delta_vs_the_best_fixed_exit_and_a_doubl
     train = [e.model_copy(update={"rt_bp": 5.0, "swap_r": np.full(len(e), 0.002)}) for e in _world(80, 1, reverting=True)]
     test = [e.model_copy(update={"rt_bp": 5.0, "swap_r": np.full(len(e), 0.002)})
             for e in _world(40, 2, reverting=True, start="2015-01-05")]
-    _, rep = X.run(train, test, spec, costs=c, **_booked(tmp_path, monkeypatch))
-    assert rep.cost_version == REC and rep.booked_read == "read-1"
+    book = _booked(tmp_path, monkeypatch, train, test, spec, c)
+    _, rep = X.run(train, test, spec, costs=c, **book)
+    assert rep.cost_version == REC and rep.booked_read == book["booked_read"]
     assert rep.best_template in {t.name for t in TEMPLATES}
     assert rep.delta_vs_best == pytest.approx(rep.policy_mean - max(rep.fixed_mean, rep.best_fixed_mean))
     assert rep.fixed_mean_2x < rep.fixed_mean and rep.policy_mean_2x < rep.policy_mean
@@ -283,10 +316,10 @@ def test_a_test_episode_inside_the_training_horizon_plus_embargo_is_refused(tmp_
     train = _world(40, 1, reverting=True)
     close = _world(20, 2, reverting=True, start=train[-1].day)        # decides the day the last train episode ends
     with pytest.raises(ValueError, match="embargo"):
-        X.run(train, close, costs=FREE, **_booked(tmp_path, monkeypatch))
+        X.run(train, close, costs=FREE, **_booked(tmp_path, monkeypatch, train, close))
     no_time = [e.model_copy(update={"decision_utc": None}) for e in _world(20, 2, reverting=True, start="2015-01-05")]
     with pytest.raises(ValueError, match="decision_utc"):
-        X.run(train, no_time, costs=FREE, **_booked(tmp_path / "second", monkeypatch))
+        X.run(train, no_time, costs=FREE, **_booked(tmp_path / "second", monkeypatch, train, no_time))
 
 
 def test_the_swap_of_record_per_night_is_the_trainers_cost_parts_swap_per_night_on_the_same_row():

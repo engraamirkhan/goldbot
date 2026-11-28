@@ -594,6 +594,26 @@ def judged_rows(data: Seq1Data, *, cost: np.ndarray, cost_version: np.ndarray | 
                          "judged_tf": data.keys["judged_tf"].to_numpy()[i]})
 
 
+def design_sha(data: Seq1Data) -> str:
+    """sha256 of a design's content (arrays and keys): history_runs names its design files by it."""
+    h = hashlib.sha256()
+    for a in (data.X, data.y, data.w):
+        h.update(np.ascontiguousarray(a).tobytes())
+    h.update(data.keys.to_csv(index=False).encode())
+    return h.hexdigest()
+
+
+def read_key(spec: Seq1Spec, cost_version: str, train: Seq1Data, test: Seq1Data, rows: pd.DataFrame) -> str:
+    """The id a SEQ-1 read is booked under (quant B2 on #489, read_key style of sr_v3_store): sha256 over the spec, the
+    cost version and the sha of the train design, the test design and the judged rows. A booking covers exactly that
+    read: another spec, design, cost or row set is another read."""
+    rows_sha = hashlib.sha256(pd.util.hash_pandas_object(rows, index=False).to_numpy().tobytes()
+                              + ",".join(map(str, rows.columns)).encode()).hexdigest()
+    blob = {"spec": spec.model_dump(mode="json"), "cost_version": cost_version, "train": design_sha(train),
+            "test": design_sha(test), "rows": rows_sha}
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
+
+
 class Seq1Read(FrozenRecord):
     """One walk-forward read inside learn: S per seed (objective.read on the pooled 1h-1d unit), the seed check,
     the verdict and per-tf S (descriptive: "Only the pooled result decides")."""
@@ -610,6 +630,7 @@ class Seq1Read(FrozenRecord):
     reads: tuple[O.ObjectiveRead, ...]
     cost_version: str                                   # the one D-3 cost of record every judged row was charged at
     booked_read: str                                    # the read id booked in the read-once ledger before scoring
+    best_epoch_by_seed: tuple[int, ...]                 # ADR 0107 1: best_epoch recorded per seed (and fold: per read)
 
 
 def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: str, family: str, ledger: Path | str,
@@ -618,15 +639,19 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: st
     pooled unit per seed; INCONCLUSIVE when the seed SD is not below MIN_EDGE / 2. `keep_ensemble` is the served
     bundle's keep (the seeds' mean prediction), the rows `history_runs.seq1_quality` compares with the GBT baseline.
 
-    A gate read (quant 1 on #489): refused before any fit or score unless `booked_read` is booked under `family` in
-    `ledger` (`windows.require_booked_read`; the family is registered with the signed study plan) and every judged row
+    A gate read (quant 1, B2 on #489): refused before any fit or score unless `booked_read` is this read's `read_key`
+    and is booked under `family` in `ledger` (`windows.require_booked_read`; the family is registered with the signed study plan) and every judged row
     is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`). `fit` / `fit_bundle` stay fit-only
     (K 0)."""
     if "cost_version" not in rows.columns:
         raise COR.CostNotOfRecord("SEQ-1 read: no costs: the judged rows carry no cost_version (judged_rows)")
-    WN.require_booked_read(ledger, family, booked_read)
     version = COR.require_cost_of_record(rows["cost_version"].to_numpy(), "SEQ-1 read")
-    reads, shas, per_tf_s, preds = [], [], [], []
+    key = read_key(spec, version, train, test, rows)
+    if booked_read != key:
+        raise WN.ReadNotBooked(f"SEQ-1 read: booked id {booked_read[:12]} is not this read's read_key {key[:12]} "
+                               "(spec, cost version, designs and rows are bound to the booking)")
+    WN.require_booked_read(ledger, family, booked_read)
+    reads, shas, per_tf_s, preds, epochs = [], [], [], [], []
     for sd in spec.seeds:
         art = fit(train, seed=sd, spec=spec)
         pred = score(art, test.X)[rows["row"].to_numpy(), rows["col"].to_numpy()]
@@ -636,6 +661,7 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: st
                     cost_x=rows["cost_x"].to_numpy(), boot=boot)
         reads.append(rd)
         shas.append(art.sha256)
+        epochs.append(art.best_epoch)
         preds.append(pred)
         tfs = rows["judged_tf"].to_numpy()
         per_tf_s.append({str(t): O.s_statistic(O.clip_r(rows["net_r"].to_numpy()[tfs == t]),
@@ -647,10 +673,11 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: st
                     verdict="INCONCLUSIVE" if chk.inconclusive else "READ", s_mean=float(np.mean(s)),
                     keep_share=float(np.mean([r.keep_share for r in reads])), per_tf=per_tf,
                     keep_ensemble=O.keep_rule(np.mean(preds, axis=0), rows["cost_x"].to_numpy()),
-                    reads=tuple(reads), cost_version=version, booked_read=booked_read)
+                    reads=tuple(reads), cost_version=version, booked_read=booked_read,
+                    best_epoch_by_seed=tuple(epochs))
 
 
 __all__ = ["OMP_MODULES", "omp_before_torch", "CHANNELS", "SPEC", "Seq1Artifact", "Seq1Data", "Seq1Read", "Seq1Spec", "SeedCheck", "bar_windows",
-           "Seq1Bundle", "TorchState", "build_net", "bundle_bytes", "fit_bundle", "load_bundle", "score_bundle", "design", "fit", "inner_split", "judged_rows", "judged_tf", "load", "n_inputs", "param_count", "read",
+           "Seq1Bundle", "TorchState", "build_net", "bundle_bytes", "design_sha", "fit_bundle", "read_key", "load_bundle", "score_bundle", "design", "fit", "inner_split", "judged_rows", "judged_tf", "load", "n_inputs", "param_count", "read",
            "receptive_field", "save", "score", "score_row", "seed_check", "split", "state_bytes", "tf_channels", "torch_module",
            "weights_sha", "window_start"]

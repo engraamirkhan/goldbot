@@ -45,13 +45,8 @@ KEY_TS = ("decision_utc", "window_from_utc", "horizon_end_utc")
 
 # ---------------------------------------------------------------------------------------------- designs on disk
 def design_sha(data: S.Seq1Data) -> str:
-    """sha256 of the design file's content (arrays and keys), for its file name."""
-    import hashlib
-    h = hashlib.sha256()
-    for a in (data.X, data.y, data.w):
-        h.update(np.ascontiguousarray(a).tobytes())
-    h.update(data.keys.to_csv(index=False).encode())
-    return h.hexdigest()
+    """sha256 of the design file's content (arrays and keys), for its file name (`seq1.design_sha`)."""
+    return S.design_sha(data)
 
 
 def save_design(data: S.Seq1Data, path: Path | str) -> Path:

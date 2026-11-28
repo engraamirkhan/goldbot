@@ -215,21 +215,17 @@ def _train_end(data: S.Seq1Data) -> pd.Timestamp:
     return pd.Timestamp(pd.DatetimeIndex(pd.to_datetime(data.keys["horizon_end_utc"], utc=True)).max())
 
 
-def _window_span(data: S.Seq1Data, spec: EmbedSpec) -> np.ndarray:
-    """window x tf per row, as ns."""
-    return np.array([spec.base.window * tf_seconds(str(t)) * 10**9 for t in data.keys["tf"]], dtype=np.int64)
-
-
 def embed_after(art: EmbedArtifact, data: S.Seq1Data, mask: np.ndarray) -> np.ndarray:
-    """The embedding consumer (quant 7 on #489): the 8 dims of `data`'s `mask` rows, refused when any of them decides
-    at or before the artifact's train_end + window x tf (its window could hold bars the fit saw). Per-fold artifacts
+    """The embedding consumer (quant 7 on #489): the 8 dims of `data`'s `mask` rows, refused unless every one's window
+    starts after the artifact's train_end (`window_from_utc` > train_end: the window's own first bar, which a calendar
+    window x tf misses across weekends and holidays). Per-fold artifacts
     come from `fold_embed` only, which checks this for every test row."""
     m = np.asarray(mask, bool)
-    dec = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["decision_utc"], utc=True)))
-    bad = m & (dec <= art.train_end.value + _window_span(data, art.spec))
+    w_from = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["window_from_utc"], utc=True)))
+    bad = m & ~(w_from > art.train_end.value)
     if bad.any():
-        raise ValueError(f"SEQ-1 embedding: {int(bad.sum())} rows decide at or before train_end {art.train_end} + "
-                         "window x tf: refused (not out of sample for this artifact)")
+        raise ValueError(f"SEQ-1 embedding: {int(bad.sum())} rows have a window starting at or before train_end "
+                         f"{art.train_end}: refused (not out of sample for this artifact)")
     return embed(art, data.X[m])
 
 
@@ -305,13 +301,12 @@ def fold_embed(data: S.Seq1Data, train: np.ndarray, test: np.ndarray, *, spec: E
     keep = F.purge(data.keys.loc[tr], data.keys.loc[te], label_end="horizon_end_utc", embargo=fold_embargo(data, spec))
     kept = tr.copy()
     kept[np.flatnonzero(tr)[~keep]] = False
-    # forward folds: a training row before the test block also ends window x tf (longest tf) before its first decision
+    # forward folds: a training row before the test block also ends before the first test window starts
     dec = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["decision_utc"], utc=True)))
     end = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["horizon_end_utc"], utc=True)))
+    w_from = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["window_from_utc"], utc=True)))
     if te.any():
-        first = dec[te].min()
-        span = int(_window_span(data, spec).max())
-        kept &= ~((dec < first) & (end + span >= first))
+        kept &= ~((dec < dec[te].min()) & (end >= w_from[te].min()))
     art = fit(data.take(kept), seed=spec.base.seeds[0] if seed is None else seed, spec=spec)
     return art, kept, embed_after(art, data, te)
 

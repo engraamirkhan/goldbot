@@ -292,7 +292,10 @@ def test_fitting_learns_a_planted_signal_in_the_offset_form(small):
 REC = "srv3-cost-0123456789abcdef"
 
 
-def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str = "seq1-read-1") -> dict[str, Any]:
+def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spec: S.Seq1Spec, train: S.Seq1Data, test: S.Seq1Data,
+            rows: pd.DataFrame) -> dict[str, Any]:
+    """Book this read's own key (quant B2: the id is bound to spec, cost version, both designs and the rows)."""
+    key = S.read_key(spec, REC, train, test, rows)
     fam = "seq-1:test"                     # a fixture family: real ones are registered with the signed study plan
     monkeypatch.setitem(WN.READ_ONCE_FAMILIES, fam, frozenset({WN.Window.LEARN}))
     led = tmp_path / "reads.jsonl"
@@ -305,15 +308,29 @@ def test_a_read_refuses_rows_not_charged_at_a_cost_of_record_and_an_unbooked_rea
     data, spec = small
     tr, te = S.split(data, pd.Timestamp(data.keys["decision_utc"].iloc[400]))
     cost = np.full((len(te), 2), 0.05)
-    book = _booked(tmp_path, monkeypatch)
+    rows = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), REC))
+    book = _booked(tmp_path, monkeypatch, spec, tr, te, rows)
     point = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), "w2-point"))
     with pytest.raises(COR.CostNotOfRecord, match="cost of record"):
         S.read(tr, te, point, spec=spec, boot=0, **book)
-    rows = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), REC))
     with pytest.raises(WN.ReadNotBooked):
         S.read(tr, te, rows, spec=spec, boot=0, **{**book, "booked_read": "another"})
     with pytest.raises(COR.CostNotOfRecord, match="no costs"):
         S.read(tr, te, rows.drop(columns="cost_version"), spec=spec, boot=0, **book)
+
+
+def test_a_booked_id_does_not_cover_another_spec_design_or_rows(small, tmp_path: Path,
+                                                                monkeypatch: pytest.MonkeyPatch):
+    data, spec = small
+    tr, te = S.split(data, pd.Timestamp(data.keys["decision_utc"].iloc[400]))
+    rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05), cost_version=np.full(len(te), REC))
+    book = _booked(tmp_path, monkeypatch, spec, tr, te, rows)
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        S.read(tr, te, rows, spec=spec.model_copy(update={"lr": 2e-3}), boot=0, **book)
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        S.read(tr, te, rows.assign(cost_x=0.06), spec=spec, boot=0, **book)
+    with pytest.raises(WN.ReadNotBooked, match="read_key"):
+        S.read(tr.take(np.arange(len(tr)) > 0), te, rows, spec=spec, boot=0, **book)
 
 
 def test_the_validation_rows_are_a_strict_subset_of_the_input_inside_its_span_after_the_fit_rows(small):
@@ -335,8 +352,10 @@ def test_the_walk_forward_read_runs_every_seed_and_marks_a_wide_seed_spread_inco
     at = pd.Timestamp(data.keys["decision_utc"].iloc[400])
     tr, te = S.split(data, at)
     rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05), cost_version=np.full(len(te), REC))
-    rd = S.read(tr, te, rows, spec=spec, boot=0, **_booked(tmp_path, monkeypatch))
-    assert rd.cost_version == REC and rd.booked_read == "seq1-read-1"
+    book = _booked(tmp_path, monkeypatch, spec, tr, te, rows)
+    rd = S.read(tr, te, rows, spec=spec, boot=0, **book)
+    assert rd.cost_version == REC and rd.booked_read == book["booked_read"]
+    assert len(rd.best_epoch_by_seed) == 3 and all(e >= 1 for e in rd.best_epoch_by_seed)
     assert rd.keep_ensemble.shape == (len(rows),) and rd.keep_ensemble.dtype == bool
     assert len(rd.seeds) == 3 and len(rd.shas) == 3 and len(rd.s_by_seed) == 3
     assert rd.verdict in ("READ", "INCONCLUSIVE")

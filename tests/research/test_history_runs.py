@@ -127,7 +127,7 @@ def test_seq1_quality_reads_seed_stability_and_the_gbt_comparison_on_the_same_ro
     rd = S.Seq1Read(spec_id=S.SPEC.spec_id, seeds=seeds, shas=("a" * 64,) * 5, s_by_seed=s_by,
                     seed=S.seed_check(s_by), verdict="READ", s_mean=float(np.mean(s_by)), keep_share=0.5, per_tf={},
                     keep_ensemble=keep, reads=(), cost_version="srv3-cost-0123456789abcdef",
-                    booked_read="seq1-read-1")
+                    booked_read="seq1-read-1", best_epoch_by_seed=(3, 4, 3, 5, 4))
     h = np.full(n, 1.0)
     seeds_v, gbt_v = HR.seq1_quality(rd, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, horizon_days=h,
                                      train_end=END, fold_keys=["f0", "f1"], trial=1)

@@ -88,8 +88,8 @@ def test_the_fold_is_forward_purges_training_rows_within_window_plus_horizon_of_
     gone = train & ~kept
     assert gone.any() and not (kept & test).any()
     k_end = pd.DatetimeIndex(data.keys["horizon_end_utc"])[kept]
-    win = pd.Timedelta(hours=S.SPEC.window)                      # window x tf (1h)
-    assert (k_end + win < d[test].min()).all()                     # no kept window + horizon reaches the test block
+    w_from = pd.DatetimeIndex(data.keys["window_from_utc"])
+    assert (k_end < w_from[test].min()).all()                      # no kept horizon reaches a test window
     assert art.train_end == k_end.max()
     with pytest.raises(ValueError, match="both"):
         E.fold_embed(data, np.ones(len(data), bool), test, spec=FAST)
@@ -103,11 +103,13 @@ def test_an_embedding_consumer_refuses_rows_inside_the_fit_end_plus_window():
     data, _ = _rows()
     d = pd.DatetimeIndex(data.keys["decision_utc"])
     art = E.fit(data.take(np.asarray(d < d[300])), seed=7, spec=FAST)
-    win = pd.Timedelta(hours=S.SPEC.window)
-    late = np.asarray(d > art.train_end + win)
+    w_from = pd.DatetimeIndex(data.keys["window_from_utc"])
+    late = np.asarray(w_from > art.train_end)                      # the whole window after the fit's last horizon
     assert E.embed_after(art, data, late).shape == (int(late.sum()), E.DIM)
+    edge = np.asarray((d > art.train_end) & (w_from <= art.train_end))   # decides later, but its window reaches back
+    assert edge.any()
     with pytest.raises(ValueError, match="train_end"):
-        E.embed_after(art, data, np.asarray(d > art.train_end))
+        E.embed_after(art, data, edge)
 
 
 def test_the_embedding_validation_rows_start_their_windows_after_the_last_fit_decision():
