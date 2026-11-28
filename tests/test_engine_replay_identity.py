@@ -102,6 +102,15 @@ def _existing_only(got: dict[str, Any], extra: set[str]) -> dict[str, Any]:
     return {**got, "decisions": [d for d in got["decisions"] if mine(d)]}
 
 
+@pytest.fixture(autouse=True)
+def _clock_in_the_replay_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The load-time qualification reads the wall clock (arms._now): SRC15 is GS1's control and stops with it after
+    GS1's last day (2026-11-27). The replay is pinned to March 2025, so the clock is too; otherwise the golden would
+    move with the calendar, not with a change of behaviour."""
+    from goldbot.research import arms
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp(START, tz="UTC"))
+
+
 @pytest.fixture(scope="module")
 def golden() -> dict[str, Any]:
     return {} if WRITE else json.loads(GOLDEN.read_text())
