@@ -95,9 +95,12 @@ def main(argv: list[str] | None = None) -> int:
     a = parser().parse_args(argv)
     for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[v] = str(a.threads)
+    try:        # first: torch's OpenMP runtime before sklearn/lightgbm's (seq1.omp_before_torch)
+        import torch  # noqa: F401
+    except ImportError:
+        pass        # the dl group is optional: the refusals below run without it; seq1.torch_module names the fix
     import numpy as np
     import pandas as pd
-    import torch  # noqa: F401  first: its OpenMP runtime before sklearn/lightgbm's (seq1.omp_before_torch)
 
     from goldbot.data import htf_bars as H
     from goldbot.research import dense_labels as D
