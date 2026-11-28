@@ -386,3 +386,32 @@ def test_the_committed_xt_file_is_from_the_committed_script_and_passes_the_gate_
         [0.31666] * 5 + [pytest.approx(0.410, abs=1e-3), pytest.approx(0.510, abs=1e-3)]
     assert [bt[f"pooled|{tf}"]["max"] for tf in ("15m", "30m", "1h", "2h", "4h", "1d", "1w")] == pytest.approx(
         [0.198, 0.203, 0.211, 0.269, 0.269, 0.380, 0.443], abs=1e-3)
+
+
+def test_power_cards_take_the_class_rho_day_at_their_tf() -> None:
+    """Quant R1 on #525 re-verify: evaluate() and the verdict check pass the card's class to rho_day_for."""
+    from goldbot.config import load_settings
+    from goldbot.research import power_first as P
+    from tests.research.test_power_first import card
+    st = load_settings()
+    v = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD"]), st)
+    assert v.rho_day == pytest.approx(0.44691)
+    assert P.rho_class_of(["XAUUSD@dukascopy"]) == "gold"
+    assert P.rho_class_of(["XAUUSD", "EURUSD"]) == "gold+fx10" and P.rho_class_of(["XAUUSD", "XAGUSD"]) == "pooled"
+    assert P.rho_class_of(["XAUUSD", "US500"]) is None                      # outside the measured classes: the prior
+    with pytest.raises(ValueError, match="looser"):                           # a verdict on the 0.25 prior is refused
+        P._check_given(v.model_copy(update={"rho_day": 0.25}), card(tf="15m", hold_days=8 / 24,
+                                                                       instruments=["XAUUSD"]), st)
+
+
+def test_pooled_rho_inputs_recompute_the_per_tf_binding_from_the_cells(tmp_path: Path,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quant R2 on #525 re-verify: a pooled Stage 0 read verifies binding_by_tf against the cells file."""
+    js, _ = _produce(tmp_path, monkeypatch)
+    S.rho_inputs(js, body="pooled", members=["XAUUSD", "EURUSD"], tf="15m", freeze_sha=D.EXIT_FREEZE_SHA256)
+    d = json.loads(js.read_text())
+    d["binding_by_tf"]["rho_u_inst_day_mean"]["gold+fx10|15m"]["max"] = 0.1
+    bad = tmp_path / "tampered.json"
+    bad.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match="recomputed"):
+        S.rho_inputs(bad, body="pooled", members=["XAUUSD", "EURUSD"], tf="15m", freeze_sha=D.EXIT_FREEZE_SHA256)

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -270,6 +271,17 @@ def _power(edge: float, n_eff: float, sd: float, z: float) -> float:
     return float(stats.norm.cdf(edge * math.sqrt(n_eff) / sd - z)) if n_eff > 0 else 0.0
 
 
+def rho_class_of(instruments: Sequence[str]) -> str | None:
+    """The D-12-xt rho class of a card's instruments, by `sr_v3.rho_class` (gold alone -> "gold"; with a measured
+    metal -> "pooled"; else "gold+fx10"); a `<symbol>@<source>` id counts as its symbol. None when any instrument is
+    outside the measured classes (gold, XAG, FX10): `rho_day_for` then keeps the prior (quant R1 on #525)."""
+    from goldbot.research.sr_v3 import GOLD, POOLED_MEMBERS, rho_class
+    syms = [str(i).split("@")[0].upper() for i in instruments]
+    if not syms or any(s_ not in POOLED_MEMBERS for s_ in syms):
+        return None
+    return rho_class("gold" if set(syms) == {GOLD} else "pooled", syms)
+
+
 def evaluate(card: PowerCard, settings: Settings) -> PowerVerdict:
     """The power-first reading of `card` (module docstring). Reads no data; goal_edge_R is recorded, never used."""
     pf = settings.research.power_first
@@ -284,7 +296,7 @@ def evaluate(card: PowerCard, settings: Settings) -> PowerVerdict:
     m_day = (u.m_w if u is not None else
              max(1.0, (card.learn_signals / card.learn_signal_clusters if card.learn_signal_clusters else 1.0) / c))
     rho_i = rho_instrument(card.instruments, pf.rho_instrument, pf.rho_instrument_metals)
-    rho_d = pf.rho_day_for(card.hold_days)
+    rho_d = pf.rho_day_for(card.hold_days, rho_class_of(card.instruments))
     de = design_effect(m_day, rho_d, len(card.instruments), rho_i, concurrency=c)
     years = {s.name: s.years for s in card.segments}
     n_eff = {s: rate * y / de for s, y in years.items()}
@@ -320,7 +332,7 @@ def _check_given(v: PowerVerdict, card: PowerCard, settings: Settings) -> None:
                                       ("min_joint_power", v.min_joint_power, pf.min_joint_power),
                                       ("n_eff_floor", v.n_eff_floor, pf.n_eff_floor), ("delta_r", v.delta_r, pf.delta_r),
                                       ("sd_r", v.sd_r, pf.sd_r_floor),
-                                      ("rho_day", v.rho_day, pf.rho_day_for(card.hold_days))) if mine < floor]
+                                      ("rho_day", v.rho_day, pf.rho_day_for(card.hold_days, rho_class_of(card.instruments)))) if mine < floor]
     if loose:
         raise ValueError(f"verdict thresholds looser than research.power_first: {loose}")
     held = (overlap_effect(card, pf.trading_days_per_year) if card.learn_uniqueness is not None

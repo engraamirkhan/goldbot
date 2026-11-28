@@ -207,6 +207,9 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
                              "sha (dense_labels.EXIT_FREEZE_SHA256) to check the rho file (D-12-xt): refused")
         if (why := xt_v1_rho_refusal(d, path, freeze_sha)) is not None:
             raise ValueError(why)
+        if bt:                                  # quant R2 on #525: the per-tf binding is reproduced from its cells
+            from goldbot.research.data_sufficiency import verify_inst_by_tf
+            verify_inst_by_tf(d, path)
         if bt:
             rho_inst = min(1.0, float(bt["rho_u_inst_day_mean"][f"{rc}|{tf}"]["max"]))
             tau = max(TAU_A_FLOOR, float(bt["tau_a"][f"pooled|{tf}"]["tau_a"]))  # D-12 (d) pooled row, re-run at tf
