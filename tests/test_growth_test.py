@@ -62,7 +62,8 @@ def test_the_frozen_spec_carries_gs1_as_owner_experiment_and_gs1c_as_its_control
     assert got["GS1C"].role == "control" and got["GS1C"].params["control"] == "GS1"
     body = {k: v for k, v in got["GS1"].params.items()}
     assert {k: v for k, v in got["GS1C"].params.items() if k != "control"} == body   # same mechanics
-    assert got["GS1C"].entry_refused == ""
+    live = pd.Timestamp.now(tz="UTC").normalize() <= pd.Timestamp(arms.owner_experiment_until("GS1"), tz="UTC")
+    assert (got["GS1C"].entry_refused == "") == live   # the control stops with GS1 after its last day
 
 
 def test_the_engine_journals_the_owner_experiment_exemption_at_start() -> None:
