@@ -263,6 +263,8 @@ def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_ref
             assert a.entry_refused.startswith(RULE), arm_id
         elif a.role == "learning" or arm_id in dedicated:       # no K rows here: refused, fail closed
             assert a.entry_refused.startswith(arms.LEARNING_RULE), arm_id
+        elif a.params.get("control") in OWNER_EXPERIMENTS:     # an owner experiment's control stops with it
+            assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id
         else:
             assert a.entry_refused == "", arm_id
 
