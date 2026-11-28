@@ -715,6 +715,35 @@ def _cells_le_60m_bound(cells: Path) -> dict[str, float]:
     return {c: max(RHO_FLOOR_LE_60M, v) for c, v in best.items()}
 
 
+def _with_binds_with(d: dict[str, object], recomputed: dict[str, float]) -> dict[str, float]:
+    """D-12-xt (quant ruling on #514): a re-measurement that names the measurement it binds with (`binds_with`: the
+    D-12 file's repo-relative path and sha256) binds rho_u,day at max(that file's recorded `rho_day_le_60m`, its own
+    cells) per class. The named file must exist with that sha256 (ValueError otherwise); without `binds_with` the
+    cells bound is returned unchanged."""
+    import json
+    import math
+
+    bw = d.get("binds_with")
+    if not bw:
+        return recomputed
+    if not isinstance(bw, dict) or not bw.get("path") or not bw.get("sha256"):
+        raise ValueError(f"rho_day_measurement binds_with {bw!r} must name a path and its sha256")
+    prior = Path(str(bw["path"]))
+    prior = prior if prior.is_absolute() else ROOT / prior
+    if not prior.is_file() or _sha256(prior) != bw["sha256"]:
+        raise ValueError(f"rho_day_measurement binds_with {bw.get('path')!r} is missing or differs from its sha256")
+    rec = json.loads(prior.read_text()).get("rho_day_le_60m") or {}
+    out = dict(recomputed)
+    for c, v in rec.items():
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x):
+            out[c] = max(out.get(c, -math.inf), x)
+    return out
+
+
 def xt_v1_rho_refusal(d: dict[str, object], path: object, freeze_sha: str) -> str | None:
     """Why a rho measurement (its parsed JSON `d`) is not a Stage 0, gate or power read: it does not record the xt-v1
     exit freeze (`exit_freeze_sha` != `freeze_sha`, which callers pass as `dense_labels.EXIT_FREEZE_SHA256`; quant
@@ -738,7 +767,8 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
     - window learn, from >= 2010-01-01 and to_exclusive <= 2018-01-01;
     - `candidates` name at least two replayed families that are neither sr-v3 nor H-102;
     - `cells_file` exists with its recorded sha256;
-    - `rho_day_le_60m` has every class of RHO_CLASSES, each finite, each equal to the bound recomputed from the cells;
+    - `rho_day_le_60m` has every class of RHO_CLASSES, each finite, each equal to the bound recomputed from the cells
+      (for a D-12-xt file naming `binds_with`, max(cells, the named file's recorded bound), sha256-checked);
     - `value` is at least every class's binding;
     - with `gate_read` (any gate or power read, quant ruling on PR #514, D-12-xt): the file's `exit_freeze_sha` equals
       the xt-v1 freeze `freeze_sha` (the caller passes `dense_labels.EXIT_FREEZE_SHA256`; required with `gate_read`). The D-12 file measured under h_ref = 1 bar has none, so it
@@ -788,7 +818,7 @@ def check_rho_measurement(path: str | None, value: float, pinned_sha256: str | N
     cells = ROOT / str(cf.get("path", ""))
     if not cf.get("path") or not cells.is_file() or _sha256(cells) != cf.get("sha256"):
         raise ValueError(f"rho_day_measurement cells file {cf.get('path')!r} is missing or differs from its sha256")
-    recomputed = _cells_le_60m_bound(cells)
+    recomputed = _with_binds_with(d, _cells_le_60m_bound(cells))
     off = {c: (vals[c], recomputed.get(c)) for c in RHO_CLASSES
            if recomputed.get(c) is None or abs(vals[c] - float(recomputed[c])) > 1e-4}
     if off:
