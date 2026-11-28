@@ -613,6 +613,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/research/srv3_cost_record.py", "_load", "CostRecord"):
         "strict: config/research/srv3_cost_record/<version>.yaml, an immutable hash-pinned record (sr-v3 D-3, ADR 0098 "
         "R-H); a record that does not validate is not frozen and must refuse",
+    ("goldbot/research/fx_cost_cells.py", "build_record", "CR.FxCell"):
+        "not persisted: builds the schema-2 record's FX cells from the cost rows computed in the same call (strict, "
+        "backlog 280)",
     ("goldbot/risk/real_money.py", "load_adv_reference", "AdvReference"):
         "strict: config/data/adv_reference.yaml, versioned config (ADR 0106); an entry that does not validate gives no "
         "reference, so real-money entries are refused rm_volume_unknown (fail closed)",
