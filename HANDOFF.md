@@ -30,8 +30,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Quant re-verify of #525: `power_first.evaluate` and the verdict check pass the card's class
   (`power_first.rho_class_of`, the `sr_v3.rho_class` mapping; None outside gold / XAG / FX10 keeps the prior), so a gold
   15m card with an 8 h hold now carries rho_day 0.44691. A pooled `sr_v3.rho_inputs(freeze_sha=...)` runs
-  `verify_inst_by_tf` before reading. Backlog 277 (also recompute tau_a(tf) and the vs-gold level from the cells) and
-  278 (the drivers must call `require_power_read_rho`, which has no production caller) are open.
+  `verify_inst_by_tf` before reading. Backlog 281 (also recompute tau_a(tf) and the vs-gold level from the cells) and
+  282 (the drivers must call `require_power_read_rho`, which has no production caller) are open.
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also
