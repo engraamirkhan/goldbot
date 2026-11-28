@@ -384,6 +384,20 @@ def test_the_service_entry_points_and_the_api_load_no_history_model_and_no_torch
     assert out.stdout.strip() == ""
 
 
+def test_a_loosened_model_copy_of_the_rl_spec_is_refused_at_transitions_fit_and_record(tmp_path: Path):
+    eps = _world(20, 1, reverting=True)
+    bad = X.SPEC.model_copy(update={"stop_r": 0.0})               # model_copy skips the validators
+    with pytest.raises(ValueError, match="stop_r"):
+        X.transitions(eps, bad, costs=FREE)
+    tr = X.transitions(eps, costs=FREE)
+    with pytest.raises(ValueError, match="stop_r"):
+        X.fit(tr, bad)
+    from goldbot.research import history_runs as HR
+    with pytest.raises(ValueError, match="stop_r"):
+        HR.record_rlx1(eps, manifest_key="k", train_end=pd.Timestamp("2014-02-01", tz="UTC"), data_root=tmp_path,
+                       data_version="dv", root=tmp_path / "m", costs=FREE, spec=bad)
+
+
 def test_an_rl_spec_refuses_a_non_positive_stop_or_target_and_a_negative_breakeven_floor():
     for field, value in (("stop_r", 0.0), ("target_r", -1.0), ("be_min_r", -0.1)):
         with pytest.raises(ValueError):

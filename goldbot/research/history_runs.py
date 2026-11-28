@@ -202,7 +202,7 @@ def record_rlx1(eps: Sequence[X.Episode], *, manifest_key: str, train_end: pd.Ti
     """`train_end`: the last horizon end of the training episodes (the caller's entries), also their
     `label_end_max`. The policy's seed (shuffled-state control, bootstrap) is seed_list(manifest_key)[0] (Q1)."""
     import hashlib
-    sp = spec.model_copy(update={"seed": MQ.seed_list(manifest_key, 1)[0]})
+    sp = X.checked(spec.model_copy(update={"seed": MQ.seed_list(manifest_key, 1)[0]}))
     tmp = save_episodes(eps, Path(data_root) / "rlx1-episodes.tmp.npz")
     name = f"rlx1-episodes-{hashlib.sha256(tmp.read_bytes()).hexdigest()[:16]}.npz"
     f = tmp.replace(Path(data_root) / name)

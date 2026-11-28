@@ -94,6 +94,8 @@ def test_no_sizing_spec_can_be_looser_than_the_live_limits():
     assert RS.MAX_RISK == live.max_risk_per_trade and RS.DRAWDOWN_HALT == r.drawdown_stage2 == live.dd_stage2
     assert RS.DRAWDOWN_STAGE1 == r.drawdown_stage1 and RS.DAILY_LOSS_STOP == r.daily_cap
     assert RS.WEEKLY_CAP == r.weekly_cap and RS.STAGE1_CLEAR == r.drawdown_stage1_clear
+    from goldbot.risk.sizing import SIZE_DOWN_RISK
+    assert RS.SIZE_DOWN_RISK == SIZE_DOWN_RISK
     for field, value in (("max_risk", 0.05), ("base_risk", 0.02), ("daily_loss_stop", 0.03),
                          ("weekly_cap", 0.06), ("drawdown_halt", 0.15), ("drawdown_stage1", 0.1)):
         with pytest.raises(ValueError):

@@ -90,6 +90,12 @@ class RlSpec(FrozenRecord):
 SPEC = RlSpec()
 
 
+def checked(spec: RlSpec) -> RlSpec:
+    """`spec` re-validated: `model_copy(update=...)` skips the field validators, so a loosened copy is refused here
+    (the constructor runs them; not a persisted load)."""
+    return RlSpec(**spec.model_dump())
+
+
 class Episode(FrozenRecord):
     """One entry's oriented path in R per bar after entry (open, high, low, close), the swap R charged in each bar, the
     exit-cost scale k (R per bp of price) and its session day."""
@@ -329,6 +335,7 @@ class Transitions(FrozenRecord):
 def transitions(eps: Sequence[Episode], spec: RlSpec = SPEC, *, costs: SimCosts) -> Transitions:
     """Full feedback: from every alive state (bar j, breakeven flag) every allowed action, replayed exactly. States
     with the stop at breakeven are reachable by moving at j or earlier (`alive1`, a forward pass)."""
+    spec = checked(spec)
     c = costs
     S, A, R, S2, OK2, D, W = [], [], [], [], [], [], []
     for ep in eps:
@@ -416,6 +423,7 @@ def _ridge(Phi: np.ndarray, y: np.ndarray, w: np.ndarray, lam: float) -> np.ndar
 
 def fit(tr: Transitions, spec: RlSpec = SPEC, *, n_episodes: int = 0) -> ExitPolicy:
     """Fitted Q iteration, `n_iter` sweeps, one ridge per action."""
+    spec = checked(spec)
     mean = tr.S.mean(axis=0)
     sd = tr.S.std(axis=0)
     scale = np.where(sd > 1e-12, sd, 1.0)
