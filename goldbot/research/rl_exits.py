@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
@@ -76,9 +77,9 @@ FEATURES: tuple[str, ...] = ("t_frac", "close_r", "mfe_r", "mae_r", "be", "range
 class RlSpec(FrozenRecord):
     spec_id: str = "rlx1-v1"
     template: str = "T2"
-    stop_r: float = 1.0
-    target_r: float = 2.0
-    be_min_r: float = 0.0
+    stop_r: float = Field(1.0, gt=0)
+    target_r: float = Field(2.0, gt=0)
+    be_min_r: float = Field(0.0, ge=0)
     n_iter: int = 30
     ridge: float = 1.0
     seed: int = 20261126            # the shuffled-state control's permutation and the bootstrap

@@ -33,9 +33,14 @@ ruled RL-X1 the one RL item this quarter (R7a) and declined PPO/DQN until RL-X1 
    the seed-SD rule and K stay as they are.
 3. **RL scope.** RL-X1 (fitted-Q exits on top of the T2 template's stop and target, shielded actions hold / close /
    breakeven) counts as execution under ADR 0106 and stays offline, never live. The sizing scaffold size-v1
-   (`rl_sim`) is closed form: fraction of equity = min(1 %, 0.5 % / vol ratio), with the 2 % daily stop applied before
-   a trade (a trade whose full stop could cross it is skipped) and the 15 % drawdown halt. PPO/SAC/TD3 are allowed by
-   ADR 0106 inside the simulator but none is fitted now (R7d); size-v1 is the baseline any learned sizer must beat.
+   (`rl_sim`) is closed form: fraction of equity = min(1 %, 0.5 % / vol ratio), under the live limits of
+   config/settings.yaml (ADR 0004; trading-safety M1 on #489): a trade is skipped when its reserve, a gapped 1 R stop
+   plus its cost, (1 + cost + 0.25) R, could cross the 2 % daily stop or the 5 % weekly cap (days that lose more
+   anyway are counted); risk per trade halves from an 8 % drawdown until it is under 5 %; trading halts at 12 %.
+   `SizingSpec` validators refuse anything looser, and `simulate` re-validates a `model_copy`. PPO/SAC/TD3 are allowed
+   by ADR 0106 inside the simulator but none is fitted now (R7d); size-v1 is the baseline any learned sizer must beat.
+   Any adoption of a sizing or exit rule from here goes through the RiskGate, and the live caps win over the
+   simulator's.
 4. **Run record: one format, ADR 0109's run manifest.** Every SEQ-1 bundle, embedding and RL-X1 fit goes through a
    builder in `history_runs` and `run_manifest.fit_and_record`; `run_manifest.rebuild` reproduces the sha (tested on
    a clean checkout). SEQ-1's served form is the 5-seed bundle; its manifest carries `model_quality.seed_stability`

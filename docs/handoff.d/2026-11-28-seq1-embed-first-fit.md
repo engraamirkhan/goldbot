@@ -21,7 +21,10 @@
   (`swap_rate`, = cost_parts per night); agg-v1 applies a round only after it closes (`replay`), `history_rounds`
   refuses non-OOF keeps, `mix_keep` takes n; embeddings carry `train_end`, `embed_after` refuses rows inside
   train_end (window_from_utc > train_end), `fold_embed` is forward-only; re-verify B1/B2: the day-block bound is
-  also against the better of baselines (i)/(ii), and a booked id must equal the read's `read_key` (spec, costs, data); ADR 0107 point 1 restated and accepted. Lesson: never edit
+  also against the better of baselines (i)/(ii), and a booked id must equal the read's `read_key` (spec, costs, data);
+  trading-safety: size-v1 now runs under the live limits (2 % day, 5 % week, 8 % size-down, 12 % halt, 1 % max risk;
+  validators refuse looser specs, `simulate` re-validates), reserves a gapped stop plus cost before each trade and
+  counts breaches; the services and the API load no history model and no torch (subprocess test); ADR 0107 point 1 restated and accepted. Lesson: never edit
   `decision_cost.py` (or any `dense_labels.CODE_FILES` file) in a non-label change: it re-keys every built partition.
   Fits (gold xt-v1, learn 2010-17, 8 threads, commit e54c3f33, ~/tmp/seq1-embed-2026-11-28b, local; pretext loss
   fit / val / out of fold, baselines on the same out-of-fold rows: zero, fit mean, trailing range):

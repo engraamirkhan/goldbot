@@ -369,7 +369,22 @@ def test_the_history_models_import_nothing_on_the_order_path(mod: str):
                                  "goldbot.api", "goldbot.telegram")) for m in names)
 
 
-def test_nothing_in_the_engine_execution_or_risk_imports_the_history_models():
-    hits = [p for d in ("engine", "execution", "risk", "ops", "api") for p in (ROOT / "goldbot" / d).rglob("*.py")
-            if any(m in p.read_text() for m in ("rl_exits", "rl_sim", "seq1", "agg_v1", "learn_labels"))]
-    assert hits == []
+def test_the_service_entry_points_and_the_api_load_no_history_model_and_no_torch():
+    """Trading-safety M2 on #489: the real import closure of every service (goldbot.ops.run) and the API app, in a
+    fresh interpreter, holds none of the history models and not torch."""
+    import subprocess
+    import sys
+    code = ("import sys, goldbot.ops.run, goldbot.api.app\n"
+            "mods = ('seq1', 'seq1_embed', 'rl_exits', 'rl_sim', 'agg_v1', 'learn_labels', 'history_runs', 'gate_cost')\n"
+            "bad = [m for m in sys.modules if m in {'goldbot.research.' + x for x in mods}"
+            " or m == 'torch' or m.startswith('torch.')]\n"
+            "print(','.join(bad))\n")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT, timeout=300)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip() == ""
+
+
+def test_an_rl_spec_refuses_a_non_positive_stop_or_target_and_a_negative_breakeven_floor():
+    for field, value in (("stop_r", 0.0), ("target_r", -1.0), ("be_min_r", -0.1)):
+        with pytest.raises(ValueError):
+            X.RlSpec.model_validate({**X.SPEC.model_dump(), field: value})
