@@ -151,7 +151,9 @@ The 2027Q1 budget is **not** an S0-1 item. Worst case 6 K fits the 12 open in co
 - S0-1: section 3.
 - S0-2: section 4, binding.
 - S0-3 power (ADR 0085): Stage L at z 1.83 (m 3). The confirm route needs n_eff ≥ 200 and power ≥ 0.5 at z 2.87,
-  computed at ρ_inst = max(0.5, measured). Joint power ≥ 0.25.
+  computed at ρ_inst = max(0.5, measured). Joint power ≥ 0.25. S0-3 confirm power is computed at z for m_j = max(3,
+  members already recorded for the target batch on the Stage 0 day + this card's cells passing S0-1/S0-2), α_j of
+  that batch's ledger year; the z 2.87 figures in section 2 are the m_j 3 lower bound.
 - S0-4 ABSTAIN: fewer than 100 kept OOF rows or 30 kept days, from a column-projected count.
 - S0-5 leak suite: sr-v3 N25 and N6.
 

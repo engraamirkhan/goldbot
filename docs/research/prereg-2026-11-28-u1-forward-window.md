@@ -94,10 +94,15 @@ fallback-(ii) grade runs until `learning:broker_m1_capture` has passed at least 
   table extended with forward months only (Dukascopy quoted spread ub95 per session and month, ≥ 2026-10, each month
   frozen at day 8 like the grade). Holdout months are never in it. It is recorded on an ADR 0098 R-H line before the
   first U1 read. It is this window's version of record from its first read (no earlier read of the window exists, so
-  no K +1 applies); a second version on the same window is K +1 and the first read stands.
+  no K +1 applies); a second version on the same window is K +1 and the first read stands. The version of record is
+  the rule and its builder sha; each month's frozen ECR and spread table is appended under the same version id with
+  its sha256 on the R-H line. Any change to the roll rule, the window length, the fill threshold or the fallback order
+  is a new version, K +1, and the first read stands.
 - **ECR over a window of many years (decided): a mechanical monthly roll, fixed now.** For each calendar month from
   2026-10, the ECR ub95 per broker × session × tf cell is taken over the trailing 3 calendar months of demo fills
-  (≥ 30 fills, else the session `all` cell, else the previous frozen month carries), frozen at day 8 after month-end
+  (≥ 30 fills, else the session `all` cell, else the previous frozen month carries; a carried ECR month is used for
+  at most 2 consecutive months; a row whose as-of ECR month is older than 3 months is refused (`CostRecordRefused`),
+  like the 40-day era-spread rule), frozen at day 8 after month-end
   with its sha256, and joined as of `available_utc` like the spread. Reason: `ecr-2026-11-20.2` measures four weeks of
   2026 fills. Holding it for years would charge 2030s rows with 2026 broker conditions, and the size and sign of that
   drift are unknown. A roll that is fixed before any forward label exists is point in time and leaves no choice to
