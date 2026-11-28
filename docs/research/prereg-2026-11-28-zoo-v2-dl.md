@@ -162,11 +162,14 @@ errors are not perfectly correlated. Prior P(Stage L CONTINUE): 2 % each.
 - A new artifact, fit-only at 0 K, seals its scores like section 1.
 
 **CAS-2 "deep + tree stack" (H-104h), units 4h and 1d+1w.** This is the zoo-v1 F2 STACK pattern under obj-v1.
-- **Inputs:** logit(clip(G-cw p_w, 0.01, 0.99)) and the SEQ-1 head's E[gross R | x] − cost(x), in R.
+- **Inputs:** logit(clip(G-cw p_w, 0.01, 0.99)), with p_w the mean over G-cw's 5 seeds, and the SEQ-1 head's
+  E[gross R | x] − cost(x), in R.
 - **Model:** an L2 logistic, C = 1.0, standardised on the stacker's training rows. y = 1[net R > 0], with weights
   u × min(|net R|, 10) (ADR 0098 §2). Keep iff p_w ≥ 0.5.
 - **OOF only.** The stacker for year Y is fitted only on base OOF scores of years before Y, each from a base model
   trained before that row's year (plus the unit's gap). Year Y's stacker scores come from base OOF scores of Y.
+  The stacker for year Y trains only on rows whose label horizon ends before the start of Y minus the unit's gap (the
+  same full-horizon purge as section 4).
 - The first OOF base year is 2012, so the stacker's judged rows are 2013-17. Every paired comparison uses those rows.
 - An OOF-only stacking test is an S0-5 item, as in zoo-v1 test 3.
 
@@ -174,7 +177,8 @@ errors are not perfectly correlated. Prior P(Stage L CONTINUE): 2 % each.
 - Same cost of record, row population (P30-usable, intersection reported) and read requirements as section 4.
 - To CONTINUE, each must pass section 4 gates 1-7 and 9-11. It must also **beat G-cw alone** on paired D per OOS
   session day, with a one-sided 95 % day-block lower bound > 0, on the shared rows. It must beat **B0, B1, B8 and
-  buy-and-hold** after costs. A CAS cell starts only if the G-cw cell of its unit starts.
+  buy-and-hold** after costs. A CAS cell starts only if the G-cw cell of its unit starts. CAS-2 starts only if the
+  G-cw and SEQ-1 cells of its unit start.
 - **Preconditions (S0-1):** PR #489 merged, ADR 0107 accepted, backlog 277 merged. CAS-2 also needs the SEQ-1 head
   fitted. Both need G-cw's 1d+1w v0 and per-seed columns.
 
@@ -374,7 +378,7 @@ card.** A cell starts, and only then books K and reads, iff S0-1 to S0-5 all hol
 - **2026Q4:** last recorded 73 free; after commitments about 55 are uncommitted, so 38 fits. The ops-VM registry is
   the count of record.
 - **2027Q1 (F10):**
-  - Worst case = ADR 0099's 164 − 7 (its zoo-v2 + agg-v1 rows) + 38 = **195**. That is above the 180 discretionary
+  - Worst case = ADR 0099's 164 − 4 (its zoo-v2 rows; the agg-v1 3 K is the separate forward card, section 6) + 38 = **198**. That is above the 180 discretionary
     freeze.
   - Cells refused for budget are NOT STARTED at 0 K, in the booking order above. The budget is not raised.
   - (The quant's 191 was computed with 34 cells.)
