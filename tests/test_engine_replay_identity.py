@@ -9,7 +9,11 @@ day's RB15 trades now time out after their 4 bars instead of riding to stop/targ
 The same replay with 1d and 1w arms added must give the existing arms the identical rows and deals, whether the 1d/1w
 arms are dark (settings engine.timeframes_live, the default) or live with a long history to warm up from. The golden is
 rewritten only for an intended change of the existing arms' behaviour, never to make a change pass:
-GOLDBOT_WRITE_REPLAY_GOLDEN=1 pytest tests/test_engine_replay_identity.py; the trading-safety reviewer signs any change."""
+GOLDBOT_WRITE_REPLAY_GOLDEN=1 pytest tests/test_engine_replay_identity.py; the trading-safety reviewer signs any change.
+
+The engine replays March 2025, so it is started on March 2025's clock (`research.arms._now`, the seam the load-time
+owner-experiment expiry reads): SRC15 names GS1 as its experiment, and GS1's exemption ended after 2026-11-27, so on
+the wall clock the load refuses SRC15 and the replay would differ from the golden by the calendar, not by behaviour."""
 from __future__ import annotations
 
 import json
@@ -25,6 +29,7 @@ from goldbot.engine import Engine, EngineConfig
 from goldbot.engine.exploration import Arm, ExplorationConfig, Pot
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.research import arms as spec_arms
 from goldbot.research.arms import Arm as SpecArm
 from goldbot.risk import RiskLimits
 from goldbot.telegram.approvals import ApprovalCenter
@@ -100,6 +105,12 @@ def _existing_only(got: dict[str, Any], extra: set[str]) -> dict[str, Any]:
         return d.get("agent") not in tags and d.get("arm") not in extra and not any(
             str(d.get("proposal", "")).startswith(t) for t in extra)
     return {**got, "decisions": [d for d in got["decisions"] if mine(d)]}
+
+
+@pytest.fixture(autouse=True)
+def _replay_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine starts at the replay's first day, not today: the owner-experiment expiry read at load follows it."""
+    monkeypatch.setattr(spec_arms, "_now", lambda: pd.Timestamp(START, tz="UTC"))
 
 
 @pytest.fixture(scope="module")

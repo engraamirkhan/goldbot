@@ -5,6 +5,11 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-28 main's backend check unblocked (ci #520, #522): GS1's owner experiment ended after 2026-11-27
+  (`research.arms.OWNER_EXPERIMENTS`), so from 28 Nov the loader refuses GS1 and every control naming it (GS1C, and
+  SRC15 in the replay test) on the wall clock, as designed. Test-only fix, no engine/risk/execution change:
+  test_growth_test and test_qualify_before_demo read the expiry (from PR #524); test_engine_replay_identity starts its
+  March 2025 replay on March 2025's clock (`arms._now` pinned to the replay's first day), golden unchanged.
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also
