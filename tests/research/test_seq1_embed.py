@@ -140,6 +140,24 @@ def test_the_pretext_loss_of_the_validation_rows_is_the_fits_recorded_validation
 
 
 @needs_torch
+def test_embed_row_is_allclose_to_the_batch():
+    data, _ = _rows()
+    art = E.fit(data, seed=7, spec=FAST)
+    batch = E.embed(art, data.X[:20])
+    for i in range(20):
+        np.testing.assert_allclose(E.embed_row(art, data.X[i]), batch[i], rtol=2e-7, atol=2e-7)   # one float32 ulp
+
+
+@needs_torch
+def test_a_non_finite_pretext_validation_loss_is_refused():
+    data, _ = _rows()
+    X = data.X.copy()
+    X[:, E.R_CLOSE, :] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        E.fit(data.model_copy(update={"X": X}), seed=7, spec=FAST)
+
+
+@needs_torch
 def test_embed_row_matches_the_batch_and_parity_is_exact_on_identical_inputs():
     data, _ = _rows()
     art = E.fit(data, seed=3, spec=FAST)

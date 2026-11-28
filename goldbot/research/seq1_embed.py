@@ -22,7 +22,8 @@ rows by `feature_store.purge` on [window_from_utc, horizon_end_utc] with embargo
 tf in the fold), learn 2010-01..2017-12 only. Each fold refits from scratch; test rows get the fold's embedding.
 
 A8 parity on the 8 dims (`parity`): the same decisions embedded from two inputs (two sources, or batch vs serving)
-compared per dimension (max abs diff, NaN-mask difference, correlation). `embed_row` equals `embed` on the batch.
+compared per dimension (max abs diff, NaN-mask difference, correlation). `embed_row` is allclose to `embed` on the batch
+(rtol = atol = 2e-7: one float32 rounding, a batch of one runs other kernels).
 Run record (ADR 0106 7, ADR 0109): `history_runs.record_seq1_embed` fits through a builder and writes the run
 manifest (`run_manifest`); `run_manifest.rebuild` reproduces the artifact sha exactly. An embedding is an input
 block of zoo-v2, never served alone: its manifest carries no serving verdict.
@@ -196,6 +197,9 @@ def fit(data: S.Seq1Data, *, seed: int, spec: EmbedSpec = SPEC) -> EmbedArtifact
             net.eval()
             with torch.no_grad():
                 vl = float(((net(Xv) - Tv) ** 2 * Mv[:, :, None]).sum() / Mv.sum())
+            if not np.isfinite(vl):
+                raise ValueError(f"SEQ-1 embedding fit: the validation loss is not finite at epoch {epoch} (NaN or "
+                                 "inf in the windows); nothing is recorded")
             if best is None or vl < best[0]:
                 best, since = (vl, epoch, S.state_bytes(net)), 0
             else:
@@ -273,7 +277,7 @@ def pretext_loss(art: EmbedArtifact, X: np.ndarray, *, chunk: int = 4096) -> flo
 
 
 def embed_row(art: EmbedArtifact, x: np.ndarray) -> np.ndarray:
-    """One window -> (dim,): the serving form, equal to `embed` on the batch (tested)."""
+    """One window -> (dim,): the serving form, allclose to `embed` on the batch (rtol = atol = 2e-7; tested)."""
     return embed(art, np.asarray(x)[None])[0]
 
 

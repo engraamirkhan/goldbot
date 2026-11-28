@@ -25,14 +25,32 @@ def norm(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def locked_versions(lock_text: str) -> dict[str, tuple[str, ...]]:
-    """name -> the versions uv.lock pins for every registry package (the project itself, an editable source, is
-    skipped). One package may be locked once per platform (torch: PyPI on macOS, the PyTorch CPU index `+cpu` on
-    Linux); an installed version matching any of them is the lock's."""
+_PLATFORM_TERM = re.compile(r"^sys_platform\s*(==|!=)\s*'([^']*)'$")
+
+
+def _marker_holds(marker: str, platform: str) -> bool:
+    """A uv resolution marker on `platform`: `sys_platform == / != 'x'` terms joined by `and` are evaluated; any
+    other term is taken as true (a marker on other variables never hides a pin)."""
+    for term in (t.strip() for t in marker.split(" and ")):
+        m = _PLATFORM_TERM.match(term)
+        if m and ((m.group(2) == platform) != (m.group(1) == "==")):
+            return False
+    return True
+
+
+def locked_versions(lock_text: str, platform: str = sys.platform) -> dict[str, tuple[str, ...]]:
+    """name -> the versions uv.lock pins for every registry package on `platform` (the project itself, an editable
+    source, is skipped). A package locked once per platform carries `resolution-markers` (torch: PyPI on macOS and
+    Windows, the PyTorch CPU index `+cpu` on Linux): only the entries whose markers hold on this platform count, so a
+    CUDA wheel from PyPI on Linux is refused."""
     out: dict[str, set[str]] = {}
     for pkg in tomllib.loads(lock_text).get("package", []):
-        if "registry" in pkg.get("source", {}) and "version" in pkg:
-            out.setdefault(norm(pkg["name"]), set()).add(pkg["version"])
+        if "registry" not in pkg.get("source", {}) or "version" not in pkg:
+            continue
+        markers = pkg.get("resolution-markers")
+        if markers and not any(_marker_holds(m, platform) for m in markers):
+            continue
+        out.setdefault(norm(pkg["name"]), set()).add(pkg["version"])
     return {k: tuple(sorted(v)) for k, v in out.items()}
 
 
@@ -41,7 +59,7 @@ def installed_versions() -> dict[str, str]:
 
 
 def problems(lock_text: str, installed: dict[str, str] | None, minor: tuple[int, int],
-             wanted: tuple[int, int] = (3, 11)) -> list[str]:
+             wanted: tuple[int, int] = (3, 11), *, platform: str = sys.platform) -> list[str]:
     """Human lines, empty when the environment matches. installed None = do not check packages."""
     out = []
     if minor != wanted:
@@ -49,7 +67,7 @@ def problems(lock_text: str, installed: dict[str, str] | None, minor: tuple[int,
                    "(.python-version)")
     if installed is None:
         return out
-    for name, want in sorted(locked_versions(lock_text).items()):
+    for name, want in sorted(locked_versions(lock_text, platform).items()):
         have = installed.get(name)
         pins = " or ".join(want)
         if have is None:

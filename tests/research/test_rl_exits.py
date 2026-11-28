@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -239,6 +239,16 @@ def test_a_gate_read_refuses_costs_none_and_point_cost_rows(tmp_path: Path, monk
         X.run(train, point, costs=FREE, **book)
     with pytest.raises(WN.ReadNotBooked):
         X.run(train, test, costs=FREE, **{**book, "booked_read": "another-read"})
+
+
+def test_the_rl_read_key_does_not_depend_on_the_timestamp_unit():
+    train, test = _world(10, 1, reverting=True), _world(5, 2, reverting=True, start="2015-01-05")
+
+    def unit(eps: list[X.Episode], u: Literal["us", "ns"]) -> list[X.Episode]:
+        return [e.model_copy(update={k: pd.Timestamp(getattr(e, k)).as_unit(u) for k in ("decision_utc", "end_utc")})
+                for e in eps]
+    assert X.read_key(X.SPEC, FREE, REC, unit(train, "us"), unit(test, "us")) == X.read_key(
+        X.SPEC, FREE, REC, unit(train, "ns"), unit(test, "ns"))
 
 
 def test_a_booked_id_does_not_cover_another_spec_or_other_episodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

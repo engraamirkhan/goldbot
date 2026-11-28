@@ -74,20 +74,31 @@ TWO_TORCH = LOCK + """
 name = "torch"
 version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'emscripten'",
+    "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
+]
 
 [[package]]
 name = "torch"
 version = "2.15.0+cpu"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
+resolution-markers = [
+    "sys_platform == 'linux'",
+]
 """
 
 
-def test_a_package_locked_at_one_version_per_platform_accepts_any_of_them_and_refuses_another():
-    # the dl group locks torch from PyPI on macOS and from the PyTorch CPU index (+cpu) on Linux
-    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0"}, (3, 11)) == []
-    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0+cpu"}, (3, 11)) == []
-    out = ce.problems(TWO_TORCH, {**GOOD, "torch": "2.14.0"}, (3, 11))
-    assert out and "2.14.0" in out[0] and "2.15.0+cpu" in out[0] and "2.15.0 " in out[0] + " "
+def test_a_package_locked_once_per_platform_accepts_only_this_platforms_pin():
+    # the dl group locks torch from PyPI on macOS/Windows and from the PyTorch CPU index (+cpu) on Linux
+    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0"}, (3, 11), platform="darwin") == []
+    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0+cpu"}, (3, 11), platform="linux") == []
+    cuda = ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0"}, (3, 11), platform="linux")
+    assert cuda and "2.15.0+cpu" in cuda[0]                       # a PyPI (CUDA) wheel on Linux is not the lock's
+    assert ce.problems(TWO_TORCH, {**GOOD, "torch": "2.15.0+cpu"}, (3, 11), platform="darwin")
+    out = ce.problems(TWO_TORCH, {**GOOD, "torch": "2.14.0"}, (3, 11), platform="darwin")
+    assert out and "2.14.0" in out[0]
 
 
 def test_a_matching_environment_has_no_problems():

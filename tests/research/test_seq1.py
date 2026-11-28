@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -319,6 +319,51 @@ def test_a_read_refuses_rows_not_charged_at_a_cost_of_record_and_an_unbooked_rea
         S.read(tr, te, rows.drop(columns="cost_version"), spec=spec, boot=0, **book)
 
 
+def test_the_read_key_does_not_depend_on_the_timestamp_unit(small, tmp_path: Path):
+    data, spec = small
+    tr, te = S.split(data, pd.Timestamp(data.keys["decision_utc"].iloc[400]))
+    rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05), cost_version=np.full(len(te), REC))
+
+    def unit(d: S.Seq1Data, u: Literal["us", "ns"]) -> S.Seq1Data:
+        k = d.keys.copy()
+        for c in ("decision_utc", "window_from_utc", "horizon_end_utc"):
+            if c in k.columns:
+                k[c] = pd.DatetimeIndex(k[c]).as_unit(u)
+        return S.Seq1Data(X=d.X, y=d.y, w=d.w, keys=k)
+
+    us = rows.assign(day=pd.DatetimeIndex(rows["day"]).as_unit("us"))
+    ns = rows.assign(day=pd.DatetimeIndex(rows["day"]).as_unit("ns"))
+    assert S.read_key(spec, REC, unit(tr, "us"), unit(te, "us"), us) == S.read_key(spec, REC, unit(tr, "ns"),
+                                                                                   unit(te, "ns"), ns)
+    from goldbot.research import history_runs as HR
+    back = HR.load_design(HR.save_design(unit(tr, "us"), tmp_path / "d.npz"))
+    assert S.design_sha(back) == S.design_sha(unit(tr, "us"))
+
+
+def test_a_non_finite_validation_loss_is_refused_before_an_artifact_exists(small, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("torch")
+    data, spec = small
+    bad = data.model_copy(update={"y": np.where(np.arange(data.y.size).reshape(data.y.shape) % 7 == 0, np.nan,
+                                                 data.y)})
+    with pytest.raises(ValueError, match="finite"):
+        S.fit(bad, seed=1, spec=spec.model_copy(update={"max_epochs": 1}))
+
+
+def test_save_writes_atomically_through_a_temporary_file(small, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import os
+    data, _ = small
+    from goldbot.research import history_runs as HR
+    seen: list[tuple[str, str]] = []
+    real = os.replace
+
+    def spy(a: Any, b: Any) -> None:
+        seen.append((str(a), str(b)))
+        real(a, b)
+    monkeypatch.setattr(os, "replace", spy)
+    p = HR.save_design(data, tmp_path / "d.npz")
+    assert seen and seen[-1][1] == str(p) and seen[-1][0] != str(p) and not list(tmp_path.glob("*.tmp*"))
+
+
 def test_a_booked_id_does_not_cover_another_spec_design_or_rows(small, tmp_path: Path,
                                                                 monkeypatch: pytest.MonkeyPatch):
     data, spec = small
@@ -342,6 +387,26 @@ def test_the_validation_rows_are_a_strict_subset_of_the_input_inside_its_span_af
     assert 0 < len(val) < len(data) and set(vd) < set(d) and vd.max() <= d.max()
     fe = pd.DatetimeIndex(fit_rows.keys["horizon_end_utc"])
     assert (fe + WN.label_embargo(pd.Timedelta(days=1)) <= vd.min()).all() and fd.max() < vd.min()
+
+
+@needs_torch
+def test_score_row_is_allclose_to_the_batch_and_seq1_save_is_atomic(small, tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch):
+    import os
+    data, spec = small
+    art = S.fit(data, seed=3, spec=spec.model_copy(update={"max_epochs": 1}))
+    batch = S.score(art, data.X[:20])
+    for i in range(20):
+        np.testing.assert_allclose(S.score_row(art, data.X[i]), batch[i], rtol=2e-7, atol=2e-7)   # one float32 ulp
+    seen: list[str] = []
+    real = os.replace
+
+    def spy(a: Any, b: Any) -> None:
+        seen.append(str(b))
+        real(a, b)
+    monkeypatch.setattr(os, "replace", spy)
+    p = S.save(art, tmp_path / "a.json")
+    assert seen == [str(p)] and S.load(p).sha256 == art.sha256
 
 
 @needs_torch

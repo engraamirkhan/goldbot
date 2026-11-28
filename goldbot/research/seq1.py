@@ -56,6 +56,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -479,6 +480,9 @@ def fit(data: Seq1Data, *, seed: int, spec: Seq1Spec = SPEC) -> Seq1Artifact:
             net.eval()
             with torch.no_grad():
                 vl = float((Wv * (net(Xv) - Yv) ** 2).sum() / Wv.sum())
+            if not np.isfinite(vl):
+                raise ValueError(f"SEQ-1 fit: the validation loss is not finite at epoch {epoch} (NaN or inf in the "
+                                 "design); nothing is recorded")
             if best is None or vl < best[0]:
                 best, since = (vl, epoch, state_bytes(net)), 0
             else:
@@ -556,14 +560,17 @@ def score(art: Seq1Artifact, X: np.ndarray, *, chunk: int = 4096) -> np.ndarray:
 
 
 def score_row(art: Seq1Artifact, x: np.ndarray) -> np.ndarray:
-    """One window (n_inputs, window) -> (2,): the serving form, equal to `score` on the batch (tested)."""
+    """One window (n_inputs, window) -> (2,): the serving form, allclose to `score` on the batch
+    (rtol = atol = 2e-7: one float32 rounding; tested)."""
     return score(art, np.asarray(x)[None])[0]
 
 
 def save(art: Seq1Artifact, path: Path | str) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(art.model_dump_json())
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
+    tmp.write_text(art.model_dump_json())
+    os.replace(tmp, p)                                  # atomic: a reader never sees a half-written artifact
     return p
 
 
@@ -594,12 +601,22 @@ def judged_rows(data: Seq1Data, *, cost: np.ndarray, cost_version: np.ndarray | 
                          "judged_tf": data.keys["judged_tf"].to_numpy()[i]})
 
 
+def _unit_free(frame: pd.DataFrame) -> pd.DataFrame:
+    """`frame` with every datetime column as epoch ns (int64): a hash of it does not depend on the timestamp unit (an
+    npz round trip or pandas 3's s/ms/us units would otherwise change it)."""
+    out = frame.copy()
+    for c in out.columns:
+        if pd.api.types.is_datetime64_any_dtype(out[c]):
+            out[c] = epoch_ns(pd.DatetimeIndex(pd.to_datetime(out[c], utc=True)))
+    return out
+
+
 def design_sha(data: Seq1Data) -> str:
-    """sha256 of a design's content (arrays and keys): history_runs names its design files by it."""
+    """sha256 of a design's content (arrays and unit-free keys): history_runs names its design files by it."""
     h = hashlib.sha256()
     for a in (data.X, data.y, data.w):
         h.update(np.ascontiguousarray(a).tobytes())
-    h.update(data.keys.to_csv(index=False).encode())
+    h.update(_unit_free(data.keys).to_csv(index=False).encode())
     return h.hexdigest()
 
 
@@ -607,7 +624,7 @@ def read_key(spec: Seq1Spec, cost_version: str, train: Seq1Data, test: Seq1Data,
     """The id a SEQ-1 read is booked under (quant B2 on #489, read_key style of sr_v3_store): sha256 over the spec, the
     cost version and the sha of the train design, the test design and the judged rows. A booking covers exactly that
     read: another spec, design, cost or row set is another read."""
-    rows_sha = hashlib.sha256(pd.util.hash_pandas_object(rows, index=False).to_numpy().tobytes()
+    rows_sha = hashlib.sha256(pd.util.hash_pandas_object(_unit_free(rows), index=False).to_numpy().tobytes()
                               + ",".join(map(str, rows.columns)).encode()).hexdigest()
     blob = {"spec": spec.model_dump(mode="json"), "cost_version": cost_version, "train": design_sha(train),
             "test": design_sha(test), "rows": rows_sha}

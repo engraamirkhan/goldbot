@@ -23,6 +23,7 @@ guarded list (objective.GUARDED_MODULES), which model_quality's import of model_
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -57,8 +58,10 @@ def save_design(data: S.Seq1Data, path: Path | str) -> Path:
     arrays: dict[str, Any] = {"X": data.X, "y": data.y, "w": data.w}
     arrays |= {f"k_{c}": k[c].astype(str).to_numpy(dtype=str) for c in KEY_STR}
     arrays |= {f"t_{c}": epoch_ns(pd.DatetimeIndex(pd.to_datetime(k[c], utc=True))) for c in KEY_TS if c in k.columns}
-    with open(p, "wb") as fh:
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
+    with open(tmp, "wb") as fh:
         np.savez(fh, **arrays)
+    os.replace(tmp, p)                                  # atomic, as save_episodes
     return p
 
 
@@ -83,8 +86,10 @@ def save_episodes(eps: Sequence[X.Episode], path: Path | str) -> Path:
                "rt_bp": np.array([np.nan if e.rt_bp is None else e.rt_bp for e in eps], dtype=float),
                "cost_version": np.array([e.cost_version or "" for e in eps], dtype=str),
                **{c: np.array([_iso(getattr(e, c)) for e in eps], dtype=str) for c in ("decision_utc", "end_utc")}}
-    with open(p, "wb") as fh:
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
+    with open(tmp, "wb") as fh:
         np.savez(fh, **arrays)
+    os.replace(tmp, p)                                  # atomic
     return p
 
 
