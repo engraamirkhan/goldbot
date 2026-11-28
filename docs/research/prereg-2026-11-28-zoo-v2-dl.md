@@ -329,7 +329,8 @@ card.** A cell starts, and only then books K and reads, iff S0-1 to S0-5 all hol
   - "Δ vs max(baseline i, baseline ii) per fold" ≥ +0.03 R, with a one-sided 95 % session-day block lower bound > 0;
   - policy mean net > 0;
   - Δ vs the shuffled-state control > 0;
-  - Δ ≥ 0 at 2× cost;
+  - Δ ≥ 0 at 2× cost: every cost term doubled (round trip, ub95 slippage, overshoot, every bar's swap), baseline (ii)
+    re-chosen on the training episodes at that cost, the policy not refit (label-blind, K 0; quant ruling on #489);
   - Holm with the card's started cells;
   - the fresh read is test_old once (R-d).
 - **Why it cannot pass here (F4d).** On zero-gross entries the price at mid is, to first order, a martingale, so by
