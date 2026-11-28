@@ -67,6 +67,7 @@ from pydantic import ConfigDict, field_serializer, field_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
+from goldbot.research import decision_cost as DC
 from goldbot.research import objective as O
 from goldbot.research import windows as WN
 
@@ -574,16 +575,23 @@ def load(path: Path | str) -> Seq1Artifact:
 
 
 # ---------------------------------------------------------------------------------------------- the read
-def judged_rows(data: Seq1Data, *, cost: np.ndarray, net: np.ndarray | None = None) -> pd.DataFrame:
+def judged_rows(data: Seq1Data, *, cost: np.ndarray, cost_version: np.ndarray | Sequence[str],
+                net: np.ndarray | None = None) -> pd.DataFrame:
     """Long judged rows (one per row x side with a label): row, side column (0 long, 1 short), gross R, net R, the
-    decision-time cost(x) and the session day. `cost` (n, 2) is cost(x) in R (`decision_cost.cost_x` /
-    `dense_labels.net_r` with the stage's priors); `net` defaults to gross - cost."""
+    decision-time cost(x), the cost version it was charged at and the session day. `cost` (n, 2) is cost(x) in R
+    (`decision_cost.cost_x` / `dense_labels.net_r` with the stage's priors, at the rows' cost of record);
+    `cost_version` (n,) is each design row's `cost_version` (learn_labels with costs); `net` defaults to gross - cost.
+    `read` refuses any row not charged at one D-3 cost of record (quant 1 on #489)."""
     c = np.asarray(cost, dtype=float)
+    cv = np.asarray(cost_version, dtype=object)
+    if c.shape != data.y.shape or cv.shape != (len(data),):
+        raise ValueError(f"judged_rows: cost {c.shape} and cost_version {cv.shape} must match the design {data.y.shape}")
     n = (data.y - c) if net is None else np.asarray(net, dtype=float)
     i, j = np.nonzero(data.w > 0)
     day = pd.DatetimeIndex(pd.to_datetime(data.keys["decision_utc"], utc=True)).normalize()
     return pd.DataFrame({"row": i, "col": j, "gross_r": data.y[i, j], "net_r": n[i, j], "cost_x": c[i, j],
-                         "day": np.asarray(day)[i], "judged_tf": data.keys["judged_tf"].to_numpy()[i]})
+                         "cost_version": cv[i].astype(str), "day": np.asarray(day)[i],
+                         "judged_tf": data.keys["judged_tf"].to_numpy()[i]})
 
 
 class Seq1Read(FrozenRecord):
@@ -600,13 +608,24 @@ class Seq1Read(FrozenRecord):
     per_tf: dict[str, float]
     keep_ensemble: np.ndarray                           # per judged row: keep_rule on the seeds' mean prediction
     reads: tuple[O.ObjectiveRead, ...]
+    cost_version: str                                   # the one D-3 cost of record every judged row was charged at
+    booked_read: str                                    # the read id booked in the read-once ledger before scoring
 
 
-def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec = SPEC,
-         boot: int = O.BOOT) -> Seq1Read:
+def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: str, family: str, ledger: Path | str,
+         spec: Seq1Spec = SPEC, boot: int = O.BOOT) -> Seq1Read:
     """Fit every seed on `train`, keep test rows by `objective.keep_rule` (pred - cost(x) > 0), read obj-v1 S on the
     pooled unit per seed; INCONCLUSIVE when the seed SD is not below MIN_EDGE / 2. `keep_ensemble` is the served
-    bundle's keep (the seeds' mean prediction), the rows `history_runs.seq1_quality` compares with the GBT baseline."""
+    bundle's keep (the seeds' mean prediction), the rows `history_runs.seq1_quality` compares with the GBT baseline.
+
+    A gate read (quant 1 on #489): refused before any fit or score unless `booked_read` is booked under `family` in
+    `ledger` (`windows.require_booked_read`; the family is registered with the signed study plan) and every judged row
+    is charged at one D-3 cost of record (`decision_cost.require_cost_of_record`). `fit` / `fit_bundle` stay fit-only
+    (K 0)."""
+    if "cost_version" not in rows.columns:
+        raise DC.CostNotOfRecord("SEQ-1 read: no costs: the judged rows carry no cost_version (judged_rows)")
+    WN.require_booked_read(ledger, family, booked_read)
+    version = DC.require_cost_of_record(rows["cost_version"].to_numpy(), "SEQ-1 read")
     reads, shas, per_tf_s, preds = [], [], [], []
     for sd in spec.seeds:
         art = fit(train, seed=sd, spec=spec)
@@ -628,7 +647,7 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec 
                     verdict="INCONCLUSIVE" if chk.inconclusive else "READ", s_mean=float(np.mean(s)),
                     keep_share=float(np.mean([r.keep_share for r in reads])), per_tf=per_tf,
                     keep_ensemble=O.keep_rule(np.mean(preds, axis=0), rows["cost_x"].to_numpy()),
-                    reads=tuple(reads))
+                    reads=tuple(reads), cost_version=version, booked_read=booked_read)
 
 
 __all__ = ["OMP_MODULES", "omp_before_torch", "CHANNELS", "SPEC", "Seq1Artifact", "Seq1Data", "Seq1Read", "Seq1Spec", "SeedCheck", "bar_windows",

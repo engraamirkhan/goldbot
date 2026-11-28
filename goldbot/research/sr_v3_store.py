@@ -31,9 +31,7 @@ from goldbot.research.sr_v3_train import (
     cost_parts,
 )
 
-
-class ReadNotBooked(PermissionError):
-    """A label read of a unit whose learn read this run has not booked in the read-once ledger (quant H3 on #488)."""
+ReadNotBooked = WN.ReadNotBooked     # a label read of a unit whose learn read is not booked (quant H3 on #488)
 
 
 class SequencingRefused(PermissionError):
@@ -99,12 +97,7 @@ def read_key(frozen: Mapping[str, Any]) -> str:
 
 def require_booked(ledger: Path | str, unit: str | None, key: str | None) -> None:
     """A read's label load refuses unless this read (`key`) booked its unit's learn read in `ledger`."""
-    fam = learn_family(unit) if unit else None
-    if fam is None or key is None or not any(
-            r.get("family") == fam and r.get("window") == WN.Window.LEARN.value
-            and (r.get("ref") or {}).get("read_key") == key for r in WN.read_ledger(ledger)):
-        raise ReadNotBooked(f"refused the read's label load: unit {unit!r} read {key!r} has no learn booking in "
-                            f"{ledger} (book_learn_read at the start of phase 3; quant N1 on #488)")
+    WN.require_booked_read(ledger, learn_family(unit) if unit else None, key)
 
 
 def _tier_free(rows: pd.DataFrame) -> pd.DataFrame:

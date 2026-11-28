@@ -53,6 +53,8 @@ def test_an_episodes_cost_of_record_round_trip_survives_the_npz_so_a_rebuild_cha
     eps = [e.model_copy(update={"rt_bp": 20.0 + i}) if i % 2 else e for i, e in enumerate(eps)]
     back = HR.load_episodes(HR.save_episodes(eps, tmp_path / "e.npz"))
     assert [b.rt_bp for b in back] == [e.rt_bp for e in eps]
+    assert [(b.cost_version, b.decision_utc, b.end_utc) for b in back] == [
+        (e.cost_version, e.decision_utc, e.end_utc) for e in eps]
 
 
 def test_a_design_whose_rows_reach_the_holdout_is_refused_at_load(tmp_path: Path):
@@ -124,7 +126,8 @@ def test_seq1_quality_reads_seed_stability_and_the_gbt_comparison_on_the_same_ro
     seeds = HR.seq1_spec(KEY).seeds
     rd = S.Seq1Read(spec_id=S.SPEC.spec_id, seeds=seeds, shas=("a" * 64,) * 5, s_by_seed=s_by,
                     seed=S.seed_check(s_by), verdict="READ", s_mean=float(np.mean(s_by)), keep_share=0.5, per_tf={},
-                    keep_ensemble=keep, reads=())
+                    keep_ensemble=keep, reads=(), cost_version="srv3-cost-0123456789abcdef",
+                    booked_read="seq1-read-1")
     h = np.full(n, 1.0)
     seeds_v, gbt_v = HR.seq1_quality(rd, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, horizon_days=h,
                                      train_end=END, fold_keys=["f0", "f1"], trial=1)

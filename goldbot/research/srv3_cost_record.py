@@ -134,7 +134,7 @@ def _load(record_dir: Path, stamp: tuple[tuple[str, str], ...]) -> dict[str, Cos
     for name, _ in stamp:
         p = record_dir / name
         rec = CostRecord.model_validate(yaml.safe_load(p.read_text()))
-        if p.stem != rec.version or rec.version != "srv3-cost-" + rec.content_sha256[:16]:
+        if p.stem != rec.version or rec.version != DC.COST_RECORD_PREFIX + rec.content_sha256[:16]:
             raise CostRecordRefused(f"{p.name}: file name, version and content sha256 disagree")
         if record_sha256(rec) != rec.record_sha256:
             raise CostRecordRefused(f"{p.name}: record_sha256 {rec.record_sha256[:12]} is not the record's content "

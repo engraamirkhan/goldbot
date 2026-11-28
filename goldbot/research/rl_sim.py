@@ -13,8 +13,11 @@ Costs (`SimCosts`), per unit of initial risk (k = 1e-4 x entry / risk, R per bp 
 History reads charge the D-3 cost of record instead of the constant: a label row charged by `srv3_cost_record.apply`
 (cost_version "srv3-cost-...") carries its own round trip `cost_rt_bp` (gold: `gold_row_bp`, the ub95 ECR and era
 spread with slippage inside), and `exit_cost_r(rt_bp=)` charges it in place of `rt_bp`; rl_exits refuses a separate
-`slippage_ub95_bp` on such rows (the record already carries it). The overshoot and the swap stay the simulator's,
-as the sr-v3 trainer's `cost_parts` (decision_cost.OVERSHOOT_BP on stops; the swap of the research spec).
+`slippage_ub95_bp` on such rows (the record already carries it). Such a row also carries its swap of record
+`swap_rate` (sr_v3_train.CostTable.swap_rate: |swap per night| as a fraction of price for its instrument, month and
+side), charged via `swap_r(rate=)` in place of the research spec's rate, so the RL swap per night equals the trainer's
+`cost_parts` swap per night on the same row (tested). The overshoot stays decision_cost.OVERSHOOT_BP on stops and the
+rollover nights stay decision_cost's swap calendar, both as `cost_parts`.
 
 Sizing (`SizingSpec`, `risk_fraction`): risk fraction = min(max_risk, base_risk / vol_ratio), vol_ratio = the ATR at
 the decision over its trailing median (`vol_ratio`, past values only). max_risk is the 1 % cap of ADR 0106 2.
@@ -57,8 +60,12 @@ class SimCosts(FrozenRecord):
         rt = self.rt_bp if rt_bp is None else np.asarray(rt_bp, dtype=float)
         return np.asarray(k, float) * (rt + self.slippage_ub95_bp + self.overshoot_bp * np.asarray(stop, dtype=float))
 
-    def swap_r(self, k: np.ndarray, side: np.ndarray, nights: np.ndarray) -> np.ndarray:
-        """R charged for `nights` rollovers: nights x k x 1e4 x |swap rate(side) as a fraction of price|."""
+    def swap_r(self, k: np.ndarray, side: np.ndarray, nights: np.ndarray, *,
+               rate: np.ndarray | float | None = None) -> np.ndarray:
+        """R charged for `nights` rollovers: nights x k x 1e4 x |swap rate(side) as a fraction of price|; `rate`, the
+        row's swap of record per night (fraction of price), replaces the research spec's rate when given."""
+        if rate is not None:
+            return np.asarray(nights, float) * np.asarray(k, float) * 1e4 * np.abs(np.asarray(rate, float))
         if self.swap.ref_price_usd is None:
             raise ValueError("SimCosts: the swap spec needs a reference price (a rate on notional)")
         rate = np.abs(self.swap.usd_per_oz(np.asarray(side, float))) / self.swap.ref_price_usd

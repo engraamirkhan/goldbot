@@ -85,10 +85,20 @@ def save_episodes(eps: Sequence[X.Episode], path: Path | str) -> Path:
                               for f in ("open_r", "high_r", "low_r", "close_r", "swap_r")}
     arrays |= {"lens": lens, "k": np.array([e.k for e in eps]), "weight": np.array([e.weight for e in eps]),
                "day": np.array([e.day for e in eps], dtype=str),
-               "rt_bp": np.array([np.nan if e.rt_bp is None else e.rt_bp for e in eps], dtype=float)}
+               "rt_bp": np.array([np.nan if e.rt_bp is None else e.rt_bp for e in eps], dtype=float),
+               "cost_version": np.array([e.cost_version or "" for e in eps], dtype=str),
+               **{c: np.array([_iso(getattr(e, c)) for e in eps], dtype=str) for c in ("decision_utc", "end_utc")}}
     with open(p, "wb") as fh:
         np.savez(fh, **arrays)
     return p
+
+
+def _iso(t: pd.Timestamp | None) -> str:
+    return "" if t is None else pd.Timestamp(t).isoformat()
+
+
+def _ts(v: str) -> pd.Timestamp | None:
+    return pd.Timestamp(v) if v else None
 
 
 def load_episodes(path: Path | str) -> list[X.Episode]:
@@ -96,10 +106,18 @@ def load_episodes(path: Path | str) -> list[X.Episode]:
         holdout_guard.refuse(pd.to_datetime(z["day"].astype(str), utc=True), what=f"history episodes {Path(path).name}")
         ends = np.cumsum(z["lens"])
         starts = ends - z["lens"]
-        rt = z["rt_bp"] if "rt_bp" in z.files else np.full(len(z["lens"]), np.nan)
+        n = len(z["lens"])
+        rt = z["rt_bp"] if "rt_bp" in z.files else np.full(n, np.nan)
+        cv, dec, end = (z[c].astype(str) if c in z.files else np.full(n, "") for c in
+                        ("cost_version", "decision_utc", "end_utc"))
+        horizon = [t for t in end if t]
+        if horizon:
+            holdout_guard.refuse(pd.to_datetime(pd.Series(horizon), utc=True),
+                                 what=f"history episodes {Path(path).name}")
         return [X.Episode(**{f: z[f][a:b] for f in ("open_r", "high_r", "low_r", "close_r", "swap_r")},
                           k=float(z["k"][i]), weight=float(z["weight"][i]), day=str(z["day"][i]),
-                          rt_bp=float(rt[i]) if np.isfinite(rt[i]) else None)
+                          rt_bp=float(rt[i]) if np.isfinite(rt[i]) else None, cost_version=str(cv[i]) or None,
+                          decision_utc=_ts(str(dec[i])), end_utc=_ts(str(end[i])))
                 for i, (a, b) in enumerate(zip(starts, ends, strict=True))]
 
 
@@ -125,7 +143,7 @@ def build_rlx1(spec: RM.BuildSpec) -> bytes:
     sp = X.RlSpec.model_validate(spec.settings["spec"]).model_copy(update={"seed": spec.seeds[0]})
     costs = SimCosts.model_validate(spec.settings["costs"])
     eps = load_episodes(_one(spec))
-    return X.fit(X.transitions(eps, sp, costs), sp, n_episodes=len(eps)).model_dump_json().encode()
+    return X.fit(X.transitions(eps, sp, costs=costs), sp, n_episodes=len(eps)).model_dump_json().encode()
 
 
 # ---------------------------------------------------------------------------------------------- fit and record
@@ -183,7 +201,7 @@ def record_seq1_embed(data: S.Seq1Data, *, manifest_key: str, data_root: Path | 
 
 
 def record_rlx1(eps: Sequence[X.Episode], *, manifest_key: str, train_end: pd.Timestamp, data_root: Path | str,
-                data_version: str, root: Path | str, spec: X.RlSpec = X.SPEC, costs: SimCosts | None = None,
+                data_version: str, root: Path | str, costs: SimCosts, spec: X.RlSpec = X.SPEC,
                 results: Mapping[str, Any] | None = None, repo: Path | str = RM.ROOT
                 ) -> tuple[X.ExitPolicy, RM.RunManifest]:
     """`train_end`: the last horizon end of the training episodes (the caller's entries), also their
@@ -193,7 +211,7 @@ def record_rlx1(eps: Sequence[X.Episode], *, manifest_key: str, train_end: pd.Ti
     tmp = save_episodes(eps, Path(data_root) / "rlx1-episodes.tmp.npz")
     name = f"rlx1-episodes-{hashlib.sha256(tmp.read_bytes()).hexdigest()[:16]}.npz"
     f = tmp.replace(Path(data_root) / name)
-    c = costs or SimCosts.w2()
+    c = costs
     raw, m = RM.fit_and_record("goldbot.research.history_runs:build_rlx1", model="rlx1:fqi", family="D",
                                data_version=data_version, data_root=data_root, data_files=[f.name],
                                settings={"spec": sp.model_dump(mode="json"), "costs": c.model_dump(mode="json")},

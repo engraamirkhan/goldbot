@@ -25,6 +25,7 @@ only its route reads the label.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,28 @@ from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
 
 RT_BP = 0.575            # = history_replay.RT_BP (W2 bps round trip)
 OVERSHOOT_BP = 1.75      # = history_replay.OVERSHOOT_BP (stop-exit overshoot)
+COST_RECORD_PREFIX = "srv3-cost-"   # every frozen D-3 cost of record (srv3_cost_record); w2-point is a floor, never one
+
+
+class CostNotOfRecord(PermissionError):
+    """A gate read whose rows are not all charged at one frozen D-3 cost of record."""
+
+
+def require_cost_of_record(versions: Any, what: str) -> str:
+    """The one cost version every row of a gate read was charged at; refuses None (no costs), an empty read, any row
+    whose `cost_version` is not a recorded cost of record ("srv3-cost-..."; w2-point is the floor of an unpriced
+    label, never a gate read: quant on #489) and a read mixing versions."""
+    if versions is None:
+        raise CostNotOfRecord(f"{what}: no costs: a gate read is charged at the D-3 cost of record")
+    v = [str(x) for x in np.asarray(versions, dtype=object).ravel()]
+    if not v:
+        raise CostNotOfRecord(f"{what}: no rows")
+    bad = sorted({x for x in v if not x.startswith(COST_RECORD_PREFIX)})
+    if bad:
+        raise CostNotOfRecord(f"{what}: rows at {bad[:3]} are not charged at a cost of record ({COST_RECORD_PREFIX}*)")
+    if len(set(v)) > 1:
+        raise CostNotOfRecord(f"{what}: one read, one cost: {sorted(set(v))[:3]}")
+    return v[0]
 STOP_EPS = 1e-9
 
 

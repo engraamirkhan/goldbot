@@ -73,10 +73,47 @@ def test_day_losses_come_from_frozen_keeps_with_keep_all_and_abstain_fixed():
     net = np.array([0.5, -1.0, 2.0, -0.2])
     day = np.array(["d1", "d1", "d2", "d2"])
     keeps = {"seq1": np.array([True, False, True, False]), "gbt": np.array([True, True, False, False])}
-    L = A.day_losses(net, day, keeps, experts=EXPERTS)
-    assert list(L.columns) == list(EXPERTS) and list(L.index) == ["d1", "d2"]
-    np.testing.assert_allclose(L.loc["d1"].to_numpy(), [-0.5, 0.5, 0.5, 0.0])
-    np.testing.assert_allclose(L.loc["d2"].to_numpy(), [-2.0, 0.0, -1.8, 0.0])
+    dec = pd.to_datetime(["2016-01-04 10:00", "2016-01-04 12:00", "2016-01-05 10:00", "2016-01-05 11:00"], utc=True)
+    end = dec + pd.to_timedelta([24, 30, 24, 2], unit="h")
+    L = A.day_losses(net, day, keeps, experts=EXPERTS, decision_utc=dec, horizon_end_utc=end)
+    assert list(L.columns) == [*EXPERTS, A.OPEN, A.CLOSE] and list(L.index) == ["d1", "d2"]
+    np.testing.assert_allclose(L.loc["d1", list(EXPERTS)].to_numpy(dtype=float), [-0.5, 0.5, 0.5, 0.0])
+    np.testing.assert_allclose(L.loc["d2", list(EXPERTS)].to_numpy(dtype=float), [-2.0, 0.0, -1.8, 0.0])
+    assert L.loc["d1", A.CLOSE] == end[1] and L.loc["d2", A.OPEN] == dec[2]
+
+
+def test_a_round_counts_only_once_its_last_horizon_has_closed_before_the_next_round_opens():
+    t0 = pd.Timestamp("2016-01-04 10:00", tz="UTC")
+    rounds = pd.DataFrame({"seq1": [-10.0, 0.0, 0.0], "gbt": [0.0, 0.0, 0.0], A.KEEP_ALL: [0.0, 0.0, 0.0],
+                           A.ABSTAIN: [0.0, 0.0, 0.0],
+                           A.OPEN: [t0, t0 + pd.Timedelta(days=1), t0 + pd.Timedelta(days=4)],
+                           A.CLOSE: [t0 + pd.Timedelta(days=3), t0 + pd.Timedelta(days=1, hours=1),
+                                     t0 + pd.Timedelta(days=4, hours=1)]}, index=["d1", "d2", "d3"])
+    used, final = A.replay(EXPERTS, rounds)
+    np.testing.assert_allclose(used[0], 0.25)
+    np.testing.assert_allclose(used[1], 0.25)            # d1 straddles d2's open: not yet a closed round
+    assert used[2].argmax() == 0 and used[2][0] > 0.5    # by d3's open d1 has closed: seq1 leads
+    assert final.rounds == 3
+
+
+def test_history_run_refuses_a_non_oof_keep():
+    gap = pd.Timedelta(days=1)
+    dec = pd.date_range("2016-01-04 10:00", periods=4, freq="6h", tz="UTC")
+    oof = pd.DataFrame({"decision_utc": dec, "horizon_end_utc": dec + pd.Timedelta(hours=24), "day": dec.normalize(),
+                        "net_r": [0.5, -1.0, 2.0, -0.2], "fold_train_end": pd.Timestamp("2015-12-30", tz="UTC"),
+                        "k_seq1": [True, False, True, False], "k_gbt": [True, True, False, False]})
+    L = A.history_rounds(oof, experts=EXPERTS, gap=gap)
+    assert list(L.columns) == [*EXPERTS, A.OPEN, A.CLOSE]
+    late = oof.assign(fold_train_end=oof["fold_train_end"].where(oof.index != 2, dec[2] - pd.Timedelta(hours=1)))
+    with pytest.raises(ValueError, match="out of fold"):
+        A.history_rounds(late, experts=EXPERTS, gap=gap)
+    with pytest.raises(ValueError, match="k_"):
+        A.history_rounds(oof.rename(columns={"k_gbt": "gbt"}), experts=EXPERTS, gap=gap)
+
+
+def test_the_aggregate_keep_of_the_fixed_experts_alone_takes_its_length_explicitly():
+    s = A.init((A.KEEP_ALL, A.ABSTAIN))
+    assert A.mix_keep(s, {}, n=3).tolist() == [True, True, True]
 
 
 def test_the_aggregate_keep_is_the_weighted_vote_of_the_experts():
@@ -84,7 +121,7 @@ def test_the_aggregate_keep_is_the_weighted_vote_of_the_experts():
     for _ in range(50):
         s = A.step(s, np.array([-1.0, 1.0, 1.0, 1.0]))    # seq1 wins every round
     keeps = {"seq1": np.array([True, False]), "gbt": np.array([False, True])}
-    assert A.mix_keep(s, keeps).tolist() == [True, False]
+    assert A.mix_keep(s, keeps, n=2).tolist() == [True, False]
 
 
 def test_a_warm_start_replays_a_history_year_and_the_state_has_a_sha():

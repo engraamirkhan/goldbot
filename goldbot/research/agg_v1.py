@@ -14,12 +14,20 @@ AdaHedge (de Rooij, van Erven, Grünwald and Koolen 2014, "Follow the leader if 
 - the aggregate keep is the weighted vote, keep iff sum of the keeping experts' weights >= 1/2 (`mix_keep`).
 The state (`HedgeState`) is a frozen record with a sha; it never reads a label itself: the caller hands it losses of
 rounds already closed, so a round's weights depend only on earlier rounds.
+
+Point in time (quant 6 on #489): a round's loss is known only when its last candidate's horizon has ended, so
+`day_losses` also returns each round's `open_utc` (first decision) and `close_utc` (last horizon end), and `replay`
+applies a round's loss only once its close_utc is at or before the opening of the round being weighted (a round that
+straddles the next one's open waits). The history entry point `history_rounds` takes an OOF frame: every keep column
+is `k_<expert>`, and each row carries the `fold_train_end` of the fold that produced its keeps; a row whose
+fold_train_end + gap is after its decision is not out of fold and is refused.
 """
 from __future__ import annotations
 
 import hashlib
 import math
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -28,6 +36,8 @@ from goldbot.base import FrozenRecord
 
 KEEP_ALL = "keep_all"
 ABSTAIN = "abstain"
+OPEN, CLOSE = "open_utc", "close_utc"
+OOF_COLUMNS = ("decision_utc", "horizon_end_utc", "day", "net_r", "fold_train_end")
 FUTILITY_RUNS = 4
 
 
@@ -82,11 +92,12 @@ def step(s: HedgeState, losses: np.ndarray) -> HedgeState:
                                 "mix_loss": s.mix_loss + h, "rounds": s.rounds + 1})
 
 
-def day_losses(net_r: np.ndarray, day: np.ndarray, keeps: Mapping[str, np.ndarray], *,
-               experts: Sequence[str]) -> pd.DataFrame:
-    """Per session day (rows, in day order) and expert (columns): minus the net R of the candidates it keeps."""
+def day_losses(net_r: np.ndarray, day: np.ndarray, keeps: Mapping[str, np.ndarray], *, experts: Sequence[str],
+               decision_utc: Any, horizon_end_utc: Any) -> pd.DataFrame:
+    """Per session day (rows, in day order): each expert's loss (minus the net R of the candidates it keeps), the
+    round's `open_utc` (its first decision) and `close_utc` (its last horizon end: when the loss is known)."""
     net = np.asarray(net_r, dtype=float)
-    cols = {}
+    cols: dict[str, Any] = {}
     for e in experts:
         if e == ABSTAIN:
             k = np.zeros(len(net))
@@ -95,29 +106,85 @@ def day_losses(net_r: np.ndarray, day: np.ndarray, keeps: Mapping[str, np.ndarra
         else:
             k = np.asarray(keeps[e], dtype=float)
         cols[e] = -(net * k)
-    return pd.DataFrame(cols).groupby(np.asarray(day), sort=True).sum()[list(experts)]
+    g = np.asarray(day)
+    out = pd.DataFrame(cols).groupby(g, sort=True).sum()[list(experts)]
+    t = pd.DataFrame({OPEN: pd.to_datetime(decision_utc, utc=True), CLOSE: pd.to_datetime(horizon_end_utc, utc=True)})
+    t = t.groupby(g, sort=True).agg({OPEN: "min", CLOSE: "max"})
+    return out.join(t)
+
+
+def replay(experts: Sequence[str], rounds: pd.DataFrame) -> tuple[np.ndarray, HedgeState]:
+    """(the weights each round was decided with, the state after every round has closed): rounds in time order with
+    the expert columns and OPEN / CLOSE; a round's loss enters only when its CLOSE <= the next weighted round's OPEN."""
+    _check_experts(experts, rounds)
+    s = init(experts)
+    L = rounds[list(experts)].to_numpy(dtype=float)
+    opens = pd.DatetimeIndex(pd.to_datetime(rounds[OPEN], utc=True))
+    closes = pd.DatetimeIndex(pd.to_datetime(rounds[CLOSE], utc=True))
+    pending: list[int] = []
+    used = np.empty((len(rounds), len(experts)))
+    for t in range(len(rounds)):
+        ready = [i for i in pending if closes[i] <= opens[t]]
+        for i in ready:
+            s = step(s, L[i])
+        pending = [i for i in pending if i not in ready]
+        used[t] = weights(s)
+        pending.append(t)
+    for i in pending:
+        s = step(s, L[i])
+    return used, s
+
+
+def _check_experts(experts: Sequence[str], losses: pd.DataFrame) -> None:
+    if [c for c in losses.columns if c not in (OPEN, CLOSE)] != list(experts):
+        raise ValueError("agg-v1: the loss columns must be the experts, in order")
+
+
+def history_rounds(oof: pd.DataFrame, *, experts: Sequence[str], gap: pd.Timedelta) -> pd.DataFrame:
+    """The day rounds of a history OOF frame (`OOF_COLUMNS` plus `k_<expert>` per model expert). Refused: any other
+    column (a keep not named k_ is not an OOF keep) and any row whose fold_train_end + `gap` is after its decision."""
+    models = [e for e in experts if e not in (KEEP_ALL, ABSTAIN)]
+    want = {*OOF_COLUMNS, *(f"k_{e}" for e in models)}
+    extra = sorted(set(oof.columns) - want)
+    missing = sorted(want - set(oof.columns))
+    if extra or missing:
+        raise ValueError(f"agg-v1 history: keep columns are k_<expert> for {models} beside {list(OOF_COLUMNS)}; "
+                         f"unexpected {extra}, missing {missing}")
+    dec = pd.DatetimeIndex(pd.to_datetime(oof["decision_utc"], utc=True))
+    fte = pd.DatetimeIndex(pd.to_datetime(oof["fold_train_end"], utc=True))
+    bad = np.asarray(fte + gap > dec)
+    if bad.any():
+        raise ValueError(f"agg-v1 history: {int(bad.sum())} rows are not out of fold (fold_train_end + {gap} after the "
+                         f"decision), first {dec[bad][0]}")
+    return day_losses(oof["net_r"].to_numpy(dtype=float), oof["day"].to_numpy(),
+                      {e: oof[f"k_{e}"].to_numpy(dtype=bool) for e in models}, experts=experts,
+                      decision_utc=dec, horizon_end_utc=oof["horizon_end_utc"])
 
 
 def warm_start(experts: Sequence[str], losses: pd.DataFrame) -> HedgeState:
-    """Replay a history OOF year's day losses (columns exactly `experts`, rows in time order)."""
-    if list(losses.columns) != list(experts):
-        raise ValueError("agg-v1 warm start: the loss columns must be the experts, in order")
+    """Replay a history OOF year's day losses (expert columns exactly `experts`, rows in time order; with OPEN / CLOSE
+    the point-in-time `replay`, whose final state applies every round in order too)."""
+    _check_experts(experts, losses)
+    if OPEN in losses.columns and CLOSE in losses.columns:
+        return replay(experts, losses)[1]
     s = init(experts)
-    for row in losses.to_numpy(dtype=float):
+    for row in losses[list(experts)].to_numpy(dtype=float):
         s = step(s, row)
     return s
 
 
-def mix_keep(s: HedgeState, keeps: Mapping[str, np.ndarray]) -> np.ndarray:
-    """The aggregate keep: the weighted vote (keep-all votes keep, abstain votes drop)."""
+def mix_keep(s: HedgeState, keeps: Mapping[str, np.ndarray], *, n: int) -> np.ndarray:
+    """The aggregate keep of `n` candidates: the weighted vote (keep-all votes keep, abstain votes drop)."""
     w = weights(s)
-    n = len(next(iter(keeps.values()))) if keeps else 0
     vote = np.zeros(n)
     for e, wi in zip(s.experts, w, strict=True):
         if e == KEEP_ALL:
             vote += wi
         elif e != ABSTAIN:
-            vote += wi * np.asarray(keeps[e], dtype=float)
+            k = np.asarray(keeps[e], dtype=float)
+            if k.shape != (n,):
+                raise ValueError(f"agg-v1 mix_keep: {e} keeps {k.shape}, not ({n},)")
+            vote += wi * k
     return vote >= 0.5
 
 

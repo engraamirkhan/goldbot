@@ -19,7 +19,8 @@ xt-v1 partition per learn year under the current spec and code hashes.
 Costs (D-3): labels are gross. With `costs` (a `sr_v3_train.CostTable`, `sr_v3_store.cost_table(manifest)`), every
 read is charged through `sr_v3_store.charge_of_record`, the one route of the sr-v3 trainer: a recorded version charges
 gold rows exactly the record's `gold_row_bp` (`srv3_cost_record.apply`, which also re-derives the gate status), an
-unrecorded one leaves the rows and their D-3 block as they are. Without `costs` the rows keep the w2-point floor and
+unrecorded one leaves the rows and their D-3 block as they are. Charged rows also carry `swap_rate`, the row's swap
+of record per night (`CostTable.swap_rate`), which RL-X1 charges instead of the research swap spec. Without `costs` the rows keep the w2-point floor and
 the D-3 block, so no read from here can become a gate read uncharged.
 """
 from __future__ import annotations
@@ -28,9 +29,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from goldbot.data.timeutil import epoch_ns
+from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 from goldbot.research import feature_store as F
 from goldbot.research import objective as O
@@ -88,6 +91,11 @@ def load_learn(cache: Path, *, procedure: str, ledger: Path, instrument: str, tf
     lab = lab[lab["label_ok"].astype(bool)].reset_index(drop=True) if len(lab) else lab
     if len(lab):
         lab, meta = ST.charge_of_record(lab, meta, costs, instrument, tf)
+        charged = lab["cost_version"].astype(str).str.startswith(DC.COST_RECORD_PREFIX).to_numpy()
+        if costs is not None and charged.any():          # the swap of record of each charged row (RL-X1, rl_sim)
+            rate = np.full(len(lab), np.nan)
+            rate[charged] = costs.swap_rate(lab[charged].assign(instrument=instrument, tf=tf))
+            lab = lab.assign(swap_rate=rate)
     meta = {**meta, "learn_only": True}
     if not len(lab):
         return lab.assign(w=pd.Series(dtype=float)), meta

@@ -7,6 +7,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -44,3 +45,20 @@ def test_decisions_are_the_xt_v1_skeletons_bars_and_none_ends_after_learn(tmp_pa
 def test_the_runner_refuses_sub_hour_tfs_and_years_outside_learn(tmp_path: Path, argv: list[str], match: str):
     with pytest.raises((SystemExit, ValueError), match=match):
         R.main([*argv, "--out", str(tmp_path / "o"), "--raw", str(tmp_path), "--labels", str(tmp_path)])
+
+
+def test_the_mean_and_trailing_range_baselines_score_the_pretext_task_on_the_same_mask():
+    from goldbot.research import seq1_embed as E
+    from tests.research.test_seq1_embed import _rows
+    data, _ = _rows()
+    X = data.X
+    t, m = E.pretext_targets(X)
+    mean = R.fit_mean(X)
+    assert mean.shape == (2,)
+    np.testing.assert_allclose(mean, (t * m[:, :, None]).sum(axis=(0, 1)) / m.sum())
+    assert R.mean_loss(X, mean) <= R.zero_loss(X) + 1e-12            # the fit mean is the best constant on its rows
+    flat = X.copy()
+    flat[:, E.R_HIGH, :] = flat[:, E.R_LOW, :] + 0.5                 # every bar's range 0.5: persistence is exact
+    tr = R.trailing_range_loss(flat, np.zeros(2))
+    tz, mz = E.pretext_targets(flat)
+    assert tr == pytest.approx(float((tz[:, :, 0] ** 2 * mz).sum() / mz.sum()))   # only the close error is left

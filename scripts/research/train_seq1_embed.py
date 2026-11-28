@@ -15,7 +15,8 @@ Outputs (--out, default ~/tmp/seq1-embed-<date>; market-derived, never committed
 manifest hashes), manifests/ (the run manifest; rebuild with scripts/research/rebuild_model.py), summary.json:
 - an outer fold (train: decisions before --oof-from, purged by `seq1_embed.fold_embed`; test: from --oof-from): the
   pretext loss in fold (fit rows, inner validation rows) and out of fold (test rows whose whole window is after the
-  cut), beside the zero-prediction loss of the same rows (the scale a learned pretext has to beat); with
+  cut), beside three baselines on the same rows: zero, the fit rows' mean target, and a trailing range (next range =
+  current range, close = fit mean) - what a learned pretext has to beat; with
   --seed-stability, the 5 seeds' pairwise linear CKA on the out-of-fold rows (a report, never a selector);
 - the recorded fit on every learn row (seed index 0 of seed_list(manifest key)): artifact sha256, manifest id, its
   inner validation loss, wall times.
@@ -91,6 +92,41 @@ def zero_loss(X: Any) -> float | None:
     return float(((t ** 2) * m[:, :, None]).sum() / n) if n > 0 else None
 
 
+def fit_mean(X: Any) -> Any:
+    """The fit rows' masked mean of each pretext target (close move, range): the best constant on those rows."""
+    from goldbot.research import seq1_embed as E
+    t, m = E.pretext_targets(X)
+    return (t * m[:, :, None]).sum(axis=(0, 1)) / max(float(m.sum()), 1.0)
+
+
+def _loss(X: Any, pred: Any) -> float | None:
+    from goldbot.research import seq1_embed as E
+    t, m = E.pretext_targets(X)
+    n = float(m.sum())
+    return float((((t - pred) ** 2) * m[:, :, None]).sum() / n) if n > 0 else None
+
+
+def mean_loss(X: Any, mean: Any) -> float | None:
+    """The pretext loss of predicting the fit rows' mean target everywhere (quant 9 on #489)."""
+    return _loss(X, mean[None, None, :])
+
+
+def trailing_range_loss(X: Any, mean: Any) -> float | None:
+    """The pretext loss of a trailing-range forecast: the next bar's range = the current bar's range (persistence,
+    read from the window), its close move = the fit rows' mean (quant 9 on #489)."""
+    import numpy as np
+
+    from goldbot.research import seq1_embed as E
+    cur = (X[:, E.R_HIGH, :-1] - X[:, E.R_LOW, :-1]).astype(np.float32)
+    pred = np.stack([np.full(cur.shape, mean[0], dtype=np.float32), cur], axis=2)
+    return _loss(X, pred)
+
+
+def baselines(X: Any, mean: Any, prefix: str) -> dict[str, float | None]:
+    return {f"zero_loss_{prefix}": zero_loss(X), f"mean_loss_{prefix}": mean_loss(X, mean),
+            f"trailing_range_loss_{prefix}": trailing_range_loss(X, mean)}
+
+
 def main(argv: list[str] | None = None) -> int:
     a = parser().parse_args(argv)
     for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
@@ -144,15 +180,16 @@ def main(argv: list[str] | None = None) -> int:
     te_read = te & np.asarray(pd.DatetimeIndex(pd.to_datetime(data.keys["window_from_utc"], utc=True)) >= cut)
     t1 = time.perf_counter()
     art_f, kept, _ = E.fold_embed(data, tr, te, spec=spec)
-    fit_rows, val_rows = S.inner_split(data.take(kept), spec.base)
-    fold = {"train_rows": int(tr.sum()), "kept_after_purge": int(kept.sum()), "test_rows": int(te.sum()),
+    fit_rows, val_rows = E.embed_split(data.take(kept), spec)
+    mu = fit_mean(fit_rows.X)
+    fold: dict[str, Any] = {"train_rows": int(tr.sum()), "kept_after_purge": int(kept.sum()), "test_rows": int(te.sum()),
             "test_rows_read": int(te_read.sum()), "embargo": str(E.fold_embargo(data, spec)),
             "artifact_sha256": art_f.sha256, "best_epoch": art_f.best_epoch,
             "loss_in_fold_fit_rows": E.pretext_loss(art_f, fit_rows.X),
             "loss_in_fold_validation": art_f.val_loss,
             "loss_out_of_fold": E.pretext_loss(art_f, data.X[te_read]),
-            "zero_loss_in_fold_fit_rows": zero_loss(fit_rows.X), "zero_loss_in_fold_validation": zero_loss(val_rows.X),
-            "zero_loss_out_of_fold": zero_loss(data.X[te_read]),
+            **baselines(fit_rows.X, mu, "in_fold_fit_rows"), **baselines(val_rows.X, mu, "in_fold_validation"),
+            **baselines(data.X[te_read], mu, "out_of_fold"), "fit_mean": [float(x) for x in mu],
             "wall_s": round(time.perf_counter() - t1, 1)}
     print(json.dumps({"fold": fold}, indent=1), flush=True)
     if a.seed_stability:                 # a report, never a selector: the served embedding stays seed index 0
@@ -167,7 +204,8 @@ def main(argv: list[str] | None = None) -> int:
                                     results={"outer_fold": fold, "tfs": tfs, "rows": len(data)})
     full = {"artifact_sha256": art.sha256, "manifest_id": man.manifest_id, "best_epoch": art.best_epoch,
             "n_train": art.n_train, "n_val": art.n_val, "loss_validation": art.val_loss,
-            "zero_loss_validation": zero_loss(S.inner_split(data, spec.base)[1].X), "seed": art.seed,
+            **baselines(E.embed_split(data, spec)[1].X, fit_mean(E.embed_split(data, spec)[0].X), "validation"),
+            "seed": art.seed, "train_end": str(art.train_end),
             "code_sha": man.code_sha, "code_dirty": man.code_dirty, "wall_s": round(time.perf_counter() - t2, 1)}
     summary = {"manifest_key": key, "instrument": GOLD, "tfs": tfs, "years": [years[0], years[-1]],
                "rows": len(data), "rows_by_tf": {t: int((data.keys["tf"] == t).sum()) for t in tfs},

@@ -37,8 +37,9 @@ import numpy as np
 import pandas as pd
 from pydantic import field_serializer, field_validator
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import tf_seconds
+from goldbot.data.timeutil import epoch_ns
 from goldbot.research import feature_store as F
 from goldbot.research import seq1 as S
 from goldbot.research import windows as WN
@@ -134,6 +135,7 @@ class EmbedArtifact(FrozenRecord):
     best_epoch: int
     val_loss: float
     sha256: str
+    train_end: UtcTimestamp          # the last horizon end among the fit's input rows (history_runs._ends)
     outcome_free: bool = True
 
     @field_serializer("blob")
@@ -149,11 +151,23 @@ class EmbedArtifact(FrozenRecord):
         return S.weights_sha(self.spec.base, self.seed, (self.spec.spec_id, *self.names), self.shapes, self.blob)
 
 
+def embed_split(data: S.Seq1Data, spec: EmbedSpec = SPEC) -> tuple[S.Seq1Data, S.Seq1Data]:
+    """(fit rows, validation rows): `seq1.inner_split`, then only validation rows whose window starts at or after the
+    last fit decision (quant 8 on #489: a validation window must not hold bars the fit used as pretext targets)."""
+    fit_rows, val_rows = S.inner_split(data, spec.base)
+    if len(fit_rows) and len(val_rows):
+        last = pd.DatetimeIndex(pd.to_datetime(fit_rows.keys["decision_utc"], utc=True)).max()
+        val_rows = val_rows.take(np.asarray(pd.DatetimeIndex(pd.to_datetime(val_rows.keys["window_from_utc"],
+                                                                            utc=True)) >= last))
+    return fit_rows, val_rows
+
+
 def fit(data: S.Seq1Data, *, seed: int, spec: EmbedSpec = SPEC) -> EmbedArtifact:
     """The pretext fit on `data`'s windows only (y and w are never read): masked squared error, Adam with weight
-    decay and dropout, the validation stop of seq1 on the pretext loss."""
+    decay and dropout, the validation stop of seq1 on the pretext loss (`embed_split`; ADR 0107 1: allowed without
+    conditions on this outcome-free loss)."""
     b = spec.base
-    fit_rows, val_rows = S.inner_split(data, b)
+    fit_rows, val_rows = embed_split(data, spec)
     if len(fit_rows) == 0 or len(val_rows) == 0:
         raise ValueError("SEQ-1 embedding fit: no fit or no validation rows after the embargo")
     with S.TorchState(b.threads) as torch:
@@ -193,8 +207,30 @@ def fit(data: S.Seq1Data, *, seed: int, spec: EmbedSpec = SPEC) -> EmbedArtifact
     val_loss, best_epoch, (names, shapes, blob) = best
     return EmbedArtifact(spec=spec, seed=seed, torch_version=version, names=tuple(names), shapes=tuple(shapes),
                          blob=blob, n_train=len(fit_rows), n_val=len(val_rows), best_epoch=best_epoch,
-                         val_loss=val_loss,
+                         val_loss=val_loss, train_end=_train_end(data),
                          sha256=S.weights_sha(b, seed, (spec.spec_id, *names), shapes, blob))
+
+
+def _train_end(data: S.Seq1Data) -> pd.Timestamp:
+    return pd.Timestamp(pd.DatetimeIndex(pd.to_datetime(data.keys["horizon_end_utc"], utc=True)).max())
+
+
+def _window_span(data: S.Seq1Data, spec: EmbedSpec) -> np.ndarray:
+    """window x tf per row, as ns."""
+    return np.array([spec.base.window * tf_seconds(str(t)) * 10**9 for t in data.keys["tf"]], dtype=np.int64)
+
+
+def embed_after(art: EmbedArtifact, data: S.Seq1Data, mask: np.ndarray) -> np.ndarray:
+    """The embedding consumer (quant 7 on #489): the 8 dims of `data`'s `mask` rows, refused when any of them decides
+    at or before the artifact's train_end + window x tf (its window could hold bars the fit saw). Per-fold artifacts
+    come from `fold_embed` only, which checks this for every test row."""
+    m = np.asarray(mask, bool)
+    dec = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["decision_utc"], utc=True)))
+    bad = m & (dec <= art.train_end.value + _window_span(data, art.spec))
+    if bad.any():
+        raise ValueError(f"SEQ-1 embedding: {int(bad.sum())} rows decide at or before train_end {art.train_end} + "
+                         "window x tf: refused (not out of sample for this artifact)")
+    return embed(art, data.X[m])
 
 
 def _net_of(art: EmbedArtifact) -> Any:
@@ -269,8 +305,15 @@ def fold_embed(data: S.Seq1Data, train: np.ndarray, test: np.ndarray, *, spec: E
     keep = F.purge(data.keys.loc[tr], data.keys.loc[te], label_end="horizon_end_utc", embargo=fold_embargo(data, spec))
     kept = tr.copy()
     kept[np.flatnonzero(tr)[~keep]] = False
+    # forward folds: a training row before the test block also ends window x tf (longest tf) before its first decision
+    dec = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["decision_utc"], utc=True)))
+    end = epoch_ns(pd.DatetimeIndex(pd.to_datetime(data.keys["horizon_end_utc"], utc=True)))
+    if te.any():
+        first = dec[te].min()
+        span = int(_window_span(data, spec).max())
+        kept &= ~((dec < first) & (end + span >= first))
     art = fit(data.take(kept), seed=spec.base.seeds[0] if seed is None else seed, spec=spec)
-    return art, kept, embed(art, data.X[te])
+    return art, kept, embed_after(art, data, te)
 
 
 # ---------------------------------------------------------------------------------------------- reports
@@ -323,5 +366,5 @@ def parity(art: EmbedArtifact, X_a: np.ndarray, X_b: np.ndarray) -> Parity:
 
 
 __all__ = ["DIM", "SPEC", "EmbedArtifact", "EmbedSpec", "Parity", "SeedStability", "build", "embed", "embed_row",
-           "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_loss", "pretext_targets", "rows",
+           "embed_after", "embed_split", "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_loss", "pretext_targets", "rows",
            "seed_stability"]

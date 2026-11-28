@@ -78,21 +78,44 @@ FAST = E.SPEC.model_copy(update={"base": S.SPEC.model_copy(update={"max_epochs":
 
 
 @needs_torch
-def test_the_fold_purges_training_rows_within_window_plus_horizon_of_the_test_rows_and_refits():
+def test_the_fold_is_forward_purges_training_rows_within_window_plus_horizon_of_the_test_rows_and_refits():
     data, _ = _rows()
     d = pd.DatetimeIndex(data.keys["decision_utc"])
-    test = (d >= d[300]) & (d < d[400])
+    test = np.asarray(d >= d[400])
     train = ~test
-    art, kept, emb = E.fold_embed(data, np.asarray(train), np.asarray(test), spec=FAST)
+    art, kept, emb = E.fold_embed(data, train, test, spec=FAST)
     assert emb.shape == (int(test.sum()), E.DIM) and np.isfinite(emb).all()
-    gone = np.asarray(train) & ~kept
-    assert gone.any() and not (kept & np.asarray(test)).any()
-    t0, t1 = d[test].min(), pd.DatetimeIndex(data.keys["horizon_end_utc"])[test].max() + E.fold_embargo(data)
-    k_from = pd.DatetimeIndex(data.keys["window_from_utc"])[kept]
+    gone = train & ~kept
+    assert gone.any() and not (kept & test).any()
     k_end = pd.DatetimeIndex(data.keys["horizon_end_utc"])[kept]
-    assert not ((k_end >= t0) & (k_from <= t1)).any()           # no kept row overlaps the embargoed test span
+    win = pd.Timedelta(hours=S.SPEC.window)                      # window x tf (1h)
+    assert (k_end + win < d[test].min()).all()                     # no kept window + horizon reaches the test block
+    assert art.train_end == k_end.max()
     with pytest.raises(ValueError, match="both"):
-        E.fold_embed(data, np.ones(len(data), bool), np.asarray(test), spec=FAST)
+        E.fold_embed(data, np.ones(len(data), bool), test, spec=FAST)
+    back = np.asarray(d >= d[420])                                 # training rows after the test block: refused
+    with pytest.raises(ValueError, match="train_end"):
+        E.fold_embed(data, back, np.asarray((d >= d[100]) & (d < d[200])), spec=FAST)
+
+
+@needs_torch
+def test_an_embedding_consumer_refuses_rows_inside_the_fit_end_plus_window():
+    data, _ = _rows()
+    d = pd.DatetimeIndex(data.keys["decision_utc"])
+    art = E.fit(data.take(np.asarray(d < d[300])), seed=7, spec=FAST)
+    win = pd.Timedelta(hours=S.SPEC.window)
+    late = np.asarray(d > art.train_end + win)
+    assert E.embed_after(art, data, late).shape == (int(late.sum()), E.DIM)
+    with pytest.raises(ValueError, match="train_end"):
+        E.embed_after(art, data, np.asarray(d > art.train_end))
+
+
+def test_the_embedding_validation_rows_start_their_windows_after_the_last_fit_decision():
+    data, _ = _rows()
+    fit_rows, val = E.embed_split(data, FAST)
+    assert len(val) and len(fit_rows)
+    last_fit = pd.DatetimeIndex(fit_rows.keys["decision_utc"]).max()
+    assert (pd.DatetimeIndex(val.keys["window_from_utc"]) >= last_fit).all()
 
 
 @needs_torch
@@ -109,7 +132,7 @@ def test_the_embedding_is_deterministic_and_round_trips_with_its_sha():
 def test_the_pretext_loss_of_the_validation_rows_is_the_fits_recorded_validation_loss():
     data, _ = _rows()
     art = E.fit(data, seed=7, spec=FAST)
-    _, val = S.inner_split(data, FAST.base)
+    _, val = E.embed_split(data, FAST)
     assert E.pretext_loss(art, val.X) == pytest.approx(art.val_loss, rel=1e-5)
     assert E.pretext_loss(art, val.X[:0]) is None
 

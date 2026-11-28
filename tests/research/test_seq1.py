@@ -6,13 +6,16 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.research import decision_cost as DC
 from goldbot.research import objective as O
 from goldbot.research import seq1 as S
+from goldbot.research import windows as WN
 from goldbot.research.windows import HoldoutSealed
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -286,14 +289,54 @@ def test_fitting_learns_a_planted_signal_in_the_offset_form(small):
         assert np.corrcoef(pred[:, j], data.y[:, j])[0, 1] > 0.3
 
 
+REC = "srv3-cost-0123456789abcdef"
+
+
+def _booked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str = "seq1-read-1") -> dict[str, Any]:
+    fam = "seq-1:test"                     # a fixture family: real ones are registered with the signed study plan
+    monkeypatch.setitem(WN.READ_ONCE_FAMILIES, fam, frozenset({WN.Window.LEARN}))
+    led = tmp_path / "reads.jsonl"
+    WN.record_read_once(led, fam, WN.Window.LEARN, ref={"read_key": key})
+    return {"booked_read": key, "family": fam, "ledger": led}
+
+
+def test_a_read_refuses_rows_not_charged_at_a_cost_of_record_and_an_unbooked_read(small, tmp_path: Path,
+                                                                                monkeypatch: pytest.MonkeyPatch):
+    data, spec = small
+    tr, te = S.split(data, pd.Timestamp(data.keys["decision_utc"].iloc[400]))
+    cost = np.full((len(te), 2), 0.05)
+    book = _booked(tmp_path, monkeypatch)
+    point = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), "w2-point"))
+    with pytest.raises(DC.CostNotOfRecord, match="cost of record"):
+        S.read(tr, te, point, spec=spec, boot=0, **book)
+    rows = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), REC))
+    with pytest.raises(WN.ReadNotBooked):
+        S.read(tr, te, rows, spec=spec, boot=0, **{**book, "booked_read": "another"})
+    with pytest.raises(DC.CostNotOfRecord, match="no costs"):
+        S.read(tr, te, rows.drop(columns="cost_version"), spec=spec, boot=0, **book)
+
+
+def test_the_validation_rows_are_a_strict_subset_of_the_input_inside_its_span_after_the_fit_rows(small):
+    """ADR 0107 1 (accepted): the stop reads an inner time split inside the outer training fold."""
+    data, spec = small
+    fit_rows, val = S.inner_split(data, spec)
+    d = pd.DatetimeIndex(data.keys["decision_utc"])
+    vd, fd = pd.DatetimeIndex(val.keys["decision_utc"]), pd.DatetimeIndex(fit_rows.keys["decision_utc"])
+    assert 0 < len(val) < len(data) and set(vd) < set(d) and vd.max() <= d.max()
+    fe = pd.DatetimeIndex(fit_rows.keys["horizon_end_utc"])
+    assert (fe + WN.label_embargo(pd.Timedelta(days=1)) <= vd.min()).all() and fd.max() < vd.min()
+
+
 @needs_torch
-def test_the_walk_forward_read_runs_every_seed_and_marks_a_wide_seed_spread_inconclusive(small):
+def test_the_walk_forward_read_runs_every_seed_and_marks_a_wide_seed_spread_inconclusive(
+        small, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     data, spec = small
     spec = spec.model_copy(update={"seeds": spec.seeds[:3]})
     at = pd.Timestamp(data.keys["decision_utc"].iloc[400])
     tr, te = S.split(data, at)
-    rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05))
-    rd = S.read(tr, te, rows, spec=spec, boot=0)
+    rows = S.judged_rows(te, cost=np.full((len(te), 2), 0.05), cost_version=np.full(len(te), REC))
+    rd = S.read(tr, te, rows, spec=spec, boot=0, **_booked(tmp_path, monkeypatch))
+    assert rd.cost_version == REC and rd.booked_read == "seq1-read-1"
     assert rd.keep_ensemble.shape == (len(rows),) and rd.keep_ensemble.dtype == bool
     assert len(rd.seeds) == 3 and len(rd.shas) == 3 and len(rd.s_by_seed) == 3
     assert rd.verdict in ("READ", "INCONCLUSIVE")

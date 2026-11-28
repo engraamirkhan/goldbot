@@ -240,6 +240,21 @@ def allow_test_old_for(strategy_id: str, confirm_passed: Iterable[str]) -> bool:
     return True
 
 
+class ReadNotBooked(PermissionError):
+    """A gate read (outcome statistics on labels) whose read id has no learn booking in the read-once ledger."""
+
+
+def require_booked_read(ledger: Path | str, family: str | None, key: str | None) -> None:
+    """Refuse unless `ledger` holds a learn booking of `family` whose ref read_key is `key` (`record_read_once`,
+    family registered in READ_ONCE_FAMILIES): every learn-window read that computes outcome statistics is booked
+    before it scores (quant H3/N1 on #488, quant 1 on #489). Fit-only paths never book."""
+    if family is None or key is None or not any(
+            r.get("family") == family and r.get("window") == Window.LEARN.value
+            and (r.get("ref") or {}).get("read_key") == key for r in read_ledger(ledger)):
+        raise ReadNotBooked(f"refused the read: family {family!r} read {key!r} has no learn booking in {ledger} "
+                            "(windows.record_read_once before the first scored row)")
+
+
 class AlreadyRead(PermissionError):
     """A read-once window of a registered family was asked for a second time."""
 

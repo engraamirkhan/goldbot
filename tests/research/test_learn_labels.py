@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -91,7 +92,13 @@ def test_a_read_with_costs_is_charged_through_the_one_cost_of_record_route_of_sr
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from goldbot.research import sr_v3_store as ST
     seen: dict[str, Any] = {}
-    sentinel = object()
+
+    class Costs:                       # the CostTable surface load_learn uses beside the charge
+        def swap_rate(self, rows: pd.DataFrame) -> Any:
+            assert set(rows["instrument"]) == {"XAUUSD"} and set(rows["tf"]) == {"1h"}
+            return np.full(len(rows), 3e-5)
+
+    sentinel = Costs()
 
     def charge(lab: pd.DataFrame, meta: dict[str, Any], costs: Any, instrument: str, tf: str
                ) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -105,6 +112,7 @@ def test_a_read_with_costs_is_charged_through_the_one_cost_of_record_route_of_sr
     assert seen == {"rows": 4, "costs": sentinel, "instrument": "XAUUSD", "tf": "1h"}
     assert (lab["cost_version"] == "srv3-cost-test").all() and (lab["cost_rt_bp"] == 9.0).all()
     assert meta["gate_block"] == [] and meta["learn_only"] is True and "w" in lab.columns
+    assert (lab["swap_rate"] == 3e-5).all()          # the swap of record RL-X1 charges per night (quant 5)
 
 
 def test_a_read_without_costs_keeps_the_point_cost_and_its_d3_block(tmp_path: Path,

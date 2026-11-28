@@ -24,9 +24,17 @@ The problem, as coded:
   ridge regression per action on a fixed quadratic basis of standardised state features (`FEATURES`), episode
   weights given. Fixed basis, fixed ridge, fixed iterations: no grid, no selection.
 - Report (`evaluate`, `run`): on held-out episodes (later in time, inside learn), the greedy policy's mean net R
-  against the fixed exits of record (hold to the template's exit) as the reported baseline, per trade and per session
-  day with a day-block bootstrap lower bound, plus the shuffled-state control (the same fit on permuted states; a real
-  policy must beat it). Descriptive: ml-5's seven PASS legs and the K booking are the card's, not this module's.
+  against (i) the fixed exits of record (hold to the T2 exit) and (ii) the best fixed template T0-T7 chosen on the
+  training episodes only (`baseline_ii`, `fixed_template`), `delta_vs_best` = policy - max(i, ii), per trade and per
+  session day with a day-block bootstrap lower bound, the shuffled-state control (the same fit on permuted states; a
+  real policy must beat it) and the same read at 2x every cost (round trip, overshoot, slippage, swap). Descriptive:
+  ml-5's seven PASS legs and the K booking are the card's, not this module's.
+- `run` is a gate read (quant 1-4 on #489): it computes outcome statistics, so it refuses before scoring unless the
+  read id is booked in the read-once ledger (`windows.require_booked_read`, family registered with the study plan),
+  every episode is charged at one D-3 cost of record (`decision_cost.require_cost_of_record`: a w2-point row is never
+  charged at the simulator's constant inside a read) and no test episode decides within the training episodes' last
+  horizon end + windows.label_embargo. Costs are never defaulted on any path. The fit-only paths (`transitions`,
+  `fit`, the history_runs builder) book nothing (K 0).
 - Windows (quant ruling R-d, 2026-11-26): "RL-X1 fits on learn 2010-01..2017-12, A/A-consistent graded rows only
   ... The 2006-01 embargo is never read. test_old 2006-02..2009-12 is never fit, tuned or used for early stopping; it
   is read once, under a booked read id, as RL-X1's test_old read ... The holdout is never read." Episodes deciding or
@@ -40,7 +48,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from typing import Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -48,13 +57,16 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
 from goldbot.labels.triple_barrier import rollover_nights
+from goldbot.research import decision_cost as DC
 from goldbot.research import windows as WN
 from goldbot.research.rl_sim import SimCosts
+
+if TYPE_CHECKING:
+    from goldbot.research.dense_labels import Template
 
 ACTIONS: tuple[str, ...] = ("hold", "close", "breakeven")
 HOLD, CLOSE, BE = 0, 1, 2
 FIT_TIERS = frozenset({"A", "A-consistent"})       # R-d: = feature_store.INTRADAY_TIERS
-COST_RECORD_PREFIX = "srv3-cost-"   # srv3_cost_record versions; w2-point rows pay SimCosts.rt_bp
 FEATURES: tuple[str, ...] = ("t_frac", "close_r", "mfe_r", "mae_r", "be", "range_r", "next_swap_r")
 
 
@@ -86,6 +98,9 @@ class Episode(FrozenRecord):
     day: str
     weight: float = 1.0
     rt_bp: float | None = None      # the entry's round trip of record (cost_rt_bp of a D-3 charged row); None = SimCosts
+    cost_version: str | None = None  # the D-3 cost of record the entry was charged at; None = uncharged (fit only)
+    decision_utc: pd.Timestamp | None = None
+    end_utc: pd.Timestamp | None = None      # the horizon end (the label's last instant)
 
     def __len__(self) -> int:
         return len(self.close_r)
@@ -106,31 +121,37 @@ def _refuse_outside_learn(dec: pd.DatetimeIndex, end: pd.DatetimeIndex) -> None:
         raise ValueError("RL-X1 replays learn 2010-01..2017-12 only: an episode decides or ends outside learn")
 
 
-def _record_rt(entries: pd.DataFrame, costs: SimCosts) -> np.ndarray:
-    """Each entry's round trip of record (NaN where the row is not D-3 charged: SimCosts.rt_bp applies)."""
+def _record(entries: pd.DataFrame, costs: SimCosts) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per entry: (charged mask, round trip of record, swap rate of record); NaN where the row is not D-3 charged (a
+    fit-only replay charges SimCosts there; `run` refuses such episodes)."""
+    n = len(entries)
     if "cost_version" not in entries.columns:
-        return np.full(len(entries), np.nan)
-    charged = entries["cost_version"].astype(str).str.startswith(COST_RECORD_PREFIX).to_numpy()
+        return np.zeros(n, bool), np.full(n, np.nan), np.full(n, np.nan)
+    charged = entries["cost_version"].astype(str).str.startswith(DC.COST_RECORD_PREFIX).to_numpy()
     if not charged.any():
-        return np.full(len(entries), np.nan)
-    rt = np.where(charged, entries["cost_rt_bp"].to_numpy(dtype=float) if "cost_rt_bp" in entries.columns
-                  else np.nan, np.nan)
-    if not np.isfinite(rt[charged]).all():
-        raise ValueError("RL-X1: a row charged at the cost of record has no finite cost_rt_bp")
+        return charged, np.full(n, np.nan), np.full(n, np.nan)
+
+    def col(c: str) -> np.ndarray:
+        if c not in entries.columns:
+            raise ValueError(f"RL-X1: rows charged at the cost of record need {c} (learn_labels with costs)")
+        v = np.where(charged, entries[c].to_numpy(dtype=float), np.nan)
+        if not np.isfinite(v[charged]).all():
+            raise ValueError(f"RL-X1: a row charged at the cost of record has no finite {c}")
+        return v
+    rt, swap = col("cost_rt_bp"), col("swap_rate")
     if costs.slippage_ub95_bp:
         raise ValueError("RL-X1: the cost of record's round trip already carries the ub95 slippage; a SimCosts "
                          "slippage_ub95_bp on top would charge it twice")
-    return rt
+    return charged, rt, swap
 
 
-def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimCosts | None = None
-                       ) -> list[Episode]:
+def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimCosts) -> list[Episode]:
     """Episodes of one instrument x tf. `entries`: side, decision_utc, entry, risk_usd (the T2 stop distance),
-    horizon_end_utc, optional w, optional cost_version / cost_rt_bp (a row charged at the D-3 cost of record by
-    learn_labels pays its own round trip, rl_sim). `bars`: ts_utc (open), visible_at (close), mid or bid/ask OHLC. A bar
+    horizon_end_utc, optional w, optional cost_version / cost_rt_bp / swap_rate (a row charged at the D-3 cost of
+    record by learn_labels pays its own round trip and swap of record, rl_sim). `bars`: ts_utc (open), visible_at (close), mid or bid/ask OHLC. A bar
     is a step when it opens at or after the decision and closes by the horizon end. Entries without a step are
     dropped."""
-    c = costs or SimCosts.w2()
+    c = costs
     sw = c.swap
     if "usable" not in entries.columns or not entries["usable"].astype(bool).all():
         raise ValueError("RL-X1 replays tier-usable rows only (R-d): entries need usable True (learn_labels)")
@@ -146,7 +167,8 @@ def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimC
     nights = rollover_nights(start_utc, close_utc, sw.server_tz, sw.triple_weekday, sw.seven_night).astype(float)
     out = []
     w = entries["w"].to_numpy(dtype=float) if "w" in entries.columns else np.ones(len(entries))
-    rec_rt = _record_rt(entries, c)
+    charged, rec_rt, rec_swap = _record(entries, c)
+    versions = entries["cost_version"].astype(str).to_numpy() if "cost_version" in entries.columns else None
     sides = entries["side"].to_numpy(dtype=int)
     entry_px, risk_px = entries["entry"].to_numpy(dtype=float), entries["risk_usd"].to_numpy(dtype=float)
     for i in range(len(entries)):
@@ -162,10 +184,13 @@ def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimC
 
         hi_r, lo_r = (orient(h[sl]), orient(lo[sl])) if side > 0 else (orient(lo[sl]), orient(h[sl]))
         k = 1e-4 * entry / risk
+        rate = float(rec_swap[i]) if charged[i] else None
         out.append(Episode(open_r=orient(o[sl]), high_r=hi_r, low_r=lo_r, close_r=orient(cl[sl]),
-                           swap_r=c.swap_r(np.full(z - a, k), np.full(z - a, side), nights[sl]), k=k,
+                           swap_r=c.swap_r(np.full(z - a, k), np.full(z - a, side), nights[sl], rate=rate), k=k,
                            day=str(dec[i].normalize().date()), weight=float(w[i]),
-                           rt_bp=float(rec_rt[i]) if np.isfinite(rec_rt[i]) else None))
+                           rt_bp=float(rec_rt[i]) if charged[i] else None,
+                           cost_version=str(versions[i]) if charged[i] and versions is not None else None,
+                           decision_utc=dec[i], end_utc=end[i]))
     return out
 
 
@@ -204,10 +229,10 @@ def allowed(ep: Episode, j: int, be: int, spec: RlSpec = SPEC) -> np.ndarray:
     return np.array([True, True, be == 0 and ep.close_r[j] > spec.be_min_r])
 
 
-def rollout(ep: Episode, choose: Callable[[np.ndarray, np.ndarray], int], spec: RlSpec = SPEC,
-            costs: SimCosts | None = None) -> tuple[float, list[int]]:
+def rollout(ep: Episode, choose: Callable[[np.ndarray, np.ndarray], int], spec: RlSpec = SPEC, *,
+            costs: SimCosts) -> tuple[float, list[int]]:
     """Net R of one episode under `choose(features, allowed) -> action`, and the actions taken."""
-    c = costs or SimCosts.w2()
+    c = costs
     total, done = _bar(ep, 0, -spec.stop_r, spec, c)
     acts: list[int] = []
     be, j = 0, 0
@@ -224,9 +249,65 @@ def rollout(ep: Episode, choose: Callable[[np.ndarray, np.ndarray], int], spec: 
     return total, acts
 
 
-def fixed_exit(ep: Episode, spec: RlSpec = SPEC, costs: SimCosts | None = None) -> float:
+def fixed_exit(ep: Episode, spec: RlSpec = SPEC, *, costs: SimCosts) -> float:
     """The fixed exits of record: hold to the template's stop, target or time exit."""
-    return rollout(ep, lambda f, ok: HOLD, spec, costs)[0]
+    return rollout(ep, lambda f, ok: HOLD, spec, costs=costs)[0]
+
+
+def fixed_template(ep: Episode, tpl: Template, *, costs: SimCosts) -> float:
+    """Net R of one episode under a fixed dl-v1 exit template (stop, target, trail, breakeven in d0 = 1 R of the
+    episode), replayed on its bars like `_bar`: the stop level of bar j comes from bars before j only (trail under the
+    best earlier high, breakeven once an earlier high reached be_at_r), a gapped stop fills at the open, a bar touching
+    stop and target is a stop, the time exit is the last close. A bar-level replay of the label's minute first
+    passage (T2 equals `fixed_exit`, tested)."""
+    stop0 = -float(tpl.stop_k) if tpl.stop_k is not None else -np.inf
+    best = -np.inf
+    total = 0.0
+    for j in range(len(ep)):
+        st = stop0
+        if tpl.trail_k is not None and np.isfinite(best):
+            st = max(st, best - float(tpl.trail_k))
+        if tpl.be_at_r is not None and best >= float(tpl.be_at_r):
+            st = max(st, 0.0)
+        o, h, lo, c = ep.open_r[j], ep.high_r[j], ep.low_r[j], ep.close_r[j]
+        sw = float(ep.swap_r[j])
+        if o <= st:
+            return total + float(o) - _exit_cost(ep, costs, True) - sw
+        if lo <= st:
+            return total + st - _exit_cost(ep, costs, True) - sw
+        if tpl.target_k is not None and h >= float(tpl.target_k):
+            return total + float(tpl.target_k) - _exit_cost(ep, costs, False) - sw
+        if j == len(ep) - 1:
+            return total + float(c) - _exit_cost(ep, costs, False) - sw
+        total -= sw
+        best = max(best, float(h))
+    return total
+
+
+def baseline_ii(train: Sequence[Episode], test: Sequence[Episode], templates: Sequence[Template] | None = None, *,
+                costs: SimCosts) -> tuple[str, np.ndarray]:
+    """Baseline (ii) (quant 3 on #489): the fixed template T0-T7 with the best weighted mean net R on the TRAINING
+    episodes only, and its net R on each test episode. The choice never reads a test episode (tested)."""
+    if templates is None:
+        from goldbot.research.dense_labels import TEMPLATES
+        templates = TEMPLATES
+    w = np.array([e.weight for e in train], dtype=float)
+    means = {t.name: float(np.average([fixed_template(e, t, costs=costs) for e in train], weights=w))
+             for t in templates}
+    name = max(means, key=lambda k: (means[k], -list(means).index(k)))     # a tie goes to the earlier template
+    tpl = next(t for t in templates if t.name == name)
+    return name, np.array([fixed_template(e, tpl, costs=costs) for e in test])
+
+
+def cost_multiple(costs: SimCosts, x: float) -> SimCosts:
+    """`costs` with round trip, ub95 slippage and overshoot scaled by x (the swap scales on the episode)."""
+    return costs.model_copy(update={"rt_bp": costs.rt_bp * x, "slippage_ub95_bp": costs.slippage_ub95_bp * x,
+                                    "overshoot_bp": costs.overshoot_bp * x})
+
+
+def at_cost_multiple(ep: Episode, x: float) -> Episode:
+    """`ep` with its round trip of record and every bar's swap scaled by x."""
+    return ep.model_copy(update={"rt_bp": None if ep.rt_bp is None else ep.rt_bp * x, "swap_r": ep.swap_r * x})
 
 
 class Transitions(FrozenRecord):
@@ -241,10 +322,10 @@ class Transitions(FrozenRecord):
     w: np.ndarray
 
 
-def transitions(eps: Sequence[Episode], spec: RlSpec = SPEC, costs: SimCosts | None = None) -> Transitions:
+def transitions(eps: Sequence[Episode], spec: RlSpec = SPEC, *, costs: SimCosts) -> Transitions:
     """Full feedback: from every alive state (bar j, breakeven flag) every allowed action, replayed exactly. States
     with the stop at breakeven are reachable by moving at j or earlier (`alive1`, a forward pass)."""
-    c = costs or SimCosts.w2()
+    c = costs
     S, A, R, S2, OK2, D, W = [], [], [], [], [], [], []
     for ep in eps:
         _, out0 = _bar(ep, 0, -spec.stop_r, spec, c)
@@ -393,18 +474,27 @@ class RlReport(FrozenRecord):
     delta_per_day_lo: float | None  # day-block one-sided 95 % lower bound
     shuffled_delta_mean: float      # the shuffled-state control's delta per trade
     action_counts: dict[str, int]
+    best_template: str              # baseline (ii): the best fixed template on the training episodes
+    best_fixed_mean: float
+    delta_vs_best: float            # policy - max(fixed (i), best fixed (ii)), net R per trade
+    policy_mean_2x: float           # the same read with every cost doubled
+    fixed_mean_2x: float
+    best_fixed_mean_2x: float
+    delta_vs_best_2x: float
+    cost_version: str
+    booked_read: str
     live: Literal[False] = False
 
 
-def evaluate(pol: ExitPolicy, eps: Sequence[Episode], costs: SimCosts | None = None
+def evaluate(pol: ExitPolicy, eps: Sequence[Episode], *, costs: SimCosts
              ) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
     """(policy net R, fixed net R, action counts) per test episode."""
     spec = pol.spec
     p, f = np.empty(len(eps)), np.empty(len(eps))
     counts = dict.fromkeys(ACTIONS, 0)
     for i, ep in enumerate(eps):
-        p[i], acts = rollout(ep, pol.act, spec, costs)
-        f[i] = fixed_exit(ep, spec, costs)
+        p[i], acts = rollout(ep, pol.act, spec, costs=costs)
+        f[i] = fixed_exit(ep, spec, costs=costs)
         for a in acts:
             counts[ACTIONS[a]] += 1
     return p, f, counts
@@ -416,14 +506,41 @@ def shuffled(tr: Transitions, seed: int) -> Transitions:
     return tr.model_copy(update={"S": tr.S[perm], "S2": tr.S2[perm], "OK2": tr.OK2[perm]})
 
 
-def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC,
-        costs: SimCosts | None = None) -> tuple[ExitPolicy, RlReport]:
-    """Fit on `train`, report on `test` against the fixed exits and the shuffled-state control."""
-    tr = transitions(train, spec, costs)
+def _refuse_overlap(train: Sequence[Episode], test: Sequence[Episode]) -> None:
+    """Quant 4 on #489: every test episode decides after the training episodes' last horizon end + label_embargo."""
+    for name, eps in (("train", train), ("test", test)):
+        if any(e.decision_utc is None or e.end_utc is None for e in eps):
+            raise ValueError(f"RL-X1 run: a {name} episode has no decision_utc / end_utc (episodes_from_bars sets both)")
+    tr_end = [(pd.Timestamp(e.end_utc), pd.Timestamp(e.decision_utc)) for e in train
+              if e.end_utc is not None and e.decision_utc is not None]
+    end = max(t for t, _ in tr_end)
+    hold = max(t - d for t, d in tr_end)
+    first = min(pd.Timestamp(e.decision_utc) for e in test if e.decision_utc is not None)
+    if end + WN.label_embargo(hold) > first:
+        raise ValueError(f"RL-X1 run: a test episode decides at {first}, before the training horizon end {end} + the "
+                         f"label embargo {WN.label_embargo(hold)}")
+
+
+def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC, *, costs: SimCosts,
+        booked_read: str, family: str, ledger: Path | str) -> tuple[ExitPolicy, RlReport]:
+    """The gate read: fit on `train`, report on `test` against baselines (i) and (ii), the shuffled-state control and
+    the doubled-cost read. Refused before any score: costs None, a read id not booked under `family` in `ledger`,
+    any episode not charged at one cost of record, a test episode inside the training horizon + embargo."""
+    if costs is None:
+        raise DC.CostNotOfRecord("RL-X1 run: no costs: a gate read is charged at the D-3 cost of record")
+    WN.require_booked_read(ledger, family, booked_read)
+    version = DC.require_cost_of_record([e.cost_version for e in (*train, *test)], "RL-X1 run")
+    _refuse_overlap(train, test)
+    tr = transitions(train, spec, costs=costs)
     pol = fit(tr, spec, n_episodes=len(train))
     ctrl = fit(shuffled(tr, spec.seed), spec, n_episodes=len(train))
-    p, f, counts = evaluate(pol, test, costs)
-    pc, _, _ = evaluate(ctrl, test, costs)
+    p, f, counts = evaluate(pol, test, costs=costs)
+    pc, _, _ = evaluate(ctrl, test, costs=costs)
+    best, f2 = baseline_ii(train, test, costs=costs)
+    c2 = cost_multiple(costs, 2.0)
+    test2 = [at_cost_multiple(e, 2.0) for e in test]
+    p_2, f_2, _ = evaluate(pol, test2, costs=c2)
+    _, f2_2 = baseline_ii([at_cost_multiple(e, 2.0) for e in train], test2, costs=c2)
     d = p - f
     days = pd.Series(d).groupby(np.array([e.day for e in test])).sum().to_numpy()
     return pol, RlReport(spec_id=spec.spec_id, policy_sha=pol.sha256, n_train_episodes=len(train),
@@ -431,4 +548,10 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC,
                          policy_mean=float(p.mean()), delta_mean=float(d.mean()), delta_per_day=float(days.mean()),
                          delta_per_day_lo=_day_block_lo(days, boot=spec.boot, seed=spec.seed,
                                                         mean_block=spec.mean_block_days),
-                         shuffled_delta_mean=float((pc - f).mean()), action_counts=counts)
+                         shuffled_delta_mean=float((pc - f).mean()), action_counts=counts, best_template=best,
+                         best_fixed_mean=float(f2.mean()),
+                         delta_vs_best=float(p.mean() - max(f.mean(), f2.mean())),
+                         policy_mean_2x=float(p_2.mean()), fixed_mean_2x=float(f_2.mean()),
+                         best_fixed_mean_2x=float(f2_2.mean()),
+                         delta_vs_best_2x=float(p_2.mean() - max(f_2.mean(), f2_2.mean())),
+                         cost_version=version, booked_read=booked_read)
