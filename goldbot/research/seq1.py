@@ -67,7 +67,7 @@ from pydantic import ConfigDict, field_serializer, field_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
-from goldbot.research import decision_cost as DC
+from goldbot.research import gate_cost as COR
 from goldbot.research import objective as O
 from goldbot.research import windows as WN
 
@@ -620,12 +620,12 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, booked_read: st
 
     A gate read (quant 1 on #489): refused before any fit or score unless `booked_read` is booked under `family` in
     `ledger` (`windows.require_booked_read`; the family is registered with the signed study plan) and every judged row
-    is charged at one D-3 cost of record (`decision_cost.require_cost_of_record`). `fit` / `fit_bundle` stay fit-only
+    is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`). `fit` / `fit_bundle` stay fit-only
     (K 0)."""
     if "cost_version" not in rows.columns:
-        raise DC.CostNotOfRecord("SEQ-1 read: no costs: the judged rows carry no cost_version (judged_rows)")
+        raise COR.CostNotOfRecord("SEQ-1 read: no costs: the judged rows carry no cost_version (judged_rows)")
     WN.require_booked_read(ledger, family, booked_read)
-    version = DC.require_cost_of_record(rows["cost_version"].to_numpy(), "SEQ-1 read")
+    version = COR.require_cost_of_record(rows["cost_version"].to_numpy(), "SEQ-1 read")
     reads, shas, per_tf_s, preds = [], [], [], []
     for sd in spec.seeds:
         art = fit(train, seed=sd, spec=spec)

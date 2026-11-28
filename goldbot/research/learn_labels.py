@@ -33,9 +33,9 @@ import numpy as np
 import pandas as pd
 
 from goldbot.data.timeutil import epoch_ns
-from goldbot.research import decision_cost as DC
 from goldbot.research import dense_labels as D
 from goldbot.research import feature_store as F
+from goldbot.research import gate_cost as COR
 from goldbot.research import objective as O
 from goldbot.research import windows as WN
 
@@ -91,7 +91,7 @@ def load_learn(cache: Path, *, procedure: str, ledger: Path, instrument: str, tf
     lab = lab[lab["label_ok"].astype(bool)].reset_index(drop=True) if len(lab) else lab
     if len(lab):
         lab, meta = ST.charge_of_record(lab, meta, costs, instrument, tf)
-        charged = lab["cost_version"].astype(str).str.startswith(DC.COST_RECORD_PREFIX).to_numpy()
+        charged = lab["cost_version"].astype(str).str.startswith(COR.COST_RECORD_PREFIX).to_numpy()
         if costs is not None and charged.any():          # the swap of record of each charged row (RL-X1, rl_sim)
             rate = np.full(len(lab), np.nan)
             rate[charged] = costs.swap_rate(lab[charged].assign(instrument=instrument, tf=tf))

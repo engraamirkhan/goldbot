@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from goldbot.research import decision_cost as DC
+from goldbot.research import gate_cost as COR
 from goldbot.research import rl_exits as X
 from goldbot.research import windows as WN
 from goldbot.research.dense_labels import TEMPLATES
@@ -229,10 +229,10 @@ def test_cost_of_record_entries_refuse_a_second_slippage_term_the_record_already
 def test_a_gate_read_refuses_costs_none_and_point_cost_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     book = _booked(tmp_path, monkeypatch)
     train, test = _world(40, 1, reverting=True), _world(20, 2, reverting=True, start="2015-01-05")
-    with pytest.raises(DC.CostNotOfRecord, match="no costs"):
+    with pytest.raises(COR.CostNotOfRecord, match="no costs"):
         X.run(train, test, costs=None, **book)                        # type: ignore[arg-type]
     point = [e.model_copy(update={"cost_version": None, "rt_bp": None}) for e in test]
-    with pytest.raises(DC.CostNotOfRecord, match="cost of record"):
+    with pytest.raises(COR.CostNotOfRecord, match="cost of record"):
         X.run(train, point, costs=FREE, **book)
     with pytest.raises(WN.ReadNotBooked):
         X.run(train, test, costs=FREE, **{**book, "booked_read": "another-read"})

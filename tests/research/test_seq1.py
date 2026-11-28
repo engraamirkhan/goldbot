@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from goldbot.research import decision_cost as DC
+from goldbot.research import gate_cost as COR
 from goldbot.research import objective as O
 from goldbot.research import seq1 as S
 from goldbot.research import windows as WN
@@ -307,12 +307,12 @@ def test_a_read_refuses_rows_not_charged_at_a_cost_of_record_and_an_unbooked_rea
     cost = np.full((len(te), 2), 0.05)
     book = _booked(tmp_path, monkeypatch)
     point = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), "w2-point"))
-    with pytest.raises(DC.CostNotOfRecord, match="cost of record"):
+    with pytest.raises(COR.CostNotOfRecord, match="cost of record"):
         S.read(tr, te, point, spec=spec, boot=0, **book)
     rows = S.judged_rows(te, cost=cost, cost_version=np.full(len(te), REC))
     with pytest.raises(WN.ReadNotBooked):
         S.read(tr, te, rows, spec=spec, boot=0, **{**book, "booked_read": "another"})
-    with pytest.raises(DC.CostNotOfRecord, match="no costs"):
+    with pytest.raises(COR.CostNotOfRecord, match="no costs"):
         S.read(tr, te, rows.drop(columns="cost_version"), spec=spec, boot=0, **book)
 
 

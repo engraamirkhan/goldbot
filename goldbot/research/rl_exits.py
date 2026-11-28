@@ -31,7 +31,7 @@ The problem, as coded:
   ml-5's seven PASS legs and the K booking are the card's, not this module's.
 - `run` is a gate read (quant 1-4 on #489): it computes outcome statistics, so it refuses before scoring unless the
   read id is booked in the read-once ledger (`windows.require_booked_read`, family registered with the study plan),
-  every episode is charged at one D-3 cost of record (`decision_cost.require_cost_of_record`: a w2-point row is never
+  every episode is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`: a w2-point row is never
   charged at the simulator's constant inside a read) and no test episode decides within the training episodes' last
   horizon end + windows.label_embargo. Costs are never defaulted on any path. The fit-only paths (`transitions`,
   `fit`, the history_runs builder) book nothing (K 0).
@@ -57,7 +57,7 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
 from goldbot.labels.triple_barrier import rollover_nights
-from goldbot.research import decision_cost as DC
+from goldbot.research import gate_cost as COR
 from goldbot.research import windows as WN
 from goldbot.research.rl_sim import SimCosts
 
@@ -127,7 +127,7 @@ def _record(entries: pd.DataFrame, costs: SimCosts) -> tuple[np.ndarray, np.ndar
     n = len(entries)
     if "cost_version" not in entries.columns:
         return np.zeros(n, bool), np.full(n, np.nan), np.full(n, np.nan)
-    charged = entries["cost_version"].astype(str).str.startswith(DC.COST_RECORD_PREFIX).to_numpy()
+    charged = entries["cost_version"].astype(str).str.startswith(COR.COST_RECORD_PREFIX).to_numpy()
     if not charged.any():
         return charged, np.full(n, np.nan), np.full(n, np.nan)
 
@@ -527,9 +527,9 @@ def run(train: Sequence[Episode], test: Sequence[Episode], spec: RlSpec = SPEC, 
     the doubled-cost read. Refused before any score: costs None, a read id not booked under `family` in `ledger`,
     any episode not charged at one cost of record, a test episode inside the training horizon + embargo."""
     if costs is None:
-        raise DC.CostNotOfRecord("RL-X1 run: no costs: a gate read is charged at the D-3 cost of record")
+        raise COR.CostNotOfRecord("RL-X1 run: no costs: a gate read is charged at the D-3 cost of record")
     WN.require_booked_read(ledger, family, booked_read)
-    version = DC.require_cost_of_record([e.cost_version for e in (*train, *test)], "RL-X1 run")
+    version = COR.require_cost_of_record([e.cost_version for e in (*train, *test)], "RL-X1 run")
     _refuse_overlap(train, test)
     tr = transitions(train, spec, costs=costs)
     pol = fit(tr, spec, n_episodes=len(train))
