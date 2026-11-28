@@ -65,3 +65,78 @@ def test_rows_of_a_readable_store_carry_a_uniqueness_weight_per_event(tmp_path: 
     assert meta["learn_only"] is True and meta["procedure"] == "seq-1"
     rows = WN.read_ledger(tmp_path / "reads.jsonl")
     assert [r["id"] for r in rows if r.get("type") == "consumption"] == ["seq-1/EURUSD/1h/train"]
+
+
+def _fake_rows(n: int = 4, stamp: str = D.EXIT_FREEZE_SHA256) -> pd.DataFrame:
+    dec = pd.date_range("2014-03-03 10:00", periods=n, freq="1h", tz="UTC")
+    return pd.DataFrame({"instrument": "XAUUSD", "tf": "1h", "phase": 0, "decision_utc": dec,
+                         "entry_utc": dec, "horizon_end_utc": dec + pd.Timedelta(hours=24), "label_ok": True,
+                         "entry": 1300.0, "cost_version": "w2-point", "cost_rt_bp": 2.0, "exit_freeze_sha": stamp})
+
+
+def _spy_load(rows: pd.DataFrame, meta: dict[str, Any]):
+    def load(cache: Path, **k: Any) -> tuple[pd.DataFrame, dict[str, Any]]:
+        return rows.copy(), dict(meta)
+    return load
+
+
+def test_rows_not_built_under_the_exit_freeze_xt_v1_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(D, "load_labels", _spy_load(_fake_rows(stamp="0" * 64), {}))
+    with pytest.raises(LL.NotExitFreeze, match="xt-v1"):
+        LL.load_learn(tmp_path, procedure="seq-1", ledger=tmp_path / "r.jsonl", instrument="XAUUSD", tf="1h",
+                      years=[2014], tiers=None, columns=CORE6, keys={})
+
+
+def test_a_read_with_costs_is_charged_through_the_one_cost_of_record_route_of_sr_v3_store(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from goldbot.research import sr_v3_store as ST
+    seen: dict[str, Any] = {}
+    sentinel = object()
+
+    def charge(lab: pd.DataFrame, meta: dict[str, Any], costs: Any, instrument: str, tf: str
+               ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        seen.update(rows=len(lab), costs=costs, instrument=instrument, tf=tf)
+        return lab.assign(cost_version="srv3-cost-test", cost_rt_bp=9.0), {**meta, "gate_block": []}
+
+    monkeypatch.setattr(D, "load_labels", _spy_load(_fake_rows(), {"gate_block": ["D-3"]}))
+    monkeypatch.setattr(ST, "charge_of_record", charge)
+    lab, meta = LL.load_learn(tmp_path, procedure="rl-x1", ledger=tmp_path / "r.jsonl", instrument="XAUUSD",
+                              tf="1h", years=[2014], tiers=None, columns=CORE6, keys={}, costs=sentinel)
+    assert seen == {"rows": 4, "costs": sentinel, "instrument": "XAUUSD", "tf": "1h"}
+    assert (lab["cost_version"] == "srv3-cost-test").all() and (lab["cost_rt_bp"] == 9.0).all()
+    assert meta["gate_block"] == [] and meta["learn_only"] is True and "w" in lab.columns
+
+
+def test_a_read_without_costs_keeps_the_point_cost_and_its_d3_block(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(D, "load_labels", _spy_load(_fake_rows(), {"gate_block": ["D-3"]}))
+    lab, meta = LL.load_learn(tmp_path, procedure="seq-1", ledger=tmp_path / "r.jsonl", instrument="XAUUSD",
+                              tf="1h", years=[2014], tiers=None, columns=CORE6, keys={})
+    assert (lab["cost_version"] == "w2-point").all() and meta["gate_block"] == ["D-3"]
+
+
+def test_the_trainer_store_charges_through_the_same_module_level_route(monkeypatch: pytest.MonkeyPatch):
+    from goldbot.research import sr_v3_store as ST
+    calls: list[Any] = []
+
+    def charge(lab: pd.DataFrame, meta: dict[str, Any], costs: Any, i: str, t: str
+               ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        calls.append((costs, i, t))
+        return lab, meta
+
+    monkeypatch.setattr(ST, "charge_of_record", charge)
+    st = ST.StoreData(labels=Path("."), features=Path("."), tiers_path=Path("t.csv"), ledger=Path("r.jsonl"))
+    st._charge_of_record(_fake_rows(), {}, "XAUUSD", "1h")
+    assert calls == [(None, "XAUUSD", "1h")]
+
+
+def test_xt_keys_picks_the_one_xt_v1_partition_per_year_and_skips_one_built_under_another_freeze(tmp_path: Path):
+    import json
+    m = _minutes("2015-03-02", 6 * 1440)
+    _, k = _store(tmp_path, m, "1h", 0, "dukascopy")
+    assert LL.xt_keys(tmp_path, instrument="XAUUSD", tf="1h", years=[2015]) == {(2015, 0): k}
+    man = next((tmp_path / D.SPEC.spec_id / "XAUUSD" / "1h" / "p0" / "2015").glob("*.json"))
+    man.write_text(json.dumps({**json.loads(man.read_text()), "exit_freeze_sha": "0" * 64}))
+    assert LL.xt_keys(tmp_path, instrument="XAUUSD", tf="1h", years=[2015]) == {}
+    with pytest.raises(ValueError, match="learn"):
+        LL.xt_keys(tmp_path, instrument="XAUUSD", tf="1h", years=[2018])

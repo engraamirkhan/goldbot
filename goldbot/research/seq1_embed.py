@@ -223,6 +223,23 @@ def embed(art: EmbedArtifact, X: np.ndarray, *, chunk: int = 4096) -> np.ndarray
     return np.concatenate(out).astype(float) if out else np.zeros((0, art.spec.dim))
 
 
+def pretext_loss(art: EmbedArtifact, X: np.ndarray, *, chunk: int = 4096) -> float | None:
+    """The fit's own masked squared error of the pretext task on the windows `X` (the validation loss of `fit` on its
+    validation rows): an in-fold or out-of-fold read of the outcome-free task, never of a label. None without a valid
+    target position."""
+    T, M = pretext_targets(np.asarray(X))
+    with S.TorchState(art.spec.base.threads) as torch:
+        net = _net_of(art)
+        sse = 0.0
+        with torch.no_grad():
+            for a in range(0, len(X), chunk):
+                x = torch.from_numpy(np.ascontiguousarray(X[a:a + chunk], dtype=np.float32))
+                t, m = torch.from_numpy(T[a:a + chunk]), torch.from_numpy(M[a:a + chunk])
+                sse += float(((net(x) - t) ** 2 * m[:, :, None]).sum())
+    n = float(M.sum())
+    return sse / n if n > 0 else None
+
+
 def embed_row(art: EmbedArtifact, x: np.ndarray) -> np.ndarray:
     """One window -> (dim,): the serving form, equal to `embed` on the batch (tested)."""
     return embed(art, np.asarray(x)[None])[0]
@@ -306,5 +323,5 @@ def parity(art: EmbedArtifact, X_a: np.ndarray, X_b: np.ndarray) -> Parity:
 
 
 __all__ = ["DIM", "SPEC", "EmbedArtifact", "EmbedSpec", "Parity", "SeedStability", "build", "embed", "embed_row",
-           "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_targets", "rows",
+           "fit", "fold_embargo", "fold_embed", "linear_cka", "load", "parity", "pretext_loss", "pretext_targets", "rows",
            "seed_stability"]

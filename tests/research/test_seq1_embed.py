@@ -106,6 +106,15 @@ def test_the_embedding_is_deterministic_and_round_trips_with_its_sha():
 
 
 @needs_torch
+def test_the_pretext_loss_of_the_validation_rows_is_the_fits_recorded_validation_loss():
+    data, _ = _rows()
+    art = E.fit(data, seed=7, spec=FAST)
+    _, val = S.inner_split(data, FAST.base)
+    assert E.pretext_loss(art, val.X) == pytest.approx(art.val_loss, rel=1e-5)
+    assert E.pretext_loss(art, val.X[:0]) is None
+
+
+@needs_torch
 def test_embed_row_matches_the_batch_and_parity_is_exact_on_identical_inputs():
     data, _ = _rows()
     art = E.fit(data, seed=3, spec=FAST)

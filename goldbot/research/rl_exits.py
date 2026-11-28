@@ -13,7 +13,10 @@ The problem, as coded:
   (shielded: only once, and only while the close is above the entry, so it can never stop the trade at once or widen
   a stop). Any learned rule rides on top of the template's stop and target, never instead of them.
 - Reward = net R: the exit's gross R minus the exit cost of `rl_sim.SimCosts` (round trip, ub95 slippage, overshoot
-  on a stop exit) and minus the swap of every rollover night each held bar crosses (realised, calendar-known).
+  on a stop exit) and minus the swap of every rollover night each held bar crosses (realised, calendar-known). An
+  entry charged at the D-3 cost of record (learn_labels with costs) pays its own round trip `cost_rt_bp` (gold:
+  srv3_cost_record.gold_row_bp) instead of the constant, kept on the episode (`Episode.rt_bp`) so a rebuild charges
+  the same.
 - Full feedback (R7: "On history every action's reward is known"): every state's every allowed action is replayed
   exactly from the bars, so no propensity or importance weight is needed (`transitions`).
 - Fitted Q iteration (Ernst et al. 2005), finite horizon, no discount: Q_0 = 0; Q_{i+1}(s, a) = r + max over the next
@@ -51,6 +54,7 @@ from goldbot.research.rl_sim import SimCosts
 ACTIONS: tuple[str, ...] = ("hold", "close", "breakeven")
 HOLD, CLOSE, BE = 0, 1, 2
 FIT_TIERS = frozenset({"A", "A-consistent"})       # R-d: = feature_store.INTRADAY_TIERS
+COST_RECORD_PREFIX = "srv3-cost-"   # srv3_cost_record versions; w2-point rows pay SimCosts.rt_bp
 FEATURES: tuple[str, ...] = ("t_frac", "close_r", "mfe_r", "mae_r", "be", "range_r", "next_swap_r")
 
 
@@ -81,6 +85,7 @@ class Episode(FrozenRecord):
     k: float
     day: str
     weight: float = 1.0
+    rt_bp: float | None = None      # the entry's round trip of record (cost_rt_bp of a D-3 charged row); None = SimCosts
 
     def __len__(self) -> int:
         return len(self.close_r)
@@ -101,11 +106,30 @@ def _refuse_outside_learn(dec: pd.DatetimeIndex, end: pd.DatetimeIndex) -> None:
         raise ValueError("RL-X1 replays learn 2010-01..2017-12 only: an episode decides or ends outside learn")
 
 
+def _record_rt(entries: pd.DataFrame, costs: SimCosts) -> np.ndarray:
+    """Each entry's round trip of record (NaN where the row is not D-3 charged: SimCosts.rt_bp applies)."""
+    if "cost_version" not in entries.columns:
+        return np.full(len(entries), np.nan)
+    charged = entries["cost_version"].astype(str).str.startswith(COST_RECORD_PREFIX).to_numpy()
+    if not charged.any():
+        return np.full(len(entries), np.nan)
+    rt = np.where(charged, entries["cost_rt_bp"].to_numpy(dtype=float) if "cost_rt_bp" in entries.columns
+                  else np.nan, np.nan)
+    if not np.isfinite(rt[charged]).all():
+        raise ValueError("RL-X1: a row charged at the cost of record has no finite cost_rt_bp")
+    if costs.slippage_ub95_bp:
+        raise ValueError("RL-X1: the cost of record's round trip already carries the ub95 slippage; a SimCosts "
+                         "slippage_ub95_bp on top would charge it twice")
+    return rt
+
+
 def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimCosts | None = None
                        ) -> list[Episode]:
     """Episodes of one instrument x tf. `entries`: side, decision_utc, entry, risk_usd (the T2 stop distance),
-    horizon_end_utc, optional w. `bars`: ts_utc (open), visible_at (close), mid or bid/ask OHLC. A bar is a step when
-    it opens at or after the decision and closes by the horizon end. Entries without a step are dropped."""
+    horizon_end_utc, optional w, optional cost_version / cost_rt_bp (a row charged at the D-3 cost of record by
+    learn_labels pays its own round trip, rl_sim). `bars`: ts_utc (open), visible_at (close), mid or bid/ask OHLC. A bar
+    is a step when it opens at or after the decision and closes by the horizon end. Entries without a step are
+    dropped."""
     c = costs or SimCosts.w2()
     sw = c.swap
     if "usable" not in entries.columns or not entries["usable"].astype(bool).all():
@@ -122,6 +146,7 @@ def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimC
     nights = rollover_nights(start_utc, close_utc, sw.server_tz, sw.triple_weekday, sw.seven_night).astype(float)
     out = []
     w = entries["w"].to_numpy(dtype=float) if "w" in entries.columns else np.ones(len(entries))
+    rec_rt = _record_rt(entries, c)
     sides = entries["side"].to_numpy(dtype=int)
     entry_px, risk_px = entries["entry"].to_numpy(dtype=float), entries["risk_usd"].to_numpy(dtype=float)
     for i in range(len(entries)):
@@ -139,7 +164,8 @@ def episodes_from_bars(entries: pd.DataFrame, bars: pd.DataFrame, *, costs: SimC
         k = 1e-4 * entry / risk
         out.append(Episode(open_r=orient(o[sl]), high_r=hi_r, low_r=lo_r, close_r=orient(cl[sl]),
                            swap_r=c.swap_r(np.full(z - a, k), np.full(z - a, side), nights[sl]), k=k,
-                           day=str(dec[i].normalize().date()), weight=float(w[i])))
+                           day=str(dec[i].normalize().date()), weight=float(w[i]),
+                           rt_bp=float(rec_rt[i]) if np.isfinite(rec_rt[i]) else None))
     return out
 
 
@@ -148,20 +174,23 @@ def _bar(ep: Episode, j: int, stop: float, spec: RlSpec, costs: SimCosts) -> tup
     """Hold through bar j at stop level `stop`: (reward, exited). Time exit at the last bar's close."""
     o, h, lo, c = ep.open_r[j], ep.high_r[j], ep.low_r[j], ep.close_r[j]
     sw = float(ep.swap_r[j])
-    k = np.array([ep.k])
     if o <= stop:
-        return float(o - costs.exit_cost_r(k, np.array([True]))[0]) - sw, True
+        return float(o - _exit_cost(ep, costs, True)) - sw, True
     if lo <= stop:
-        return float(stop - costs.exit_cost_r(k, np.array([True]))[0]) - sw, True
+        return float(stop - _exit_cost(ep, costs, True)) - sw, True
     if h >= spec.target_r:
-        return float(spec.target_r - costs.exit_cost_r(k, np.array([False]))[0]) - sw, True
+        return float(spec.target_r - _exit_cost(ep, costs, False)) - sw, True
     if j == len(ep) - 1:
-        return float(c - costs.exit_cost_r(k, np.array([False]))[0]) - sw, True
+        return float(c - _exit_cost(ep, costs, False)) - sw, True
     return -sw, False
 
 
+def _exit_cost(ep: Episode, costs: SimCosts, stop: bool) -> float:
+    return float(costs.exit_cost_r(np.array([ep.k]), np.array([stop]), rt_bp=ep.rt_bp)[0])
+
+
 def _close(ep: Episode, j: int, costs: SimCosts) -> float:
-    return float(ep.close_r[j] - costs.exit_cost_r(np.array([ep.k]), np.array([False]))[0])
+    return float(ep.close_r[j] - _exit_cost(ep, costs, False))
 
 
 def _features(ep: Episode, j: int, be: int) -> np.ndarray:

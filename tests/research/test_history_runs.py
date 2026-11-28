@@ -48,6 +48,13 @@ def test_episodes_round_trip_through_their_npz(tmp_path: Path):
         assert (a.k, a.day, a.weight) == (b.k, b.day, b.weight)
 
 
+def test_an_episodes_cost_of_record_round_trip_survives_the_npz_so_a_rebuild_charges_the_same(tmp_path: Path):
+    eps = _world(6, 1, reverting=True)
+    eps = [e.model_copy(update={"rt_bp": 20.0 + i}) if i % 2 else e for i, e in enumerate(eps)]
+    back = HR.load_episodes(HR.save_episodes(eps, tmp_path / "e.npz"))
+    assert [b.rt_bp for b in back] == [e.rt_bp for e in eps]
+
+
 def test_a_design_whose_rows_reach_the_holdout_is_refused_at_load(tmp_path: Path):
     data = _design()
     keys = data.keys.copy()
@@ -118,12 +125,14 @@ def test_seq1_quality_reads_seed_stability_and_the_gbt_comparison_on_the_same_ro
     rd = S.Seq1Read(spec_id=S.SPEC.spec_id, seeds=seeds, shas=("a" * 64,) * 5, s_by_seed=s_by,
                     seed=S.seed_check(s_by), verdict="READ", s_mean=float(np.mean(s_by)), keep_share=0.5, per_tf={},
                     keep_ensemble=keep, reads=())
-    folds = dict(horizon_days=np.full(n, 1.0), train_end=END, fold_keys=["f0", "f1"], trial=1)
-    seeds_v, gbt_v = HR.seq1_quality(rd, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, **folds)
+    h = np.full(n, 1.0)
+    seeds_v, gbt_v = HR.seq1_quality(rd, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, horizon_days=h,
+                                     train_end=END, fold_keys=["f0", "f1"], trial=1)
     assert seeds_v.check == "seed_stability" and seeds_v.passed and seeds_v.detail["seeds"] == list(seeds)
     assert gbt_v.check == "beats_baseline" and gbt_v.passed and gbt_v.detail["baseline_manifest_id"] == "c" * 64
     assert seeds_v.detail["rows_key"] == gbt_v.detail["rows_key"]          # Q3: one set of OOF rows
     assert gbt_v.detail["train_end"] == END.isoformat() and gbt_v.detail["fold_keys"] == ["f0", "f1"]
     rd_bad = rd.model_copy(update={"s_by_seed": (0.06, -0.01, 0.05, 0.08, 0.06), "keep_ensemble": ~keep})
-    s2, g2 = HR.seq1_quality(rd_bad, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, **folds)
+    s2, g2 = HR.seq1_quality(rd_bad, rows, gbt_net=np.zeros(n), gbt_manifest_id="c" * 64, horizon_days=h,
+                             train_end=END, fold_keys=["f0", "f1"], trial=1)
     assert not s2.passed and not g2.passed

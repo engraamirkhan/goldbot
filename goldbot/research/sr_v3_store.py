@@ -159,6 +159,20 @@ def cost_table(manifest: Path | str) -> CostTable:
     return dataclasses.replace(table, gold_charge=functools.partial(CR.gold_row_bp, rec=rec,
                                                                     spread=table.gold_spread))
 
+def charge_of_record(lab: pd.DataFrame, meta: dict[str, Any], costs: CostTable | None, instrument: str, tf: str
+                     ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """`lab` (a `load_labels` frame of one instrument x tf) charged at the D-3 cost of record and its gate status
+    re-derived (`srv3_cost_record.apply`, F6 on #515), when `costs` is a recorded version; otherwise unchanged
+    (w2-point rows keep the D-3 block). The one charging route of every history label read (the sr-v3 trainer, and
+    learn_labels for SEQ-1 / RL-X1): a second copy could drift from the record."""
+    from goldbot.research import dense_labels as D
+    from goldbot.research import srv3_cost_record as CR
+    if costs is None or costs.version not in CR.recorded():
+        return lab, meta
+    rows = lab.assign(instrument=instrument, tf=tf)
+    return CR.apply(rows, meta, costs.version, costs.paths, rt_bp=costs.rt_bp(rows), spec=D.SPEC)
+
+
 @dataclass
 class StoreData:
     """The local dl-v1 label store, the fs-v1 feature store and the uniqueness weights (scripts/research/
@@ -204,14 +218,7 @@ class StoreData:
 
     def _charge_of_record(self, lab: pd.DataFrame, meta: dict[str, Any], instrument: str, tf: str
                           ) -> tuple[pd.DataFrame, dict[str, Any]]:
-        """`lab` charged at the D-3 cost of record and its gate status re-derived (`srv3_cost_record.apply`, F6 on
-        #515), when the costs are a recorded version; otherwise unchanged (w2-point rows keep the D-3 block)."""
-        from goldbot.research import dense_labels as D
-        from goldbot.research import srv3_cost_record as CR
-        if self.costs is None or self.costs.version not in CR.recorded():
-            return lab, meta
-        rows = lab.assign(instrument=instrument, tf=tf)
-        return CR.apply(rows, meta, self.costs.version, self.costs.paths, rt_bp=self.costs.rt_bp(rows), spec=D.SPEC)
+        return charge_of_record(lab, meta, self.costs, instrument, tf)
 
     def _weights_path(self, instrument: str, tf: str) -> Path:
         return Path(self.weights or Path(self.labels) / "_weights") / instrument / f"{tf}.parquet"
@@ -346,5 +353,5 @@ class StoreData:
                 "tiers_sha256": V.file_sha256(self.tiers_path), "used": self.used}
 
 
-__all__ = ["p30_mask", "prefix_usability", "ReadNotBooked", "SequencingRefused", "StoreData", "book_learn_read", "default_ledger", "learn_family",
+__all__ = ["p30_mask", "prefix_usability", "ReadNotBooked", "SequencingRefused", "StoreData", "book_learn_read", "charge_of_record", "default_ledger", "learn_family",
            "read_key", "refuse_unsequenced", "require_booked", "sequencing_gaps"]

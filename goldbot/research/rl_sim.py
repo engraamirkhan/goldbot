@@ -10,6 +10,11 @@ Costs (`SimCosts`), per unit of initial risk (k = 1e-4 x entry / risk, R per bp 
   it, ADR 0102 3), and a stop exit also the overshoot `overshoot_bp` (decision_cost.OVERSHOOT_BP);
 - swaps per rollover night at the research swap spec's rate on notional, absolute (a received swap is never credited,
   as decision_cost.cost_x).
+History reads charge the D-3 cost of record instead of the constant: a label row charged by `srv3_cost_record.apply`
+(cost_version "srv3-cost-...") carries its own round trip `cost_rt_bp` (gold: `gold_row_bp`, the ub95 ECR and era
+spread with slippage inside), and `exit_cost_r(rt_bp=)` charges it in place of `rt_bp`; rl_exits refuses a separate
+`slippage_ub95_bp` on such rows (the record already carries it). The overshoot and the swap stay the simulator's,
+as the sr-v3 trainer's `cost_parts` (decision_cost.OVERSHOOT_BP on stops; the swap of the research spec).
 
 Sizing (`SizingSpec`, `risk_fraction`): risk fraction = min(max_risk, base_risk / vol_ratio), vol_ratio = the ATR at
 the decision over its trailing median (`vol_ratio`, past values only). max_risk is the 1 % cap of ADR 0106 2.
@@ -45,10 +50,12 @@ class SimCosts(FrozenRecord):
     def w2(cls) -> SimCosts:
         return cls(rt_bp=DC.RT_BP, slippage_ub95_bp=0.0, overshoot_bp=DC.OVERSHOOT_BP, swap=DC.swap_spec())
 
-    def exit_cost_r(self, k: np.ndarray, stop: np.ndarray) -> np.ndarray:
-        """R charged at an exit: k (rt + ub95 slippage + overshoot on a stop)."""
-        return np.asarray(k, float) * (self.rt_bp + self.slippage_ub95_bp
-                                       + self.overshoot_bp * np.asarray(stop, dtype=float))
+    def exit_cost_r(self, k: np.ndarray, stop: np.ndarray, *, rt_bp: np.ndarray | float | None = None
+                    ) -> np.ndarray:
+        """R charged at an exit: k (rt + ub95 slippage + overshoot on a stop); `rt_bp`, the row's own round trip of
+        record, replaces the constant `self.rt_bp` when given."""
+        rt = self.rt_bp if rt_bp is None else np.asarray(rt_bp, dtype=float)
+        return np.asarray(k, float) * (rt + self.slippage_ub95_bp + self.overshoot_bp * np.asarray(stop, dtype=float))
 
     def swap_r(self, k: np.ndarray, side: np.ndarray, nights: np.ndarray) -> np.ndarray:
         """R charged for `nights` rollovers: nights x k x 1e4 x |swap rate(side) as a fraction of price|."""

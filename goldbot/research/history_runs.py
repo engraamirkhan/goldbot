@@ -84,7 +84,8 @@ def save_episodes(eps: Sequence[X.Episode], path: Path | str) -> Path:
     arrays: dict[str, Any] = {f: np.concatenate([getattr(e, f) for e in eps]) if eps else np.zeros(0)
                               for f in ("open_r", "high_r", "low_r", "close_r", "swap_r")}
     arrays |= {"lens": lens, "k": np.array([e.k for e in eps]), "weight": np.array([e.weight for e in eps]),
-               "day": np.array([e.day for e in eps], dtype=str)}
+               "day": np.array([e.day for e in eps], dtype=str),
+               "rt_bp": np.array([np.nan if e.rt_bp is None else e.rt_bp for e in eps], dtype=float)}
     with open(p, "wb") as fh:
         np.savez(fh, **arrays)
     return p
@@ -95,8 +96,10 @@ def load_episodes(path: Path | str) -> list[X.Episode]:
         holdout_guard.refuse(pd.to_datetime(z["day"].astype(str), utc=True), what=f"history episodes {Path(path).name}")
         ends = np.cumsum(z["lens"])
         starts = ends - z["lens"]
+        rt = z["rt_bp"] if "rt_bp" in z.files else np.full(len(z["lens"]), np.nan)
         return [X.Episode(**{f: z[f][a:b] for f in ("open_r", "high_r", "low_r", "close_r", "swap_r")},
-                          k=float(z["k"][i]), weight=float(z["weight"][i]), day=str(z["day"][i]))
+                          k=float(z["k"][i]), weight=float(z["weight"][i]), day=str(z["day"][i]),
+                          rt_bp=float(rt[i]) if np.isfinite(rt[i]) else None)
                 for i, (a, b) in enumerate(zip(starts, ends, strict=True))]
 
 

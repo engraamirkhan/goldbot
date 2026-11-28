@@ -56,6 +56,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -378,13 +379,34 @@ def weights_sha(spec: Seq1Spec, seed: int, names: Sequence[str], shapes: Sequenc
     return h.hexdigest()
 
 
+OMP_MODULES: tuple[str, ...] = ("sklearn", "lightgbm", "xgboost")     # each ships its own libomp on macOS
+
+
+def omp_before_torch(modules: Sequence[str] | None = None) -> list[str]:
+    """The OpenMP-linked packages imported before torch, in import order (`sys.modules` keeps it): on macOS each
+    bundles its own libomp, and torch's threads started beside another runtime crash the process (measured 2026-11-28:
+    SIGSEGV in the first multi-threaded SEQ-1 epoch once feature_store had loaded sklearn and lightgbm). [] when torch
+    is not imported yet or came first."""
+    order = [m for m in (list(sys.modules) if modules is None else modules) if "." not in m]
+    if "torch" not in order:
+        return []
+    first = order.index("torch")
+    return [m for m in order[:first] if m in OMP_MODULES]
+
+
 class TorchState:
-    """Deterministic CPU settings for one fit or score, restored afterwards."""
+    """Deterministic CPU settings for one fit or score, restored afterwards. More than one thread on macOS after another
+    OpenMP runtime (`omp_before_torch`) is refused with the fix named, never left to segfault: entry scripts import
+    torch before goldbot (scripts/research/train_seq1_embed.py, rebuild_model.py)."""
 
     def __init__(self, threads: int) -> None:
         self.torch, self.threads = torch_module(), threads
 
     def __enter__(self) -> Any:
+        if self.threads > 1 and sys.platform == "darwin" and (clash := omp_before_torch()):
+            raise RuntimeError(f"SEQ-1 with {self.threads} threads: {', '.join(clash)} loaded its OpenMP runtime "
+                               "before torch (macOS: two runtimes crash the process); import torch first in the entry "
+                               "script, or fit with threads=1")
         t = self.torch
         self.prev = (t.are_deterministic_algorithms_enabled(), t.get_num_threads())
         t.use_deterministic_algorithms(True)
@@ -609,7 +631,7 @@ def read(train: Seq1Data, test: Seq1Data, rows: pd.DataFrame, *, spec: Seq1Spec 
                     reads=tuple(reads))
 
 
-__all__ = ["CHANNELS", "SPEC", "Seq1Artifact", "Seq1Data", "Seq1Read", "Seq1Spec", "SeedCheck", "bar_windows",
+__all__ = ["OMP_MODULES", "omp_before_torch", "CHANNELS", "SPEC", "Seq1Artifact", "Seq1Data", "Seq1Read", "Seq1Spec", "SeedCheck", "bar_windows",
            "Seq1Bundle", "TorchState", "build_net", "bundle_bytes", "fit_bundle", "load_bundle", "score_bundle", "design", "fit", "inner_split", "judged_rows", "judged_tf", "load", "n_inputs", "param_count", "read",
            "receptive_field", "save", "score", "score_row", "seed_check", "split", "state_bytes", "tf_channels", "torch_module",
            "weights_sha", "window_start"]

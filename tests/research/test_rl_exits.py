@@ -166,6 +166,42 @@ def test_episodes_need_tier_usable_a_or_a_consistent_rows():
     assert X.FIT_TIERS == __import__("goldbot.research.feature_store", fromlist=["x"]).INTRADAY_TIERS
 
 
+def _charged(bars: pd.DataFrame, rt: list[float], version: str = "srv3-cost-0123456789abcdef") -> pd.DataFrame:
+    dec = bars["visible_at"].iloc[10]
+    return pd.DataFrame({"side": [1] * len(rt), "decision_utc": dec, "entry": 1500.0, "risk_usd": 2.0,
+                         "horizon_end_utc": dec + pd.Timedelta(hours=24), "usable": True, "tier": "A",
+                         "cost_version": version, "cost_rt_bp": rt})
+
+
+def test_an_entry_charged_at_the_cost_of_record_pays_its_own_round_trip_not_the_simulator_constant():
+    bars = _bars("2014-03-03", 100)
+    ep, = X.episodes_from_bars(_charged(bars, [23.5]), bars)
+    assert ep.rt_bp == 23.5
+    c = SimCosts.w2()
+    net, _ = X.rollout(ep, lambda f, ok: X.CLOSE, costs=c)
+    assert net == pytest.approx(ep.close_r[0] - ep.k * 23.5)
+    stopped = X.Episode(**{**ep.model_dump(), "close_r": np.array([0.2, -1.5]), "open_r": np.array([0.0, 0.2]),
+                           "high_r": np.array([0.2, 0.2]), "low_r": np.array([0.0, -1.5]), "swap_r": np.zeros(2)})
+    assert X.fixed_exit(stopped, costs=c) == pytest.approx(-1 - stopped.k * (23.5 + c.overshoot_bp))
+
+
+def test_point_cost_entries_keep_the_simulator_round_trip():
+    bars = _bars("2014-03-03", 100)
+    ep, = X.episodes_from_bars(_charged(bars, [2.0], version="w2-point"), bars)
+    assert ep.rt_bp is None
+    net, _ = X.rollout(ep, lambda f, ok: X.CLOSE)
+    assert net == pytest.approx(ep.close_r[0] - SimCosts.w2().exit_cost_r(np.array([ep.k]), np.array([False]))[0])
+
+
+def test_cost_of_record_entries_refuse_a_second_slippage_term_the_record_already_carries():
+    bars = _bars("2014-03-03", 100)
+    with pytest.raises(ValueError, match="slippage"):
+        X.episodes_from_bars(_charged(bars, [23.5]), bars,
+                             costs=SimCosts.w2().model_copy(update={"slippage_ub95_bp": 1.0}))
+    with pytest.raises(ValueError, match="cost_rt_bp"):
+        X.episodes_from_bars(_charged(bars, [float("nan")]), bars)
+
+
 # ------------------------------------------------------------------------------------------------ never live
 @pytest.mark.parametrize("mod", ["rl_exits", "rl_sim", "seq1", "seq1_embed", "agg_v1", "learn_labels",
                                  "history_runs"])

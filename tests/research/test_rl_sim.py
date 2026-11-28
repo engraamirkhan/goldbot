@@ -22,6 +22,13 @@ def test_the_w2_costs_are_the_cost_of_record_and_slippage_is_charged_on_every_ex
     assert (s.exit_cost_r(k, np.array([False, False])) > c.exit_cost_r(k, np.array([False, False]))).all()
 
 
+def test_a_per_row_round_trip_replaces_the_simulator_constant_and_keeps_slippage_and_overshoot():
+    c = RS.SimCosts.w2().model_copy(update={"slippage_ub95_bp": 0.5})
+    k, stop = np.array([0.01, 0.02]), np.array([False, True])
+    rt = np.array([20.0, 30.0])
+    np.testing.assert_allclose(c.exit_cost_r(k, stop, rt_bp=rt), k * (rt + 0.5 + np.array([0.0, c.overshoot_bp])))
+
+
 def test_a_swap_is_charged_per_night_and_never_credited():
     c = RS.SimCosts.w2()
     k = np.array([0.01, 0.01])

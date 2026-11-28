@@ -300,3 +300,19 @@ def test_the_walk_forward_read_runs_every_seed_and_marks_a_wide_seed_spread_inco
     assert rd.verdict == ("INCONCLUSIVE" if rd.seed.inconclusive else "READ")
     assert set(rd.per_tf) == {"1h"}
     assert S.seed_check([0.0, 0.2, -0.2]).inconclusive
+
+
+def test_openmp_runtimes_imported_before_torch_are_named_in_import_order():
+    assert S.omp_before_torch(["numpy", "sklearn", "lightgbm", "torch"]) == ["sklearn", "lightgbm"]
+    assert S.omp_before_torch(["torch", "sklearn", "lightgbm"]) == []
+    assert S.omp_before_torch(["sklearn"]) == []                 # torch not imported yet: nothing clashes
+
+
+@needs_torch
+def test_a_multi_threaded_fit_after_another_openmp_runtime_is_refused_not_a_segfault(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(S, "omp_before_torch", lambda modules=None: ["sklearn"])
+    monkeypatch.setattr(S.sys, "platform", "darwin")
+    with pytest.raises(RuntimeError, match="import torch first"), S.TorchState(2):
+        pass
+    with S.TorchState(1):                                         # one thread never starts a second runtime's pool
+        pass
