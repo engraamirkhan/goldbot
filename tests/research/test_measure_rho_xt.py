@@ -469,3 +469,14 @@ def test_rho_day_for_is_monotone_and_conservative() -> None:
     assert P.rho_class_of(["XAUUSD", "US500"], pf.rho_classes()) == "gold"
     mixed = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD", "US500"]), st)
     assert mixed.rho_day == pytest.approx(0.44691)
+
+
+def test_the_rho_verifier_is_a_leaf_off_the_banned_metric_paths() -> None:
+    """CI on #525: sr_v3.rho_inputs is on the obj-v1 guarded fit path; its verifier lives in a leaf module whose hold
+    map is the dense-label H (and data_sufficiency's)."""
+    from goldbot.research import rho_verify as RV
+    assert RV.H_S == DS.LABEL_H_S == dict(D.H_BY_TF)
+    assert DS.verify_inst_by_tf is RV.verify_inst_by_tf
+    assert all(RV.hold_bucket(tf) == DS.hold_bucket(tf) for tf in RV.H_S)
+    src = (ROOT / "goldbot" / "research" / "rho_verify.py").read_text()
+    assert "goldbot.research" not in src.replace("goldbot.research.sr_v3", "").split('"""', 2)[2]

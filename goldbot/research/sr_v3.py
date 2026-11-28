@@ -208,7 +208,7 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
         if (why := xt_v1_rho_refusal(d, path, freeze_sha)) is not None:
             raise ValueError(why)
         if bt:                                  # quant R2 on #525: the per-tf binding is reproduced from its cells
-            from goldbot.research.data_sufficiency import verify_inst_by_tf
+            from goldbot.research.rho_verify import verify_inst_by_tf
             verify_inst_by_tf(d, path)
         if bt:
             rho_inst = min(1.0, float(bt["rho_u_inst_day_mean"][f"{rc}|{tf}"]["max"]))
