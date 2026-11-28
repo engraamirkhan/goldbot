@@ -21,6 +21,7 @@ from statistics import NormalDist
 from typing import Any, Literal
 
 from goldbot.base import FrozenRecord
+from goldbot.research.rho_verify import verify_inst_by_tf
 
 RILEY_PER_PARAM = 430
 # card 5.1 (A22): n_eff for 80 % power, one-sided 0.05, at S = +0.05 R, by label-blind keep share
@@ -393,24 +394,38 @@ PRE_XT_V1_FLAG = "pre-xt-v1 ρ_u,inst: fit-only, not a power read"
 
 
 def _rho_json(src: dict[str, Any]) -> dict[str, Any]:
+    """The rho file `src["file"]` (repo-relative), refused when `src` pins a sha256 the file does not have (quant F3
+    on #525)."""
+    import hashlib
     import json
 
     from goldbot.config import ROOT
-    out: dict[str, Any] = json.loads((ROOT / src["file"]).read_text())
+    raw = (ROOT / src["file"]).read_bytes()
+    if src.get("sha256") and hashlib.sha256(raw).hexdigest() != src["sha256"]:
+        raise ValueError(f"rho file {src['file']} differs from the sha256 pinned in rho_inst_from: refused")
+    out: dict[str, Any] = json.loads(raw)
     return out
 
 
 def measured_rho(cfg: dict[str, Any], src: dict[str, Any], *, gate_read: bool = False) -> dict[str, float]:
-    """tf -> binding rho_u,inst for `src` = {file, key, stat}: the D-12 value of that membership at the tf's bucket.
-    With `gate_read` (a Stage 0, power or gate read; quant ruling on #514, D-12-xt) the file must record the xt-v1 exit
-    freeze (`exit_freeze_sha`), else ValueError; without it (learn-window fit-only reads) the recorded value is used."""
+    """tf -> binding rho_u,inst for `src` = {file, key, stat, sha256}: the file's per-tf binding (`binding_by_tf`,
+    quant ruling 1 on #525) when it has one, else the value of that membership at the tf's bucket. A pinned sha256 is
+    checked always. With `gate_read` (a Stage 0, power or gate read; quant ruling on #514, D-12-xt) the file must
+    record the xt-v1 exit freeze (`exit_freeze_sha`) and carry a per-tf binding that its cells file reproduces
+    (`verify_inst_by_tf`), else ValueError; without it (learn-window fit-only reads) the recorded value is used."""
     from goldbot.config import xt_v1_rho_refusal
     from goldbot.research.dense_labels import EXIT_FREEZE_SHA256
     full = _rho_json(src)
-    if gate_read and (why := xt_v1_rho_refusal(full, src["file"], EXIT_FREEZE_SHA256)) is not None:
-        raise ValueError(why)
+    if gate_read:
+        if (why := xt_v1_rho_refusal(full, src["file"], EXIT_FREEZE_SHA256)) is not None:
+            raise ValueError(why)
+        verify_inst_by_tf(full, src["file"])
+    stat = src.get("stat", "max")
+    bt = (full.get("binding_by_tf") or {}).get("rho_u_inst_day_mean")
+    if bt:
+        return {tf: min(1.0, float(bt[f"{src['key']}|{tf}"][stat])) for tf in cfg["tfs"]}
     d = full["binding"]["rho_u_inst_day_mean"]
-    return {tf: min(1.0, float(d[f"{src['key']}|{hold_bucket(tf)}"][src.get("stat", "max")])) for tf in cfg["tfs"]}
+    return {tf: min(1.0, float(d[f"{src['key']}|{hold_bucket(tf)}"][stat])) for tf in cfg["tfs"]}
 
 
 def _rho_sources(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:

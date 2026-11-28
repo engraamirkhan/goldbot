@@ -5,6 +5,39 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- sr-v3 D-12-xt done (quant ruling on #514): the D-12 residual ICCs and tau_a re-measured at the xt-v1 exit freeze by
+  `scripts/research/measure_rho_xt.py` -> `docs/research/rho-measurement-2026-11-28-xt-v1.json` (+ `-cells.csv.gz`,
+  aggregate statistics only). Labels are the factory's own (`dense_labels.label_rows` under SPEC, every row stamped
+  b68e2f7b..., usable rows only), so geometry is xt-v1 exactly: h_ref = H, T2 / T6 at the card's k, hold = H of the
+  tf (1m..1w), the 1.5 x 1,440-min TR floor, xt-v1 fills. Same learn 2010-17, control grid, the three replayed
+  families (D-12 decisions) and the B = 2,000 week-block upper 95 %. No dense-label store value and no sr-v3 / H-102
+  outcome is read. The file records `exit_freeze_sha`, the geometry (with the behaviour sha), `binds_with` (the D-12
+  file by sha256, required for a v3 / xt file, repo-relative, every class finite) and `rho_x_from` (rho_x is read from
+  the D-12 file, not copied; the JSON is 190 kB).
+- Bound per tf (quant ruling 1 on #525; card rev 11, amendment `prereg-amendment-2026-11-28-sr-v3-d12-xt-per-tf.md`,
+  named post-run): rho_u,inst(tf) = max(D-12 bucket binding, cumulative max of the re-run over holds <= tf), the same
+  for vs-gold; rho_u,day(tf) = max(D-12 bucket, re-run at tf), undefined at H >= 1 d; tau_a(tf) = re-run at tf.
+  gold+fx10 rho_u,inst 0.317 at 15m-4h (the D-12 floor), 0.410 at 1d, 0.510 at 1w; pooled 0.198 / 0.203 / 0.211 at
+  15m / 30m / 1h, 0.269 at 2h-4h, 0.380 at 1d, 0.443 at 1w. tau_a rises at every tf (pooled 15m 0.099). rho_day_le_60m
+  stays 0.25 (ruling 2).
+- Gold-alone rho_u,day at 15m (H = 8 h) is 0.447: gold-alone figures in the H-105 / H-106 cards computed at rho_day
+  0.25 overstate 15m n_eff by about 20 %. `PowerFirstSettings.rho_day_for(hold, class)` now returns max(prior, the
+  class's binding at that tf) from the pinned file (`research.power_first.rho_xt_measurement` + sha256).
+- Readers: `sr_v3.rho_inputs` and `data_sufficiency.measured_rho` read `binding_by_tf`; `sufficiency.yaml` pins the
+  file's sha256; a gate read recomputes the per-tf rho_u,inst from the cells file (`verify_inst_by_tf`). With the
+  per-tf rule the pooled gold_fx and fx10 divisors at 15m-4h are the D-12 values again; 1d / 1w rise. D-13 admission
+  needs its own per-instrument, per-tf run at xt-v1 (this file measures no candidate instrument).
+- Quant re-verify of #525: `power_first.evaluate` and the verdict check pass the card's class
+  (`power_first.rho_class_of`: the smallest measured class of the pinned file's `classes` holding every instrument;
+  None outside them keeps the prior), so a gold 15m card with an 8 h hold carries rho_day 0.44691 and gold + XAG 0.29928. A pooled `sr_v3.rho_inputs(freeze_sha=...)` runs
+  `verify_inst_by_tf` before reading. Backlog 281 (also recompute tau_a(tf) and the vs-gold level from the cells) and
+  282 (the drivers must call `require_power_read_rho`, which has no production caller) are open.
+- Code review of #525: Settings validation reads no research file. `rho_xt_measurement` and its sha256 are
+  format-checked at load (repo-relative, 64 hex) and checked against the file lazily, on the first `rho_day_for` /
+  `rho_classes` call. That keeps the deploy check (`git archive goldbot config`) and every service, the MT5 bridge
+  included, valid without docs/research; a test validates Settings from a copy of goldbot/ and config/ alone.
+  `rho_day_for` is monotone: holds >= 1 d keep the prior, and shorter holds take the max over the tfs with H <= the
+  hold. `rho_class_of` sets unmeasured instruments aside (XAUUSD + US500, 8 h hold -> 0.44691).
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also

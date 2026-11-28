@@ -4,6 +4,7 @@ freeze sha it was measured under; settings load and the learn-window fit-only re
 The one entry point a Stage 0 / power read calls is `data_sufficiency.require_power_read_rho`."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -13,15 +14,35 @@ import pytest
 from goldbot.config import PowerFirstSettings, check_rho_measurement
 from goldbot.research import data_sufficiency as DS
 from goldbot.research import dense_labels as D
-from tests.research.test_power_first import rho_file
+from tests.research.test_power_first import CLASSES, rho_file
 
 TFS = ["1m", "5m", "1h"]
 
 
 def _made(tmp_path: Path, name: str, **over: object) -> tuple[Path, str]:
+    """A D-12-style file; one that records an exit_freeze_sha also names `binds_with` (required since #525 F4): a
+    prior at the repo-relative path prior.json under the repo root the `xt_root` fixture patched to `tmp_path`."""
     d = tmp_path / name
     d.mkdir()
+    if "exit_freeze_sha" in over:
+        prior = tmp_path / "prior.json"
+        prior.write_text(json.dumps({"rho_day_le_60m": dict.fromkeys(CLASSES, 0.01)}))
+        over = {"binds_with": {"path": "prior.json", "sha256": hashlib.sha256(prior.read_bytes()).hexdigest()},
+                **over}
     return rho_file(d, **over)
+
+
+@pytest.fixture()
+def xt_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import goldbot.config as C
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    return tmp_path
+
+
+def _xt_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A complete D-12-xt file (per-tf binding, cells, binds_with) from the script's own writer."""
+    from tests.research.test_measure_rho_xt import _produce
+    return _produce(tmp_path, monkeypatch)[0]
 
 
 def _inst_file(tmp_path: Path, name: str, sha: str | None) -> Path:
@@ -43,7 +64,7 @@ def _cfg(src_file: Path) -> dict[str, Any]:
             "pooled": {"gold_fx": {"rho_inst_from": src}}}
 
 
-def test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read(tmp_path: Path) -> None:
+def test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read(tmp_path: Path, xt_root: Path) -> None:
     f, sha = _made(tmp_path, "none")
     check_rho_measurement(str(f), 0.05, sha)                    # fit-only / settings load: admitted as recorded
     with pytest.raises(ValueError, match="exit_freeze_sha"):
@@ -55,8 +76,9 @@ def test_a_rho_file_without_the_xt_v1_exit_freeze_sha_is_refused_for_a_gate_read
     check_rho_measurement(str(xt), 0.05, xsha, gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
 
 
-def test_measured_rho_inst_refuses_a_pre_xt_v1_file_for_a_gate_read(tmp_path: Path) -> None:
-    old = _cfg(_inst_file(tmp_path, "d12", None))
+def test_measured_rho_inst_refuses_a_pre_xt_v1_file_for_a_gate_read(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    old = _cfg(_inst_file(tmp_path, "pre_xt", None))
     src = old["units"]["fx10"]["card_pooled"]["rho_inst_from"]
     assert DS.measured_rho(old, src) == {"1m": 0.3, "5m": 0.2, "1h": 0.25}       # fit-only: the recorded value
     with pytest.raises(ValueError, match="exit_freeze_sha"):
@@ -69,19 +91,19 @@ def test_measured_rho_inst_refuses_a_pre_xt_v1_file_for_a_gate_read(tmp_path: Pa
     other = _cfg(_inst_file(tmp_path, "other", "0" * 64))
     with pytest.raises(ValueError, match="exit_freeze_sha"):
         DS.measured_rho(other, other["units"]["fx10"]["card_pooled"]["rho_inst_from"], gate_read=True)
-    xt = _cfg(_inst_file(tmp_path, "xt", D.EXIT_FREEZE_SHA256))
+    xt = _cfg(_xt_file(tmp_path, monkeypatch))
     xsrc = xt["units"]["fx10"]["card_pooled"]["rho_inst_from"]
     assert DS.measured_rho(xt, xsrc, gate_read=True) == DS.measured_rho(xt, xsrc)
     assert DS.unit_rows(xt, "fx10", gate_read=True) == DS.unit_rows(xt, "fx10")
 
 
-def test_one_entry_point_checks_every_rho_a_power_read_uses(tmp_path: Path) -> None:
+def test_one_entry_point_checks_every_rho_a_power_read_uses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`require_power_read_rho(cfg, power)`: every rho_inst_from file of the sufficiency config and the power
     settings' measured rho_day file must carry the xt-v1 sha; the 0.25 prior reads no file."""
-    xt_inst = _cfg(_inst_file(tmp_path, "xt", D.EXIT_FREEZE_SHA256))
+    xt_inst = _cfg(_xt_file(tmp_path, monkeypatch))
     DS.require_power_read_rho(xt_inst, PowerFirstSettings())
     with pytest.raises(ValueError, match="exit_freeze_sha"):
-        DS.require_power_read_rho(_cfg(_inst_file(tmp_path, "d12", None)), PowerFirstSettings())
+        DS.require_power_read_rho(_cfg(_inst_file(tmp_path, "pre_xt", None)), PowerFirstSettings())
     f, sha = _made(tmp_path, "day_none")
     pre = PowerFirstSettings.model_validate({"rho_day_le_60m": 0.05, "rho_day_measurement": str(f),
                                              "rho_day_measurement_sha256": sha})
@@ -99,13 +121,14 @@ def test_bodies_on_pre_xt_v1_rho_are_flagged_fit_only(tmp_path: Path) -> None:
     assert DS.PRE_XT_V1_FLAG == "pre-xt-v1 ρ_u,inst: fit-only, not a power read"
 
 
-def test_the_rendered_sufficiency_table_flags_the_d12_bodies() -> None:
+def test_the_rendered_sufficiency_table_flags_exactly_the_pre_xt_v1_bodies() -> None:
     import yaml
 
     from goldbot.config import ROOT
     cfg = yaml.safe_load((ROOT / "config" / "data" / "sufficiency.yaml").read_text())
     flagged = DS.pre_xt_v1_rho(cfg)
-    assert flagged                                           # D-12 (PR #466) predates xt-v1
     md = (ROOT / "docs" / "data" / "sufficiency.md").read_text()
     for body in flagged:
         assert f"`{body}`: {DS.PRE_XT_V1_FLAG}" in md
+    # D-12-xt moved the shipped bodies to the xt-v1 file: none is flagged and the table carries no flag line
+    assert flagged == [] and DS.PRE_XT_V1_FLAG not in md

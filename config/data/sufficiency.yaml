@@ -49,8 +49,9 @@ units:
   fx10:
     method: card-2.2                # until the dense factory runs this unit (quant A3)
     label: "FX10 pooled (HistData, A/A-cons)"
-    # the card counts below are pooled at rho_inst 0.5; supply re-divides them at the D-12 binding fx10 rho (S-1)
-    card_pooled: {k: 10, rho_inst: 0.5, rho_inst_from: {file: docs/research/rho-measurement-2026-11.json, key: fx10, stat: max}}
+    # the card counts below are pooled at rho_inst 0.5; supply re-divides them at the D-12-xt binding fx10 rho (S-1;
+    # max(D-12 recorded, xt-v1 re-run) per bucket, quant ruling on #514)
+    card_pooled: {k: 10, rho_inst: 0.5, rho_inst_from: {file: docs/research/rho-measurement-2026-11-28-xt-v1.json, key: fx10, stat: max, sha256: bf1baa5a5bd7765a8165d8b89d4b10fdec00673eb3831839b37f9ff5f7b24ac4}}
     windows: {learn: "2010-01..2017-12", judge: "2018-01..2025-09"}
     learn: [11399, 8468, 6306, 4174, 3221, 1611, 644, 322, 161]
     judge: [10948, 8133, 6056, 4009, 3094, 1547, 619, 309, 155]
@@ -140,7 +141,7 @@ consumers:
 pooled:
   gold_fx:
     label: "gold + graded FX pairs, one body per tf (A2 real rows)"
-    rho_inst_from: {file: docs/research/rho-measurement-2026-11.json, key: "gold+fx10", stat: max}   # D-12 binding
+    rho_inst_from: {file: docs/research/rho-measurement-2026-11-28-xt-v1.json, key: "gold+fx10", stat: max, sha256: bf1baa5a5bd7765a8165d8b89d4b10fdec00673eb3831839b37f9ff5f7b24ac4}   # D-12-xt binding
     serves: [gold]          # once A2 pools gold into this body, the body's route gains reach gold's cells
     learn_members:
       XAUUSD: gold.learn_T2_core6

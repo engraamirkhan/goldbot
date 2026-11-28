@@ -187,9 +187,14 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
     d = json.loads(Path(path).read_text())
     rc, bucket = rho_class(body, members), hold_bucket(tf)
     b = d["binding"]
-    day = b["rho_u_day"][f"{rc}|{bucket}"]
-    rho_day = float(day.get("rho_value", day["max"]))
-    rho_day = max(RHO_FLOOR_LE_60M if bucket == "le60m" else RHO_DAY_PRIOR, rho_day)
+    bt = d.get("binding_by_tf")             # quant ruling 1 on #525: a D-12-xt file binds per tf
+    floor = RHO_FLOOR_LE_60M if bucket == "le60m" else RHO_DAY_PRIOR
+    if bt:
+        v = bt["rho_u_day"][f"{rc}|{tf}"]["max"]                # None at H >= 1 d: design effect 1, the floor
+        rho_day = max(floor, float(v) if v is not None else floor)
+    else:
+        day = b["rho_u_day"][f"{rc}|{bucket}"]
+        rho_day = max(floor, float(day.get("rho_value", day["max"])))
     if body == "gold":
         rho_inst, lam_a = 0.0, LAMBDA_ROWS
     else:
@@ -202,12 +207,20 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
                              "sha (dense_labels.EXIT_FREEZE_SHA256) to check the rho file (D-12-xt): refused")
         if (why := xt_v1_rho_refusal(d, path, freeze_sha)) is not None:
             raise ValueError(why)
-        rho_inst = min(1.0, float(b["rho_u_inst_day_mean"][f"{rc}|{bucket}"]["max"]))
-        tau = max(TAU_A_FLOOR, float(b["tau_a"][f"pooled|{bucket}"]["tau_a"]))     # D-12 (d): the pooled-body row
+        if bt:                                  # quant R2 on #525: the per-tf binding is reproduced from its cells
+            from goldbot.research.rho_verify import verify_inst_by_tf
+            verify_inst_by_tf(d, path)
+        if bt:
+            rho_inst = min(1.0, float(bt["rho_u_inst_day_mean"][f"{rc}|{tf}"]["max"]))
+            tau = max(TAU_A_FLOOR, float(bt["tau_a"][f"pooled|{tf}"]["tau_a"]))  # D-12 (d) pooled row, re-run at tf
+        else:
+            rho_inst = min(1.0, float(b["rho_u_inst_day_mean"][f"{rc}|{bucket}"]["max"]))
+            tau = max(TAU_A_FLOOR, float(b["tau_a"][f"pooled|{bucket}"]["tau_a"]))  # D-12 (d): the pooled-body row
         lam_a = RESIDUAL_VAR / tau ** 2
     xd, xi, defaults = {}, {}, []
+    rho_x = d["rho_x"] if "rho_x" in d else _rho_x_from(d, path)
     for c in columns:
-        cell = d.get("rho_x", {}).get(f"fold_2010_11|{tf}|{rc}|{c}") or {}
+        cell = rho_x.get(f"fold_2010_11|{tf}|{rc}|{c}") or {}
         ud, ui = _upper(cell.get("day")), _upper(cell.get("inst_agg"))
         if ud is None or (body == "pooled" and ui is None):
             defaults.append(c)
@@ -218,6 +231,20 @@ def rho_inputs(path: Path | str, *, body: Body, members: Sequence[str], tf: str,
     return RhoInputs(rho_class=rc, bucket=bucket, rho_u_day=rho_day, rho_u_inst=rho_inst, lambda_a=lam_a,
                      rho_x_day=xd, rho_x_inst=xi, defaults=tuple(defaults), source=str(path),
                      source_sha256=file_sha256(path))
+
+
+def _rho_x_from(d: Mapping[str, Any], path: Path | str) -> dict[str, Any]:
+    """A D-12-xt file carries no rho_x copy (quant F7 on #525): `rho_x_from` names the D-12 file (repo-relative) and
+    its sha256; the label-blind rho_x is read there. No `rho_x_from` = no measured rho_x (every column at 1.0)."""
+    src = d.get("rho_x_from")
+    if not src:
+        return {}
+    from goldbot.config import ROOT
+    f = ROOT / str(src["path"])
+    if not f.is_file() or file_sha256(f) != src.get("sha256"):
+        raise ValueError(f"{path!s}: rho_x_from {src.get('path')!r} is missing or differs from its sha256")
+    out: dict[str, Any] = json.loads(f.read_text()).get("rho_x", {})
+    return out
 
 
 class InstCounts(FrozenRecord):

@@ -1,0 +1,8327 @@
+{
+ "schema": "rho_day_measurement/v3",
+ "item": "D-12-xt (quant ruling on PR #514; sr-v3 card work item D-12-xt)",
+ "exit_freeze_sha": "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826",
+ "geometry": {
+  "freeze_id": "xt-v1",
+  "exit_freeze_sha": "b68e2f7bbce9b3b2e53ea0962010fc4df1161aca83758deaeecb7dc4d0948826",
+  "heads": {
+   "T2": {
+    "name": "T2",
+    "stop_k": 1.0,
+    "target_k": 2.0,
+    "trail_k": null,
+    "be_at_r": null
+   },
+   "T6": {
+    "name": "T6",
+    "stop_k": 2.0,
+    "target_k": null,
+    "trail_k": null,
+    "be_at_r": null
+   }
+  },
+  "h_by_tf_s": {
+   "1m": 3600,
+   "5m": 14400,
+   "15m": 28800,
+   "30m": 57600,
+   "1h": 86400,
+   "2h": 172800,
+   "4h": 432000,
+   "1d": 864000,
+   "1w": 1728000
+  },
+  "h_ref_s": {
+   "1m": 3600,
+   "5m": 14400,
+   "15m": 28800,
+   "30m": 57600,
+   "1h": 86400,
+   "2h": 172800,
+   "4h": 432000,
+   "1d": 864000,
+   "1w": 1728000
+  },
+  "h_ref_factor": {
+   "1m": 1.0,
+   "5m": 1.0,
+   "15m": 1.0,
+   "30m": 1.0,
+   "1h": 1.0,
+   "2h": 1.0,
+   "4h": 1.0,
+   "1d": 1.0,
+   "1w": 1.0
+  },
+  "atr_n": 14,
+  "floor": "1.5 x median 1m TR of the 1440 minutes up to the decision",
+  "clip_r": 10.0,
+  "grid_time_exit_tfs": [
+   "1d",
+   "1w"
+  ],
+  "behaviour_sha": "71f7c90c046ac7e82bb0e2e13a44b6aaeed62ac20fabdcce1cd2956dfbab701c",
+  "labeller": "goldbot/research/dense_labels.py label_rows(SPEC) + attach_tiers(columns=())",
+  "hold_bucket": {
+   "1m": "le60m",
+   "5m": "1h-4h",
+   "15m": "gt4h",
+   "30m": "gt4h",
+   "1h": "gt4h",
+   "2h": "gt4h",
+   "4h": "gt4h",
+   "1d": "gt4h",
+   "1w": "gt4h"
+  }
+ },
+ "window": {
+  "name": "learn",
+  "from": "2010-01-01 00:00:00+00:00",
+  "to_exclusive": "2018-01-01 00:00:00+00:00"
+ },
+ "never_read": [
+  "test_old 2006-02..2009-12",
+  "confirm 2018-01..2025-09",
+  "holdout 2025-10-01 onward",
+  "any dense-label store value (labels computed here) or sr-v3 / H-102 outcome"
+ ],
+ "candidates": [
+  {
+   "kind": "control",
+   "name": "control_grid",
+   "how": "H < 1 d: every (H/tf)-th tf-bar close of each NY-17:00 session day; H >= 1 d: the first close of every ceil(H/1 d)-th business session day (1w: every ceil(H/1 w)-th epoch week); same times on every instrument"
+  },
+  {
+   "kind": "family",
+   "name": "box_break_close",
+   "arms": [
+    "MB15",
+    "W2"
+   ],
+   "replay": "measure_rho.family_decisions (D-12)",
+   "labelled_with": "every xt-v1 geometry; greedy non-overlap at hold H per instrument"
+  },
+  {
+   "kind": "family",
+   "name": "sweep_absorb",
+   "arms": [
+    "MSA15"
+   ],
+   "replay": "measure_rho.family_decisions (D-12)",
+   "labelled_with": "every xt-v1 geometry; greedy non-overlap at hold H per instrument"
+  },
+  {
+   "kind": "family",
+   "name": "session_range_break",
+   "arms": [
+    "GS1"
+   ],
+   "replay": "measure_rho.family_decisions (D-12)",
+   "labelled_with": "every xt-v1 geometry; greedy non-overlap at hold H per instrument"
+  }
+ ],
+ "excluded_arms": [
+  "BXF4H",
+  "DON4",
+  "F1A",
+  "F1A30",
+  "G1A",
+  "KSQ4",
+  "MB1H",
+  "ML2H",
+  "MP2H",
+  "PDC1",
+  "PDC4",
+  "RBR15",
+  "S1A",
+  "S1B",
+  "Z10D",
+  "Z1P",
+  "Z2P",
+  "Z3D",
+  "Z5P",
+  "Z9D"
+ ],
+ "binds_with": {
+  "path": "docs/research/rho-measurement-2026-11.json",
+  "sha256": "58baedcac5115d42476ddcc0856ab25329e580810a1159d592928324499bdcf7",
+  "rule": "rho_u_day, rho_u_inst_day_mean and rho_u_inst_vs_gold_day_mean bind at max(D-12 recorded, re-run) per class x bucket; tau_a / lambda_a are the re-run value only (quant ruling on #514)"
+ },
+ "stated_deviations": [
+  "rows are the factory's usable rows: label window (decision month .. horizon end) A / A-consistent on the D-1 served tiers (gold graded too); D-12 used gold unfiltered and the r11-v2.1 HistData tiers per minute",
+  "HistData has no ask: ask = bid (as the dense labels); XAG and FX bps costs are D-12's assumptions",
+  "rho_x is the D-12 file's (`rho_x_from`; label-blind features; the exit geometry does not enter)",
+  "hold = H puts 1m alone in le60m and 5m alone in 1h-4h; gt4h holds 8 h .. 20 d"
+ ],
+ "geometries": [
+  "1m H=1h T2",
+  "1m H=1h T6",
+  "5m H=4h T2",
+  "5m H=4h T6",
+  "15m H=8h T2",
+  "15m H=8h T6",
+  "30m H=16h T2",
+  "30m H=16h T6",
+  "1h H=1d T2",
+  "1h H=1d T6",
+  "2h H=2d T2",
+  "2h H=2d T6",
+  "4h H=5d T2",
+  "4h H=5d T6",
+  "1d H=10d T2",
+  "1d H=10d T6",
+  "1w H=20d T2",
+  "1w H=20d T6"
+ ],
+ "bootstrap": {
+  "block": "ISO week of the NY-17:00 session day, all instruments jointly",
+  "B": 2000,
+  "upper": "97.5th percentile",
+  "seed": 20261125
+ },
+ "script": {
+  "path": "scripts/research/measure_rho_xt.py",
+  "sha256": "7af9d22cb68c37be22623813c09ca643bfa09ab454cf24793d9f97c52f98a706",
+  "git_blob": "3c1971513694d64e4de82350590933ff0d8bf1e1",
+  "uses": {
+   "scripts/research/measure_rho.py": "91adec307b8ede9b43580a381756da45d7e2dc8784d0815f42b2af862e6a4203",
+   "goldbot/research/dense_labels.py": "d908f93ec30367c138157ddcacb9a9c8935670e91aa89f8c86fd59ad685fb9c8"
+  },
+  "base_commit": "715ed6cb3ffd13cd1a1e1b4e24b81de5544cde99"
+ },
+ "data": {
+  "tiers_file": {
+   "path": "raw/tiers/tiers_served_r11-v2.1.csv",
+   "sha256": "ff653ea7729606613824f25b7a122d69b807c1c57e76a5242b5c16af7466503b",
+   "tiers": [
+    "A",
+    "A-consistent"
+   ]
+  },
+  "d12_family_tiers_file": {
+   "path": "raw/histdata_m1/_reports/tiers_r11-v2.1.csv",
+   "sha256": "e99a63263cce41477ab9ba1d44a43e7a0c8e2f4ff5cdc0fb31c93abcf5a32fe8"
+  },
+  "bars": [
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2010.parquet",
+    "sha256": "884e5bc79d57ec2f1bc4262bbb8aaa88a3a0b15fa7cb84a39e6888eee74c4cc4"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2011.parquet",
+    "sha256": "7fef349911261cce84dc3c32df843923e4174297316f00fdc3b03f86c6662133"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2012.parquet",
+    "sha256": "62c049869f3c9ed1db8513c952902e1793bc37eaff40b2a3ca7e5b5046e3ccf1"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2013.parquet",
+    "sha256": "d941fd18c0aae6f7061a17982cff8207a1518e361be441c37f66ea42036ca92b"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2014.parquet",
+    "sha256": "81ac2782de11e8a74be696d57bfe59f384afd31394dda3b75651292710c305ae"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2015.parquet",
+    "sha256": "21b91735a9a355c23bdd853b87629687af818e37fd89bf049faa7772c29a03b4"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2016.parquet",
+    "sha256": "47aef122dbb9fbee237db6f882a4109bd906c7c75e085254d22e7c994c233326"
+   },
+   {
+    "path": "raw/histdata_m1/AUDJPY/audjpy_1m_bid_2017.parquet",
+    "sha256": "9681a17abc0d0d80817092a90a2563d93b11c37606ce4b457b822d81ecb68eaf"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2011.parquet",
+    "sha256": "f0c9538c4b17cd6e76b723dc0e8729825ef13925ff7b3205cbed3a3f26c56617"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2012.parquet",
+    "sha256": "5bf26b694780ac993ad84cb56c40c66f5a77752a54bb636f26f5a7f34a43dfbe"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2013.parquet",
+    "sha256": "1db035440faa788df1ab8d94e607b37dac8bda5a89d447b955734ac3edd67670"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2014.parquet",
+    "sha256": "b564ac9fb3fb5fdeaee3e6eed27f6584be17ba070c9b4d23e580df794c8a99e8"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2015.parquet",
+    "sha256": "4efd71301cb1fde11685fa320317669a71c3461b258dd1d7060218f84ff34487"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2016.parquet",
+    "sha256": "903f99984a12547dd5fdf3a33586efa2b507e8e6c521a0c0e7beba8f24e072f3"
+   },
+   {
+    "path": "raw/histdata_m1/AUDUSD/audusd_1m_bid_2017.parquet",
+    "sha256": "3d23f92cf1f4eef04af960fd71f461b75463151dd640685e65668c840ef08f09"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2010.parquet",
+    "sha256": "ea9d7472c1b1a8d11c2805ca430675b6dbcdc9dd3d20ab3ed220614567dd59b2"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2011.parquet",
+    "sha256": "0ed096abe057ff33a6e8543c08d1efef9eae8932071939bec775f3344f360ad3"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2012.parquet",
+    "sha256": "0eeb482b62031e0c15a6f7221b4f7a70b286ae382400332db9c0e59a5507ddec"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2013.parquet",
+    "sha256": "5a815310573af1e9c578295042d99bacf7139e3e3400525fd6394e6b65be06d8"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2014.parquet",
+    "sha256": "f15e3e53cc4a02b7d71734ea401398ba47dbcce79f2675479504337588ba4779"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2015.parquet",
+    "sha256": "0f9896c966e0a0436970021fd31e1c7ccb4e8ed1395b1996c0ff8c96bae03e00"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2016.parquet",
+    "sha256": "b9d0b508b4abe105f269c02d80aa1fd472183ca4e16705f29721a3050fa1f846"
+   },
+   {
+    "path": "raw/histdata_m1/EURJPY/eurjpy_1m_bid_2017.parquet",
+    "sha256": "40b5f962680dbcb2b3991128fd95fad916c27e95f4c59bad5c099cef95fc955e"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2010.parquet",
+    "sha256": "529dbcd2892776f794be526b8a5572eaf145dd84b05fdfc28acda7148647e38d"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2011.parquet",
+    "sha256": "a9c46caaf14bfbc61576b3553a37c4790906ab1850551f976525befd5b44ba25"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2012.parquet",
+    "sha256": "2ff5baa9baf5adf0740ff5e6175b6eb5a005efc09c8802eea1d2930996af781e"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2013.parquet",
+    "sha256": "775d0ca0b1dd9c70e26d1cf7f9bf78dbec1addc047e217db1bcec31352d3d7ec"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2014.parquet",
+    "sha256": "4ef9b9fbced31928d0d34ad740759504514664242c60df0d92f2e3b6bcd8e62e"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2015.parquet",
+    "sha256": "219241dad69cc2d42187b416f6ea7db631fb2225850abbf6c8e489bf7bffd78d"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2016.parquet",
+    "sha256": "0019626ac07345feab25c8832c8c7964123770d4b46dc0e551c14e59020832d9"
+   },
+   {
+    "path": "raw/histdata_m1/EURUSD/eurusd_1m_bid_2017.parquet",
+    "sha256": "9ed0f43dae1054c8f71d181047da11a2f157ca6f670c25d2f4a8120143daaa00"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2010.parquet",
+    "sha256": "af12027024dbb5133f3f2dfbadb7a44cd259d32897eb675d962e5c28445f34d2"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2011.parquet",
+    "sha256": "7e4bd9ff39cf016e0d80bb4a2718fadfc5969683ddda6e3551127c00a8bd5ca8"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2012.parquet",
+    "sha256": "4483fae7642e91991f8b6e13bfad08da7438dbd73e19a1f44997317df22f061f"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2013.parquet",
+    "sha256": "f315d7fabffbb0dd94418512405b8000cb4f3098e9059613d8972932b75c6528"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2014.parquet",
+    "sha256": "149e9fb61372050f7a3c993c939d39fac29367ee428ad78b9717f8a012a201a9"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2015.parquet",
+    "sha256": "d9d4c4e7a2fb9ad345e479fc820be4d1723d23d4e20f841e62fb915bdb8009d8"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2016.parquet",
+    "sha256": "5ea283030604b94bad834be0db3354eeeddd627c216d802d25668328c20d4eb1"
+   },
+   {
+    "path": "raw/histdata_m1/GBPJPY/gbpjpy_1m_bid_2017.parquet",
+    "sha256": "7f6a15aaef74d195eb95110f88cf7a60237b138c40ccd4a5e7bd374b82a8faf8"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2010.parquet",
+    "sha256": "56dc69e684f45b8caf2a2faca47d62b1c5278a8e216dd1b5ab8545a54eeb3b8c"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2011.parquet",
+    "sha256": "9bd5dc4287f01d9eec6a59e80f46bb2201886545887ddbf15accd2e3cd6ca709"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2012.parquet",
+    "sha256": "bbb055480efff7bb14356343c592dd5e1a086134a108d2c0f35811b8aa2a2a0a"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2013.parquet",
+    "sha256": "d08a9511d9ba89ca177b3f6c892790ef17ae99653e5163b896783005c82b252e"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2014.parquet",
+    "sha256": "ce232818f81b6d9ab590a19db830f42a82a8f486e4315e1ec1a244ccf331cf3d"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2015.parquet",
+    "sha256": "900b5121820a3afe704e5910ba7746155c83dd572b2925b8bc73e70ea959a8ed"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2016.parquet",
+    "sha256": "4108a7e04bba199887d9914768866036c90098a3225f6b852c7520a32440cc54"
+   },
+   {
+    "path": "raw/histdata_m1/GBPUSD/gbpusd_1m_bid_2017.parquet",
+    "sha256": "2dfb874f57c93638f879d645ed5d282328d9c9ce14d42efa4ccd6a11f091239f"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2010.parquet",
+    "sha256": "d877e064d6d7db7ab287b2a10f8683cc565a449192bd05e0c59fae22e20040eb"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2011.parquet",
+    "sha256": "a3d98b1e70ea2025316915389ed9e8f9050f9e3b360f3f3817d4c57fe198d970"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2012.parquet",
+    "sha256": "ea70203b256ce0d9e9d9cb7db136b880637f9720cdd075d9760213770b0c3435"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2013.parquet",
+    "sha256": "8b5ca6aa5e0616f8abda06aa0f209b4616ebde5a1d4d9f9ff512ed741f95a365"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2014.parquet",
+    "sha256": "38febfe86b8703fdf168f11df43f37822e26510050d143d1102c63aa9be9fe5e"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2015.parquet",
+    "sha256": "a803da113a070aa1fadbf3285e505b07ab270a244c9d109f3c71a20ba5f898e1"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2016.parquet",
+    "sha256": "f6adf1570c2776cefe865318ac3f1fbe96cc58244469f22dc841711707ba545c"
+   },
+   {
+    "path": "raw/histdata_m1/NZDUSD/nzdusd_1m_bid_2017.parquet",
+    "sha256": "7b3c0230146d907fc58b8e0f207abbddbf76cec7d6ff8cdd25ac9b1cec9cbe8c"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2010.parquet",
+    "sha256": "0071ae65af7e6351826563259737671ab3c0f24c650f68fd0462314dd014cd58"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2011.parquet",
+    "sha256": "ba2af226fff30334a261ccb7d9ac10420d8d479b7d26fb345317a0eb9c8cfb59"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2012.parquet",
+    "sha256": "ae9f1637a3d925e84741d21614968ec610ce4f2d25c013298bc7d1e124ce1037"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2013.parquet",
+    "sha256": "ddb04438b7117ea0f6615a73187c01d41b0c5d43b71c96adc6395809ab24935c"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2014.parquet",
+    "sha256": "c2b72d123d98a605388e03c3ad9eb7afec746003c4772b85a85aba4efa248e2a"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2015.parquet",
+    "sha256": "a8aa7dca7dd5f969db4591e0b349dfba23a69c0e2cde441b2f2bdd33d9653dc9"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2016.parquet",
+    "sha256": "67e9d0c1f69b3de5c7559a4078220a97a22aedcb19526edeb26b2cc3a252d3b0"
+   },
+   {
+    "path": "raw/histdata_m1/USDCAD/usdcad_1m_bid_2017.parquet",
+    "sha256": "e30f1e6a80f0bbed32c50da092f48ff4d44b598b127ac08b2e8b9828405f0da9"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2010.parquet",
+    "sha256": "8c25c56c97905d264350fff4ab6583b71ddb3fac301c96ff43da0f410bc83020"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2011.parquet",
+    "sha256": "ac66848c32d5650a92398918543df4b000ffd87c077263c45a0b904fa6f07a58"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2012.parquet",
+    "sha256": "3cf214ef0a889ca9d6dfa273bda524b63fe172bacfaba84dc1af3177fdb35de7"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2013.parquet",
+    "sha256": "be214a1832512286025ee3d102faac8b45df7cc83440f2a6f8a639d8bbc6b6a1"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2014.parquet",
+    "sha256": "eebe7c7d7316a4df044faf0239543d286f9dd5d99dc56fe63571687d9d209ed1"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2015.parquet",
+    "sha256": "d8dae7ec1b1ec268463f4e015fa1b565603444fea488a9fc5df49f9527ae075b"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2016.parquet",
+    "sha256": "2f35b8923f2a237850b55ba935ac2d3827b646390f4d0cf21e5a32e37b4deb60"
+   },
+   {
+    "path": "raw/histdata_m1/USDCHF/usdchf_1m_bid_2017.parquet",
+    "sha256": "ec65bddaeed1a6273a9cd7aa848a1400c670e13e2a9edb493084f7ed8db40ad1"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2010.parquet",
+    "sha256": "6cb058a8c2fdc31f2e00ff9fbf3745b1feedd293a51587d89a4b3bee5d7dc564"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2011.parquet",
+    "sha256": "7ff199a79db91a3fa208693d5f23859838723d07eac0e8a02a500213252026d6"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2012.parquet",
+    "sha256": "c587084e07bb87d5e0210510f8d158aa9260d95eda868718c517b0ac85f3a397"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2013.parquet",
+    "sha256": "84f072338b862c5b20e5714217d869e0331cf79b77b10ef0106e68440a767125"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2014.parquet",
+    "sha256": "b7666bd233209650a2737005860403364bf41665173f776b21535f1d0e3d24e8"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2015.parquet",
+    "sha256": "9164766b40b09fccfa27f3810dea3683f6521a4cb72f6d73fd15fdf4ac528aac"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2016.parquet",
+    "sha256": "cc767616ab547dc0520260290af5d6d88b352428be9d8e51d1966a417a3cd9c5"
+   },
+   {
+    "path": "raw/histdata_m1/USDJPY/usdjpy_1m_bid_2017.parquet",
+    "sha256": "b31925878a6247e4f5b33f1e541509811e6ac5bb05dfc3ba0d63b5c7b867305e"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2010.parquet",
+    "sha256": "365801050701bdbafd2967b5cbc0924ed1c0da367c539a6895060e24d9cf9178"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2011.parquet",
+    "sha256": "e74fe3c426c82cf7140cf6bd9fde394a8dfa58c2da41ae84b3ce18b593f01787"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2012.parquet",
+    "sha256": "b40409b7dd5882ee37d53765c802119dcde8708bb980e982e7dd348bce163135"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2013.parquet",
+    "sha256": "7d465416fc309864585e34510406c25b933dbd48b0b41742c4d8f8f167601f02"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2014.parquet",
+    "sha256": "fdc4d2b3113d5c04b209230b03589e2a8039b4b5baebbbebd5986cf467457b7e"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2015.parquet",
+    "sha256": "ad2d484bcbd1695f8889e1838aa3afb3ebdb9d8eff44ebbc7c40b86170d87713"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2016.parquet",
+    "sha256": "7a20f87f02102a57ca3e6fd3f03a484c82765b46487b43f8222856a02367e619"
+   },
+   {
+    "path": "raw/histdata_m1/XAGUSD/xagusd_1m_bid_2017.parquet",
+    "sha256": "7aeff6ce70e2229654778a44821059f12eb8ee554b56a383827340651f0bc9ad"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2010.parquet",
+    "sha256": "26139f0b026b52cd2f953f574fe933395630fd63a868dd12d007b9364b5f54e6"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2011.parquet",
+    "sha256": "a1497c69398a027d4909dff403246ab90016f3f52ee85e1ab5b435ba9c557abc"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2012.parquet",
+    "sha256": "89f4b77dbfe3f433b2952b0a94c55b870e7fe94f50fd3ae4dec0d05d3552b372"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2013.parquet",
+    "sha256": "fe31b84429021a0dcbbb5918e19588064fd53649d5a203f4ca6ed63d8fd2f73a"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2014.parquet",
+    "sha256": "be2bf066f0c4b2308b7adc6599ea236b7200b694016c0127f92c35655224f842"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2015.parquet",
+    "sha256": "046ddd848faeedc77ed9f8f36903702534ffe801fc8962d47fd63f2aec77db81"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2016.parquet",
+    "sha256": "9c6073ccee3290eedd9e7de69e55a0f5bb7cd366dede1f59cff37cbcce445641"
+   },
+   {
+    "path": "raw/xauusd_1m_dukascopy_2017.parquet",
+    "sha256": "e04d7da0d7e92b3e2e9d2fca87f87955d050f0476175e847388584e6bda1b26f"
+   }
+  ],
+  "instruments": {
+   "AUDJPY": {
+    "minutes": 2620528,
+    "source": "histdata:AUDJPY",
+    "bid_only": true,
+    "first": "2010-01-03 22:02:00+00:00",
+    "last": "2017-12-29 21:57:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2734,
+     "family box_break_close 1m H=1h T2": 2031,
+     "family box_break_close 1m H=1h T6": 2031,
+     "family sweep_absorb decisions": 1451,
+     "family sweep_absorb 1m H=1h T2": 1424,
+     "family sweep_absorb 1m H=1h T6": 1424,
+     "family session_range_break decisions": 1974,
+     "family session_range_break 1m H=1h T2": 1973,
+     "family session_range_break 1m H=1h T6": 1973,
+     "family all decisions": 6095,
+     "family all 1m H=1h T2": 4792,
+     "family all 1m H=1h T6": 4792,
+     "1m H=1h T2": 39574,
+     "1m H=1h T6": 39574,
+     "family box_break_close 5m H=4h T2": 1584,
+     "family box_break_close 5m H=4h T6": 1584,
+     "family sweep_absorb 5m H=4h T2": 1163,
+     "family sweep_absorb 5m H=4h T6": 1163,
+     "family session_range_break 5m H=4h T2": 1892,
+     "family session_range_break 5m H=4h T6": 1892,
+     "family all 5m H=4h T2": 3364,
+     "family all 5m H=4h T6": 3364,
+     "5m H=4h T2": 10166,
+     "5m H=4h T6": 10166,
+     "family box_break_close 15m H=8h T2": 1363,
+     "family box_break_close 15m H=8h T6": 1363,
+     "family sweep_absorb 15m H=8h T2": 1020,
+     "family sweep_absorb 15m H=8h T6": 1020,
+     "family session_range_break 15m H=8h T2": 1405,
+     "family session_range_break 15m H=8h T6": 1405,
+     "family all 15m H=8h T2": 2398,
+     "family all 15m H=8h T6": 2398,
+     "15m H=8h T2": 5245,
+     "15m H=8h T6": 5245,
+     "family box_break_close 30m H=16h T2": 1057,
+     "family box_break_close 30m H=16h T6": 1057,
+     "family sweep_absorb 30m H=16h T2": 934,
+     "family sweep_absorb 30m H=16h T6": 934,
+     "family session_range_break 30m H=16h T2": 1400,
+     "family session_range_break 30m H=16h T6": 1400,
+     "family all 30m H=16h T2": 1686,
+     "family all 30m H=16h T6": 1686,
+     "30m H=16h T2": 3602,
+     "30m H=16h T6": 3602,
+     "family box_break_close 1h H=1d T2": 888,
+     "family box_break_close 1h H=1d T6": 888,
+     "family sweep_absorb 1h H=1d T2": 792,
+     "family sweep_absorb 1h H=1d T6": 792,
+     "family session_range_break 1h H=1d T2": 1110,
+     "family session_range_break 1h H=1d T6": 1110,
+     "family all 1h H=1d T2": 1369,
+     "family all 1h H=1d T6": 1369,
+     "1h H=1d T2": 1636,
+     "1h H=1d T6": 1636,
+     "family box_break_close 2h H=2d T2": 622,
+     "family box_break_close 2h H=2d T6": 622,
+     "family sweep_absorb 2h H=2d T2": 581,
+     "family sweep_absorb 2h H=2d T6": 581,
+     "family session_range_break 2h H=2d T2": 729,
+     "family session_range_break 2h H=2d T6": 729,
+     "family all 2h H=2d T2": 881,
+     "family all 2h H=2d T6": 881,
+     "2h H=2d T2": 815,
+     "2h H=2d T6": 815,
+     "family box_break_close 4h H=5d T2": 322,
+     "family box_break_close 4h H=5d T6": 322,
+     "family sweep_absorb 4h H=5d T2": 318,
+     "family sweep_absorb 4h H=5d T6": 318,
+     "family session_range_break 4h H=5d T2": 324,
+     "family session_range_break 4h H=5d T6": 324,
+     "family all 4h H=5d T2": 327,
+     "family all 4h H=5d T6": 327,
+     "4h H=5d T2": 322,
+     "4h H=5d T6": 322,
+     "family box_break_close 1d H=10d T2": 192,
+     "family box_break_close 1d H=10d T6": 192,
+     "family sweep_absorb 1d H=10d T2": 188,
+     "family sweep_absorb 1d H=10d T6": 188,
+     "family session_range_break 1d H=10d T2": 207,
+     "family session_range_break 1d H=10d T6": 207,
+     "family all 1d H=10d T2": 213,
+     "family all 1d H=10d T6": 213,
+     "1d H=10d T2": 156,
+     "1d H=10d T6": 156,
+     "family box_break_close 1w H=20d T2": 100,
+     "family box_break_close 1w H=20d T6": 100,
+     "family sweep_absorb 1w H=20d T2": 100,
+     "family sweep_absorb 1w H=20d T6": 100,
+     "family session_range_break 1w H=20d T2": 101,
+     "family session_range_break 1w H=20d T6": 101,
+     "family all 1w H=20d T2": 103,
+     "family all 1w H=20d T6": 103,
+     "1w H=20d T2": 100,
+     "1w H=20d T6": 100
+    },
+    "wall_s": 68.0
+   },
+   "AUDUSD": {
+    "minutes": 2572291,
+    "source": "histdata:AUDUSD",
+    "bid_only": true,
+    "first": "2011-01-02 22:00:00+00:00",
+    "last": "2017-12-29 21:57:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2921,
+     "family box_break_close 1m H=1h T2": 2170,
+     "family box_break_close 1m H=1h T6": 2170,
+     "family sweep_absorb decisions": 1335,
+     "family sweep_absorb 1m H=1h T2": 1306,
+     "family sweep_absorb 1m H=1h T6": 1306,
+     "family session_range_break decisions": 2222,
+     "family session_range_break 1m H=1h T2": 2222,
+     "family session_range_break 1m H=1h T6": 2222,
+     "family all decisions": 6407,
+     "family all 1m H=1h T2": 5078,
+     "family all 1m H=1h T6": 5078,
+     "1m H=1h T2": 42017,
+     "1m H=1h T6": 42017,
+     "family box_break_close 5m H=4h T2": 1705,
+     "family box_break_close 5m H=4h T6": 1705,
+     "family sweep_absorb 5m H=4h T2": 1096,
+     "family sweep_absorb 5m H=4h T6": 1096,
+     "family session_range_break 5m H=4h T2": 2104,
+     "family session_range_break 5m H=4h T6": 2104,
+     "family all 5m H=4h T2": 3589,
+     "family all 5m H=4h T6": 3589,
+     "5m H=4h T2": 10827,
+     "5m H=4h T6": 10827,
+     "family box_break_close 15m H=8h T2": 1444,
+     "family box_break_close 15m H=8h T6": 1444,
+     "family sweep_absorb 15m H=8h T2": 970,
+     "family sweep_absorb 15m H=8h T6": 970,
+     "family session_range_break 15m H=8h T2": 1545,
+     "family session_range_break 15m H=8h T6": 1545,
+     "family all 15m H=8h T2": 2537,
+     "family all 15m H=8h T6": 2537,
+     "15m H=8h T2": 5589,
+     "15m H=8h T6": 5589,
+     "family box_break_close 30m H=16h T2": 1147,
+     "family box_break_close 30m H=16h T6": 1147,
+     "family sweep_absorb 30m H=16h T2": 910,
+     "family sweep_absorb 30m H=16h T6": 910,
+     "family session_range_break 30m H=16h T2": 1543,
+     "family session_range_break 30m H=16h T6": 1543,
+     "family all 30m H=16h T2": 1785,
+     "family all 30m H=16h T6": 1785,
+     "30m H=16h T2": 3840,
+     "30m H=16h T6": 3840,
+     "family box_break_close 1h H=1d T2": 966,
+     "family box_break_close 1h H=1d T6": 966,
+     "family sweep_absorb 1h H=1d T2": 799,
+     "family sweep_absorb 1h H=1d T6": 799,
+     "family session_range_break 1h H=1d T2": 1216,
+     "family session_range_break 1h H=1d T6": 1216,
+     "family all 1h H=1d T2": 1479,
+     "family all 1h H=1d T6": 1479,
+     "1h H=1d T2": 1750,
+     "1h H=1d T6": 1750,
+     "family box_break_close 2h H=2d T2": 681,
+     "family box_break_close 2h H=2d T6": 681,
+     "family sweep_absorb 2h H=2d T2": 597,
+     "family sweep_absorb 2h H=2d T6": 597,
+     "family session_range_break 2h H=2d T2": 795,
+     "family session_range_break 2h H=2d T6": 795,
+     "family all 2h H=2d T2": 938,
+     "family all 2h H=2d T6": 938,
+     "2h H=2d T2": 874,
+     "2h H=2d T6": 874,
+     "family box_break_close 4h H=5d T2": 347,
+     "family box_break_close 4h H=5d T6": 347,
+     "family sweep_absorb 4h H=5d T2": 333,
+     "family sweep_absorb 4h H=5d T6": 333,
+     "family session_range_break 4h H=5d T2": 349,
+     "family session_range_break 4h H=5d T6": 349,
+     "family all 4h H=5d T2": 349,
+     "family all 4h H=5d T6": 349,
+     "4h H=5d T2": 347,
+     "4h H=5d T6": 347,
+     "family box_break_close 1d H=10d T2": 213,
+     "family box_break_close 1d H=10d T6": 213,
+     "family sweep_absorb 1d H=10d T2": 208,
+     "family sweep_absorb 1d H=10d T6": 208,
+     "family session_range_break 1d H=10d T2": 224,
+     "family session_range_break 1d H=10d T6": 224,
+     "family all 1d H=10d T2": 230,
+     "family all 1d H=10d T6": 230,
+     "1d H=10d T2": 171,
+     "1d H=10d T6": 171,
+     "family box_break_close 1w H=20d T2": 110,
+     "family box_break_close 1w H=20d T6": 110,
+     "family sweep_absorb 1w H=20d T2": 106,
+     "family sweep_absorb 1w H=20d T6": 106,
+     "family session_range_break 1w H=20d T2": 111,
+     "family session_range_break 1w H=20d T6": 111,
+     "family all 1w H=20d T2": 111,
+     "family all 1w H=20d T6": 111,
+     "1w H=20d T2": 110,
+     "1w H=20d T6": 110
+    },
+    "wall_s": 70.2
+   },
+   "EURJPY": {
+    "minutes": 2962640,
+    "source": "histdata:EURJPY",
+    "bid_only": true,
+    "first": "2010-01-03 22:01:00+00:00",
+    "last": "2017-12-29 21:57:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2902,
+     "family box_break_close 1m H=1h T2": 2174,
+     "family box_break_close 1m H=1h T6": 2174,
+     "family sweep_absorb decisions": 1489,
+     "family sweep_absorb 1m H=1h T2": 1456,
+     "family sweep_absorb 1m H=1h T6": 1456,
+     "family session_range_break decisions": 2516,
+     "family session_range_break 1m H=1h T2": 2516,
+     "family session_range_break 1m H=1h T6": 2516,
+     "family all decisions": 6820,
+     "family all 1m H=1h T2": 5472,
+     "family all 1m H=1h T6": 5472,
+     "1m H=1h T2": 45341,
+     "1m H=1h T6": 45341,
+     "family box_break_close 5m H=4h T2": 1724,
+     "family box_break_close 5m H=4h T6": 1724,
+     "family sweep_absorb 5m H=4h T2": 1232,
+     "family sweep_absorb 5m H=4h T6": 1232,
+     "family session_range_break 5m H=4h T2": 2414,
+     "family session_range_break 5m H=4h T6": 2414,
+     "family all 5m H=4h T2": 3868,
+     "family all 5m H=4h T6": 3868,
+     "5m H=4h T2": 11635,
+     "5m H=4h T6": 11635,
+     "family box_break_close 15m H=8h T2": 1476,
+     "family box_break_close 15m H=8h T6": 1476,
+     "family sweep_absorb 15m H=8h T2": 1074,
+     "family sweep_absorb 15m H=8h T6": 1074,
+     "family session_range_break 15m H=8h T2": 1715,
+     "family session_range_break 15m H=8h T6": 1715,
+     "family all 15m H=8h T2": 2692,
+     "family all 15m H=8h T6": 2692,
+     "15m H=8h T2": 6002,
+     "15m H=8h T6": 6002,
+     "family box_break_close 30m H=16h T2": 1190,
+     "family box_break_close 30m H=16h T6": 1190,
+     "family sweep_absorb 30m H=16h T2": 1004,
+     "family sweep_absorb 30m H=16h T6": 1004,
+     "family session_range_break 30m H=16h T2": 1708,
+     "family session_range_break 30m H=16h T6": 1708,
+     "family all 30m H=16h T2": 1928,
+     "family all 30m H=16h T6": 1928,
+     "30m H=16h T2": 4122,
+     "30m H=16h T6": 4122,
+     "family box_break_close 1h H=1d T2": 996,
+     "family box_break_close 1h H=1d T6": 996,
+     "family sweep_absorb 1h H=1d T2": 867,
+     "family sweep_absorb 1h H=1d T6": 867,
+     "family session_range_break 1h H=1d T2": 1355,
+     "family session_range_break 1h H=1d T6": 1355,
+     "family all 1h H=1d T2": 1601,
+     "family all 1h H=1d T6": 1601,
+     "1h H=1d T2": 1874,
+     "1h H=1d T6": 1874,
+     "family box_break_close 2h H=2d T2": 701,
+     "family box_break_close 2h H=2d T6": 701,
+     "family sweep_absorb 2h H=2d T2": 646,
+     "family sweep_absorb 2h H=2d T6": 646,
+     "family session_range_break 2h H=2d T2": 871,
+     "family session_range_break 2h H=2d T6": 871,
+     "family all 2h H=2d T2": 1016,
+     "family all 2h H=2d T6": 1016,
+     "2h H=2d T2": 935,
+     "2h H=2d T6": 935,
+     "family box_break_close 4h H=5d T2": 369,
+     "family box_break_close 4h H=5d T6": 369,
+     "family sweep_absorb 4h H=5d T2": 360,
+     "family sweep_absorb 4h H=5d T6": 360,
+     "family session_range_break 4h H=5d T2": 371,
+     "family session_range_break 4h H=5d T6": 371,
+     "family all 4h H=5d T2": 371,
+     "family all 4h H=5d T6": 371,
+     "4h H=5d T2": 366,
+     "4h H=5d T6": 366,
+     "family box_break_close 1d H=10d T2": 220,
+     "family box_break_close 1d H=10d T6": 220,
+     "family sweep_absorb 1d H=10d T2": 211,
+     "family sweep_absorb 1d H=10d T6": 211,
+     "family session_range_break 1d H=10d T2": 240,
+     "family session_range_break 1d H=10d T6": 240,
+     "family all 1d H=10d T2": 245,
+     "family all 1d H=10d T6": 245,
+     "1d H=10d T2": 179,
+     "1d H=10d T6": 179,
+     "family box_break_close 1w H=20d T2": 114,
+     "family box_break_close 1w H=20d T6": 114,
+     "family sweep_absorb 1w H=20d T2": 111,
+     "family sweep_absorb 1w H=20d T6": 111,
+     "family session_range_break 1w H=20d T2": 116,
+     "family session_range_break 1w H=20d T6": 116,
+     "family all 1w H=20d T2": 116,
+     "family all 1w H=20d T6": 116,
+     "1w H=20d T2": 113,
+     "1w H=20d T6": 113
+    },
+    "wall_s": 79.8
+   },
+   "EURUSD": {
+    "minutes": 2936462,
+    "source": "histdata:EURUSD",
+    "bid_only": true,
+    "first": "2010-01-03 22:00:00+00:00",
+    "last": "2017-12-29 21:57:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2974,
+     "family box_break_close 1m H=1h T2": 2246,
+     "family box_break_close 1m H=1h T6": 2246,
+     "family sweep_absorb decisions": 1560,
+     "family sweep_absorb 1m H=1h T2": 1527,
+     "family sweep_absorb 1m H=1h T6": 1527,
+     "family session_range_break decisions": 2805,
+     "family session_range_break 1m H=1h T2": 2805,
+     "family session_range_break 1m H=1h T6": 2805,
+     "family all decisions": 7219,
+     "family all 1m H=1h T2": 5835,
+     "family all 1m H=1h T6": 5835,
+     "1m H=1h T2": 47123,
+     "1m H=1h T6": 47123,
+     "family box_break_close 5m H=4h T2": 1805,
+     "family box_break_close 5m H=4h T6": 1805,
+     "family sweep_absorb 5m H=4h T2": 1296,
+     "family sweep_absorb 5m H=4h T6": 1296,
+     "family session_range_break 5m H=4h T2": 2701,
+     "family session_range_break 5m H=4h T6": 2701,
+     "family all 5m H=4h T2": 4184,
+     "family all 5m H=4h T6": 4184,
+     "5m H=4h T2": 12171,
+     "5m H=4h T6": 12171,
+     "family box_break_close 15m H=8h T2": 1576,
+     "family box_break_close 15m H=8h T6": 1576,
+     "family sweep_absorb 15m H=8h T2": 1144,
+     "family sweep_absorb 15m H=8h T6": 1144,
+     "family session_range_break 15m H=8h T2": 1839,
+     "family session_range_break 15m H=8h T6": 1839,
+     "family all 15m H=8h T2": 2859,
+     "family all 15m H=8h T6": 2859,
+     "15m H=8h T2": 6281,
+     "15m H=8h T6": 6281,
+     "family box_break_close 30m H=16h T2": 1260,
+     "family box_break_close 30m H=16h T6": 1260,
+     "family sweep_absorb 30m H=16h T2": 1069,
+     "family sweep_absorb 30m H=16h T6": 1069,
+     "family session_range_break 30m H=16h T2": 1836,
+     "family session_range_break 30m H=16h T6": 1836,
+     "family all 30m H=16h T2": 2019,
+     "family all 30m H=16h T6": 2019,
+     "30m H=16h T2": 4315,
+     "30m H=16h T6": 4315,
+     "family box_break_close 1h H=1d T2": 1067,
+     "family box_break_close 1h H=1d T6": 1067,
+     "family sweep_absorb 1h H=1d T2": 901,
+     "family sweep_absorb 1h H=1d T6": 901,
+     "family session_range_break 1h H=1d T2": 1472,
+     "family session_range_break 1h H=1d T6": 1472,
+     "family all 1h H=1d T2": 1699,
+     "family all 1h H=1d T6": 1699,
+     "1h H=1d T2": 1964,
+     "1h H=1d T6": 1964,
+     "family box_break_close 2h H=2d T2": 749,
+     "family box_break_close 2h H=2d T6": 749,
+     "family sweep_absorb 2h H=2d T2": 664,
+     "family sweep_absorb 2h H=2d T6": 664,
+     "family session_range_break 2h H=2d T2": 931,
+     "family session_range_break 2h H=2d T6": 931,
+     "family all 2h H=2d T2": 1081,
+     "family all 2h H=2d T6": 1081,
+     "2h H=2d T2": 980,
+     "2h H=2d T6": 980,
+     "family box_break_close 4h H=5d T2": 388,
+     "family box_break_close 4h H=5d T6": 388,
+     "family sweep_absorb 4h H=5d T2": 377,
+     "family sweep_absorb 4h H=5d T6": 377,
+     "family session_range_break 4h H=5d T2": 391,
+     "family session_range_break 4h H=5d T6": 391,
+     "family all 4h H=5d T2": 391,
+     "family all 4h H=5d T6": 391,
+     "4h H=5d T2": 389,
+     "4h H=5d T6": 389,
+     "family box_break_close 1d H=10d T2": 235,
+     "family box_break_close 1d H=10d T6": 235,
+     "family sweep_absorb 1d H=10d T2": 227,
+     "family sweep_absorb 1d H=10d T6": 227,
+     "family session_range_break 1d H=10d T2": 253,
+     "family session_range_break 1d H=10d T6": 253,
+     "family all 1d H=10d T2": 258,
+     "family all 1d H=10d T6": 258,
+     "1d H=10d T2": 190,
+     "1d H=10d T6": 190,
+     "family box_break_close 1w H=20d T2": 123,
+     "family box_break_close 1w H=20d T6": 123,
+     "family sweep_absorb 1w H=20d T2": 119,
+     "family sweep_absorb 1w H=20d T6": 119,
+     "family session_range_break 1w H=20d T2": 123,
+     "family session_range_break 1w H=20d T6": 123,
+     "family all 1w H=20d T2": 123,
+     "family all 1w H=20d T6": 123,
+     "1w H=20d T2": 123,
+     "1w H=20d T6": 123
+    },
+    "wall_s": 85.3
+   },
+   "GBPJPY": {
+    "minutes": 2958604,
+    "source": "histdata:GBPJPY",
+    "bid_only": true,
+    "first": "2010-01-03 22:00:00+00:00",
+    "last": "2017-12-29 21:55:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 3046,
+     "family box_break_close 1m H=1h T2": 2253,
+     "family box_break_close 1m H=1h T6": 2253,
+     "family sweep_absorb decisions": 1661,
+     "family sweep_absorb 1m H=1h T2": 1611,
+     "family sweep_absorb 1m H=1h T6": 1611,
+     "family session_range_break decisions": 2536,
+     "family session_range_break 1m H=1h T2": 2535,
+     "family session_range_break 1m H=1h T6": 2535,
+     "family all decisions": 7133,
+     "family all 1m H=1h T2": 5679,
+     "family all 1m H=1h T6": 5679,
+     "1m H=1h T2": 46330,
+     "1m H=1h T6": 46330,
+     "family box_break_close 5m H=4h T2": 1789,
+     "family box_break_close 5m H=4h T6": 1789,
+     "family sweep_absorb 5m H=4h T2": 1325,
+     "family sweep_absorb 5m H=4h T6": 1325,
+     "family session_range_break 5m H=4h T2": 2435,
+     "family session_range_break 5m H=4h T6": 2435,
+     "family all 5m H=4h T2": 4020,
+     "family all 5m H=4h T6": 4020,
+     "5m H=4h T2": 11892,
+     "5m H=4h T6": 11892,
+     "family box_break_close 15m H=8h T2": 1541,
+     "family box_break_close 15m H=8h T6": 1541,
+     "family sweep_absorb 15m H=8h T2": 1160,
+     "family sweep_absorb 15m H=8h T6": 1160,
+     "family session_range_break 15m H=8h T2": 1748,
+     "family session_range_break 15m H=8h T6": 1748,
+     "family all 15m H=8h T2": 2813,
+     "family all 15m H=8h T6": 2813,
+     "15m H=8h T2": 6138,
+     "15m H=8h T6": 6138,
+     "family box_break_close 30m H=16h T2": 1214,
+     "family box_break_close 30m H=16h T6": 1214,
+     "family sweep_absorb 30m H=16h T2": 1074,
+     "family sweep_absorb 30m H=16h T6": 1074,
+     "family session_range_break 30m H=16h T2": 1742,
+     "family session_range_break 30m H=16h T6": 1742,
+     "family all 30m H=16h T2": 1973,
+     "family all 30m H=16h T6": 1973,
+     "30m H=16h T2": 4216,
+     "30m H=16h T6": 4216,
+     "family box_break_close 1h H=1d T2": 1035,
+     "family box_break_close 1h H=1d T6": 1035,
+     "family sweep_absorb 1h H=1d T2": 905,
+     "family sweep_absorb 1h H=1d T6": 905,
+     "family session_range_break 1h H=1d T2": 1371,
+     "family session_range_break 1h H=1d T6": 1371,
+     "family all 1h H=1d T2": 1648,
+     "family all 1h H=1d T6": 1648,
+     "1h H=1d T2": 1918,
+     "1h H=1d T6": 1918,
+     "family box_break_close 2h H=2d T2": 708,
+     "family box_break_close 2h H=2d T6": 708,
+     "family sweep_absorb 2h H=2d T2": 681,
+     "family sweep_absorb 2h H=2d T6": 681,
+     "family session_range_break 2h H=2d T2": 874,
+     "family session_range_break 2h H=2d T6": 874,
+     "family all 2h H=2d T2": 1030,
+     "family all 2h H=2d T6": 1030,
+     "2h H=2d T2": 957,
+     "2h H=2d T6": 957,
+     "family box_break_close 4h H=5d T2": 378,
+     "family box_break_close 4h H=5d T6": 378,
+     "family sweep_absorb 4h H=5d T2": 378,
+     "family sweep_absorb 4h H=5d T6": 378,
+     "family session_range_break 4h H=5d T2": 382,
+     "family session_range_break 4h H=5d T6": 382,
+     "family all 4h H=5d T2": 382,
+     "family all 4h H=5d T6": 382,
+     "4h H=5d T2": 379,
+     "4h H=5d T6": 379,
+     "family box_break_close 1d H=10d T2": 227,
+     "family box_break_close 1d H=10d T6": 227,
+     "family sweep_absorb 1d H=10d T2": 223,
+     "family sweep_absorb 1d H=10d T6": 223,
+     "family session_range_break 1d H=10d T2": 245,
+     "family session_range_break 1d H=10d T6": 245,
+     "family all 1d H=10d T2": 252,
+     "family all 1d H=10d T6": 252,
+     "1d H=10d T2": 185,
+     "1d H=10d T6": 185,
+     "family box_break_close 1w H=20d T2": 117,
+     "family box_break_close 1w H=20d T6": 117,
+     "family sweep_absorb 1w H=20d T2": 118,
+     "family sweep_absorb 1w H=20d T6": 118,
+     "family session_range_break 1w H=20d T2": 120,
+     "family session_range_break 1w H=20d T6": 120,
+     "family all 1w H=20d T2": 120,
+     "family all 1w H=20d T6": 120,
+     "1w H=20d T2": 119,
+     "1w H=20d T6": 119
+    },
+    "wall_s": 85.8
+   },
+   "GBPUSD": {
+    "minutes": 2925375,
+    "source": "histdata:GBPUSD",
+    "bid_only": true,
+    "first": "2010-01-03 22:00:00+00:00",
+    "last": "2017-12-29 21:57:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2894,
+     "family box_break_close 1m H=1h T2": 2191,
+     "family box_break_close 1m H=1h T6": 2191,
+     "family sweep_absorb decisions": 1605,
+     "family sweep_absorb 1m H=1h T2": 1566,
+     "family sweep_absorb 1m H=1h T6": 1566,
+     "family session_range_break decisions": 2851,
+     "family session_range_break 1m H=1h T2": 2851,
+     "family session_range_break 1m H=1h T6": 2851,
+     "family all decisions": 7231,
+     "family all 1m H=1h T2": 5923,
+     "family all 1m H=1h T6": 5923,
+     "1m H=1h T2": 47499,
+     "1m H=1h T6": 47499,
+     "family box_break_close 5m H=4h T2": 1791,
+     "family box_break_close 5m H=4h T6": 1791,
+     "family sweep_absorb 5m H=4h T2": 1315,
+     "family sweep_absorb 5m H=4h T6": 1315,
+     "family session_range_break 5m H=4h T2": 2736,
+     "family session_range_break 5m H=4h T6": 2736,
+     "family all 5m H=4h T2": 4216,
+     "family all 5m H=4h T6": 4216,
+     "5m H=4h T2": 12306,
+     "5m H=4h T6": 12306,
+     "family box_break_close 15m H=8h T2": 1531,
+     "family box_break_close 15m H=8h T6": 1531,
+     "family sweep_absorb 15m H=8h T2": 1164,
+     "family sweep_absorb 15m H=8h T6": 1164,
+     "family session_range_break 15m H=8h T2": 1887,
+     "family session_range_break 15m H=8h T6": 1887,
+     "family all 15m H=8h T2": 2920,
+     "family all 15m H=8h T6": 2920,
+     "15m H=8h T2": 6351,
+     "15m H=8h T6": 6351,
+     "family box_break_close 30m H=16h T2": 1230,
+     "family box_break_close 30m H=16h T6": 1230,
+     "family sweep_absorb 30m H=16h T2": 1082,
+     "family sweep_absorb 30m H=16h T6": 1082,
+     "family session_range_break 30m H=16h T2": 1882,
+     "family session_range_break 30m H=16h T6": 1882,
+     "family all 30m H=16h T2": 2041,
+     "family all 30m H=16h T6": 2041,
+     "30m H=16h T2": 4363,
+     "30m H=16h T6": 4363,
+     "family box_break_close 1h H=1d T2": 1038,
+     "family box_break_close 1h H=1d T6": 1038,
+     "family sweep_absorb 1h H=1d T2": 926,
+     "family sweep_absorb 1h H=1d T6": 926,
+     "family session_range_break 1h H=1d T2": 1485,
+     "family session_range_break 1h H=1d T6": 1485,
+     "family all 1h H=1d T2": 1709,
+     "family all 1h H=1d T6": 1709,
+     "1h H=1d T2": 1987,
+     "1h H=1d T6": 1987,
+     "family box_break_close 2h H=2d T2": 745,
+     "family box_break_close 2h H=2d T6": 745,
+     "family sweep_absorb 2h H=2d T2": 681,
+     "family sweep_absorb 2h H=2d T6": 681,
+     "family session_range_break 2h H=2d T2": 942,
+     "family session_range_break 2h H=2d T6": 942,
+     "family all 2h H=2d T2": 1100,
+     "family all 2h H=2d T6": 1100,
+     "2h H=2d T2": 992,
+     "2h H=2d T6": 992,
+     "family box_break_close 4h H=5d T2": 393,
+     "family box_break_close 4h H=5d T6": 393,
+     "family sweep_absorb 4h H=5d T2": 384,
+     "family sweep_absorb 4h H=5d T6": 384,
+     "family session_range_break 4h H=5d T2": 396,
+     "family session_range_break 4h H=5d T6": 396,
+     "family all 4h H=5d T2": 396,
+     "family all 4h H=5d T6": 396,
+     "4h H=5d T2": 394,
+     "4h H=5d T6": 394,
+     "family box_break_close 1d H=10d T2": 237,
+     "family box_break_close 1d H=10d T6": 237,
+     "family sweep_absorb 1d H=10d T2": 230,
+     "family sweep_absorb 1d H=10d T6": 230,
+     "family session_range_break 1d H=10d T2": 258,
+     "family session_range_break 1d H=10d T6": 258,
+     "family all 1d H=10d T2": 262,
+     "family all 1d H=10d T6": 262,
+     "1d H=10d T2": 193,
+     "1d H=10d T6": 193,
+     "family box_break_close 1w H=20d T2": 125,
+     "family box_break_close 1w H=20d T6": 125,
+     "family sweep_absorb 1w H=20d T2": 122,
+     "family sweep_absorb 1w H=20d T6": 122,
+     "family session_range_break 1w H=20d T2": 126,
+     "family session_range_break 1w H=20d T6": 126,
+     "family all 1w H=20d T2": 126,
+     "family all 1w H=20d T6": 126,
+     "1w H=20d T2": 125,
+     "1w H=20d T6": 125
+    },
+    "wall_s": 90.5
+   },
+   "NZDUSD": {
+    "minutes": 2856636,
+    "source": "histdata:NZDUSD",
+    "bid_only": true,
+    "first": "2010-01-03 22:01:00+00:00",
+    "last": "2017-12-29 21:56:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2318,
+     "family box_break_close 1m H=1h T2": 1721,
+     "family box_break_close 1m H=1h T6": 1721,
+     "family sweep_absorb decisions": 1083,
+     "family sweep_absorb 1m H=1h T2": 1056,
+     "family sweep_absorb 1m H=1h T6": 1056,
+     "family session_range_break decisions": 1792,
+     "family session_range_break 1m H=1h T2": 1792,
+     "family session_range_break 1m H=1h T6": 1792,
+     "family all decisions": 5126,
+     "family all 1m H=1h T2": 4043,
+     "family all 1m H=1h T6": 4043,
+     "1m H=1h T2": 33320,
+     "1m H=1h T6": 33320,
+     "family box_break_close 5m H=4h T2": 1366,
+     "family box_break_close 5m H=4h T6": 1366,
+     "family sweep_absorb 5m H=4h T2": 913,
+     "family sweep_absorb 5m H=4h T6": 913,
+     "family session_range_break 5m H=4h T2": 1709,
+     "family session_range_break 5m H=4h T6": 1709,
+     "family all 5m H=4h T2": 2888,
+     "family all 5m H=4h T6": 2888,
+     "5m H=4h T2": 8648,
+     "5m H=4h T6": 8648,
+     "family box_break_close 15m H=8h T2": 1166,
+     "family box_break_close 15m H=8h T6": 1166,
+     "family sweep_absorb 15m H=8h T2": 790,
+     "family sweep_absorb 15m H=8h T6": 790,
+     "family session_range_break 15m H=8h T2": 1239,
+     "family session_range_break 15m H=8h T6": 1239,
+     "family all 15m H=8h T2": 2026,
+     "family all 15m H=8h T6": 2026,
+     "15m H=8h T2": 4459,
+     "15m H=8h T6": 4459,
+     "family box_break_close 30m H=16h T2": 930,
+     "family box_break_close 30m H=16h T6": 930,
+     "family sweep_absorb 30m H=16h T2": 731,
+     "family sweep_absorb 30m H=16h T6": 731,
+     "family session_range_break 30m H=16h T2": 1233,
+     "family session_range_break 30m H=16h T6": 1233,
+     "family all 30m H=16h T2": 1418,
+     "family all 30m H=16h T6": 1418,
+     "30m H=16h T2": 3060,
+     "30m H=16h T6": 3060,
+     "family box_break_close 1h H=1d T2": 777,
+     "family box_break_close 1h H=1d T6": 777,
+     "family sweep_absorb 1h H=1d T2": 631,
+     "family sweep_absorb 1h H=1d T6": 631,
+     "family session_range_break 1h H=1d T2": 979,
+     "family session_range_break 1h H=1d T6": 979,
+     "family all 1h H=1d T2": 1182,
+     "family all 1h H=1d T6": 1182,
+     "1h H=1d T2": 1386,
+     "1h H=1d T6": 1386,
+     "family box_break_close 2h H=2d T2": 544,
+     "family box_break_close 2h H=2d T6": 544,
+     "family sweep_absorb 2h H=2d T2": 469,
+     "family sweep_absorb 2h H=2d T6": 469,
+     "family session_range_break 2h H=2d T2": 637,
+     "family session_range_break 2h H=2d T6": 637,
+     "family all 2h H=2d T2": 750,
+     "family all 2h H=2d T6": 750,
+     "2h H=2d T2": 689,
+     "2h H=2d T6": 689,
+     "family box_break_close 4h H=5d T2": 271,
+     "family box_break_close 4h H=5d T6": 271,
+     "family sweep_absorb 4h H=5d T2": 266,
+     "family sweep_absorb 4h H=5d T6": 266,
+     "family session_range_break 4h H=5d T2": 275,
+     "family session_range_break 4h H=5d T6": 275,
+     "family all 4h H=5d T2": 275,
+     "family all 4h H=5d T6": 275,
+     "4h H=5d T2": 266,
+     "4h H=5d T6": 266,
+     "family box_break_close 1d H=10d T2": 162,
+     "family box_break_close 1d H=10d T6": 162,
+     "family sweep_absorb 1d H=10d T2": 154,
+     "family sweep_absorb 1d H=10d T6": 154,
+     "family session_range_break 1d H=10d T2": 174,
+     "family session_range_break 1d H=10d T6": 174,
+     "family all 1d H=10d T2": 176,
+     "family all 1d H=10d T6": 176,
+     "1d H=10d T2": 129,
+     "1d H=10d T6": 129,
+     "family box_break_close 1w H=20d T2": 84,
+     "family box_break_close 1w H=20d T6": 84,
+     "family sweep_absorb 1w H=20d T2": 84,
+     "family sweep_absorb 1w H=20d T6": 84,
+     "family session_range_break 1w H=20d T2": 84,
+     "family session_range_break 1w H=20d T6": 84,
+     "family all 1w H=20d T2": 85,
+     "family all 1w H=20d T6": 85,
+     "1w H=20d T2": 84,
+     "1w H=20d T6": 84
+    },
+    "wall_s": 94.0
+   },
+   "USDCAD": {
+    "minutes": 2842888,
+    "source": "histdata:USDCAD",
+    "bid_only": true,
+    "first": "2010-01-03 22:00:00+00:00",
+    "last": "2017-12-29 21:58:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2847,
+     "family box_break_close 1m H=1h T2": 2137,
+     "family box_break_close 1m H=1h T6": 2137,
+     "family sweep_absorb decisions": 1505,
+     "family sweep_absorb 1m H=1h T2": 1461,
+     "family sweep_absorb 1m H=1h T6": 1461,
+     "family session_range_break decisions": 2699,
+     "family session_range_break 1m H=1h T2": 2699,
+     "family session_range_break 1m H=1h T6": 2699,
+     "family all decisions": 6958,
+     "family all 1m H=1h T2": 5552,
+     "family all 1m H=1h T6": 5552,
+     "1m H=1h T2": 41440,
+     "1m H=1h T6": 41440,
+     "family box_break_close 5m H=4h T2": 1698,
+     "family box_break_close 5m H=4h T6": 1698,
+     "family sweep_absorb 5m H=4h T2": 1237,
+     "family sweep_absorb 5m H=4h T6": 1237,
+     "family session_range_break 5m H=4h T2": 2558,
+     "family session_range_break 5m H=4h T6": 2558,
+     "family all 5m H=4h T2": 3856,
+     "family all 5m H=4h T6": 3856,
+     "5m H=4h T2": 10829,
+     "5m H=4h T6": 10829,
+     "family box_break_close 15m H=8h T2": 1446,
+     "family box_break_close 15m H=8h T6": 1446,
+     "family sweep_absorb 15m H=8h T2": 1065,
+     "family sweep_absorb 15m H=8h T6": 1065,
+     "family session_range_break 15m H=8h T2": 1681,
+     "family session_range_break 15m H=8h T6": 1681,
+     "family all 15m H=8h T2": 2612,
+     "family all 15m H=8h T6": 2612,
+     "15m H=8h T2": 5588,
+     "15m H=8h T6": 5588,
+     "family box_break_close 30m H=16h T2": 1131,
+     "family box_break_close 30m H=16h T6": 1131,
+     "family sweep_absorb 30m H=16h T2": 972,
+     "family sweep_absorb 30m H=16h T6": 972,
+     "family session_range_break 30m H=16h T2": 1671,
+     "family session_range_break 30m H=16h T6": 1671,
+     "family all 30m H=16h T2": 1799,
+     "family all 30m H=16h T6": 1799,
+     "30m H=16h T2": 3838,
+     "30m H=16h T6": 3838,
+     "family box_break_close 1h H=1d T2": 944,
+     "family box_break_close 1h H=1d T6": 944,
+     "family sweep_absorb 1h H=1d T2": 833,
+     "family sweep_absorb 1h H=1d T6": 833,
+     "family session_range_break 1h H=1d T2": 1332,
+     "family session_range_break 1h H=1d T6": 1332,
+     "family all 1h H=1d T2": 1531,
+     "family all 1h H=1d T6": 1531,
+     "1h H=1d T2": 1744,
+     "1h H=1d T6": 1744,
+     "family box_break_close 2h H=2d T2": 663,
+     "family box_break_close 2h H=2d T6": 663,
+     "family sweep_absorb 2h H=2d T2": 606,
+     "family sweep_absorb 2h H=2d T6": 606,
+     "family session_range_break 2h H=2d T2": 835,
+     "family session_range_break 2h H=2d T6": 835,
+     "family all 2h H=2d T2": 961,
+     "family all 2h H=2d T6": 961,
+     "2h H=2d T2": 868,
+     "2h H=2d T6": 868,
+     "family box_break_close 4h H=5d T2": 340,
+     "family box_break_close 4h H=5d T6": 340,
+     "family sweep_absorb 4h H=5d T2": 338,
+     "family sweep_absorb 4h H=5d T6": 338,
+     "family session_range_break 4h H=5d T2": 346,
+     "family session_range_break 4h H=5d T6": 346,
+     "family all 4h H=5d T2": 347,
+     "family all 4h H=5d T6": 347,
+     "4h H=5d T2": 342,
+     "4h H=5d T6": 342,
+     "family box_break_close 1d H=10d T2": 210,
+     "family box_break_close 1d H=10d T6": 210,
+     "family sweep_absorb 1d H=10d T2": 199,
+     "family sweep_absorb 1d H=10d T6": 199,
+     "family session_range_break 1d H=10d T2": 225,
+     "family session_range_break 1d H=10d T6": 225,
+     "family all 1d H=10d T2": 226,
+     "family all 1d H=10d T6": 226,
+     "1d H=10d T2": 166,
+     "1d H=10d T6": 166,
+     "family box_break_close 1w H=20d T2": 109,
+     "family box_break_close 1w H=20d T6": 109,
+     "family sweep_absorb 1w H=20d T2": 107,
+     "family sweep_absorb 1w H=20d T6": 107,
+     "family session_range_break 1w H=20d T2": 110,
+     "family session_range_break 1w H=20d T6": 110,
+     "family all 1w H=20d T2": 110,
+     "family all 1w H=20d T6": 110,
+     "1w H=20d T2": 107,
+     "1w H=20d T6": 107
+    },
+    "wall_s": 104.2
+   },
+   "USDCHF": {
+    "minutes": 2901044,
+    "source": "histdata:USDCHF",
+    "bid_only": true,
+    "first": "2010-01-03 22:01:00+00:00",
+    "last": "2017-12-29 21:58:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2550,
+     "family box_break_close 1m H=1h T2": 1883,
+     "family box_break_close 1m H=1h T6": 1883,
+     "family sweep_absorb decisions": 1292,
+     "family sweep_absorb 1m H=1h T2": 1248,
+     "family sweep_absorb 1m H=1h T6": 1248,
+     "family session_range_break decisions": 2370,
+     "family session_range_break 1m H=1h T2": 2370,
+     "family session_range_break 1m H=1h T6": 2370,
+     "family all decisions": 6103,
+     "family all 1m H=1h T2": 4874,
+     "family all 1m H=1h T6": 4874,
+     "1m H=1h T2": 39514,
+     "1m H=1h T6": 39514,
+     "family box_break_close 5m H=4h T2": 1498,
+     "family box_break_close 5m H=4h T6": 1498,
+     "family sweep_absorb 5m H=4h T2": 1041,
+     "family sweep_absorb 5m H=4h T6": 1041,
+     "family session_range_break 5m H=4h T2": 2269,
+     "family session_range_break 5m H=4h T6": 2269,
+     "family all 5m H=4h T2": 3462,
+     "family all 5m H=4h T6": 3462,
+     "5m H=4h T2": 10286,
+     "5m H=4h T6": 10286,
+     "family box_break_close 15m H=8h T2": 1291,
+     "family box_break_close 15m H=8h T6": 1291,
+     "family sweep_absorb 15m H=8h T2": 924,
+     "family sweep_absorb 15m H=8h T6": 924,
+     "family session_range_break 15m H=8h T2": 1568,
+     "family session_range_break 15m H=8h T6": 1568,
+     "family all 15m H=8h T2": 2383,
+     "family all 15m H=8h T6": 2383,
+     "15m H=8h T2": 5307,
+     "15m H=8h T6": 5307,
+     "family box_break_close 30m H=16h T2": 1035,
+     "family box_break_close 30m H=16h T6": 1035,
+     "family sweep_absorb 30m H=16h T2": 854,
+     "family sweep_absorb 30m H=16h T6": 854,
+     "family session_range_break 30m H=16h T2": 1559,
+     "family session_range_break 30m H=16h T6": 1559,
+     "family all 30m H=16h T2": 1697,
+     "family all 30m H=16h T6": 1697,
+     "30m H=16h T2": 3645,
+     "30m H=16h T6": 3645,
+     "family box_break_close 1h H=1d T2": 884,
+     "family box_break_close 1h H=1d T6": 884,
+     "family sweep_absorb 1h H=1d T2": 738,
+     "family sweep_absorb 1h H=1d T6": 738,
+     "family session_range_break 1h H=1d T2": 1221,
+     "family session_range_break 1h H=1d T6": 1221,
+     "family all 1h H=1d T2": 1428,
+     "family all 1h H=1d T6": 1428,
+     "1h H=1d T2": 1656,
+     "1h H=1d T6": 1656,
+     "family box_break_close 2h H=2d T2": 630,
+     "family box_break_close 2h H=2d T6": 630,
+     "family sweep_absorb 2h H=2d T2": 550,
+     "family sweep_absorb 2h H=2d T6": 550,
+     "family session_range_break 2h H=2d T2": 776,
+     "family session_range_break 2h H=2d T6": 776,
+     "family all 2h H=2d T2": 893,
+     "family all 2h H=2d T6": 893,
+     "2h H=2d T2": 825,
+     "2h H=2d T6": 825,
+     "family box_break_close 4h H=5d T2": 328,
+     "family box_break_close 4h H=5d T6": 328,
+     "family sweep_absorb 4h H=5d T2": 319,
+     "family sweep_absorb 4h H=5d T6": 319,
+     "family session_range_break 4h H=5d T2": 330,
+     "family session_range_break 4h H=5d T6": 330,
+     "family all 4h H=5d T2": 331,
+     "family all 4h H=5d T6": 331,
+     "4h H=5d T2": 326,
+     "4h H=5d T6": 326,
+     "family box_break_close 1d H=10d T2": 196,
+     "family box_break_close 1d H=10d T6": 196,
+     "family sweep_absorb 1d H=10d T2": 185,
+     "family sweep_absorb 1d H=10d T6": 185,
+     "family session_range_break 1d H=10d T2": 212,
+     "family session_range_break 1d H=10d T6": 212,
+     "family all 1d H=10d T2": 217,
+     "family all 1d H=10d T6": 217,
+     "1d H=10d T2": 158,
+     "1d H=10d T6": 158,
+     "family box_break_close 1w H=20d T2": 102,
+     "family box_break_close 1w H=20d T6": 102,
+     "family sweep_absorb 1w H=20d T2": 102,
+     "family sweep_absorb 1w H=20d T6": 102,
+     "family session_range_break 1w H=20d T2": 104,
+     "family session_range_break 1w H=20d T6": 104,
+     "family all 1w H=20d T2": 105,
+     "family all 1w H=20d T6": 105,
+     "1w H=20d T2": 103,
+     "1w H=20d T6": 103
+    },
+    "wall_s": 101.0
+   },
+   "USDJPY": {
+    "minutes": 2847963,
+    "source": "histdata:USDJPY",
+    "bid_only": true,
+    "first": "2010-01-03 22:00:00+00:00",
+    "last": "2017-12-29 21:58:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 2722,
+     "family box_break_close 1m H=1h T2": 2025,
+     "family box_break_close 1m H=1h T6": 2025,
+     "family sweep_absorb decisions": 1275,
+     "family sweep_absorb 1m H=1h T2": 1240,
+     "family sweep_absorb 1m H=1h T6": 1240,
+     "family session_range_break decisions": 2138,
+     "family session_range_break 1m H=1h T2": 2138,
+     "family session_range_break 1m H=1h T6": 2138,
+     "family all decisions": 6079,
+     "family all 1m H=1h T2": 4880,
+     "family all 1m H=1h T6": 4880,
+     "1m H=1h T2": 41659,
+     "1m H=1h T6": 41659,
+     "family box_break_close 5m H=4h T2": 1602,
+     "family box_break_close 5m H=4h T6": 1602,
+     "family sweep_absorb 5m H=4h T2": 1056,
+     "family sweep_absorb 5m H=4h T6": 1056,
+     "family session_range_break 5m H=4h T2": 2025,
+     "family session_range_break 5m H=4h T6": 2025,
+     "family all 5m H=4h T2": 3468,
+     "family all 5m H=4h T6": 3468,
+     "5m H=4h T2": 10832,
+     "5m H=4h T6": 10832,
+     "family box_break_close 15m H=8h T2": 1387,
+     "family box_break_close 15m H=8h T6": 1387,
+     "family sweep_absorb 15m H=8h T2": 938,
+     "family sweep_absorb 15m H=8h T6": 938,
+     "family session_range_break 15m H=8h T2": 1506,
+     "family session_range_break 15m H=8h T6": 1506,
+     "family all 15m H=8h T2": 2475,
+     "family all 15m H=8h T6": 2475,
+     "15m H=8h T2": 5591,
+     "15m H=8h T6": 5591,
+     "family box_break_close 30m H=16h T2": 1095,
+     "family box_break_close 30m H=16h T6": 1095,
+     "family sweep_absorb 30m H=16h T2": 869,
+     "family sweep_absorb 30m H=16h T6": 869,
+     "family session_range_break 30m H=16h T2": 1503,
+     "family session_range_break 30m H=16h T6": 1503,
+     "family all 30m H=16h T2": 1768,
+     "family all 30m H=16h T6": 1768,
+     "30m H=16h T2": 3841,
+     "30m H=16h T6": 3841,
+     "family box_break_close 1h H=1d T2": 924,
+     "family box_break_close 1h H=1d T6": 924,
+     "family sweep_absorb 1h H=1d T2": 759,
+     "family sweep_absorb 1h H=1d T6": 759,
+     "family session_range_break 1h H=1d T2": 1195,
+     "family session_range_break 1h H=1d T6": 1195,
+     "family all 1h H=1d T2": 1459,
+     "family all 1h H=1d T6": 1459,
+     "1h H=1d T2": 1745,
+     "1h H=1d T6": 1745,
+     "family box_break_close 2h H=2d T2": 654,
+     "family box_break_close 2h H=2d T6": 654,
+     "family sweep_absorb 2h H=2d T2": 575,
+     "family sweep_absorb 2h H=2d T6": 575,
+     "family session_range_break 2h H=2d T2": 770,
+     "family session_range_break 2h H=2d T6": 770,
+     "family all 2h H=2d T2": 913,
+     "family all 2h H=2d T6": 913,
+     "2h H=2d T2": 872,
+     "2h H=2d T6": 872,
+     "family box_break_close 4h H=5d T2": 345,
+     "family box_break_close 4h H=5d T6": 345,
+     "family sweep_absorb 4h H=5d T2": 328,
+     "family sweep_absorb 4h H=5d T6": 328,
+     "family session_range_break 4h H=5d T2": 349,
+     "family session_range_break 4h H=5d T6": 349,
+     "family all 4h H=5d T2": 350,
+     "family all 4h H=5d T6": 350,
+     "4h H=5d T2": 346,
+     "4h H=5d T6": 346,
+     "family box_break_close 1d H=10d T2": 209,
+     "family box_break_close 1d H=10d T6": 209,
+     "family sweep_absorb 1d H=10d T2": 197,
+     "family sweep_absorb 1d H=10d T6": 197,
+     "family session_range_break 1d H=10d T2": 222,
+     "family session_range_break 1d H=10d T6": 222,
+     "family all 1d H=10d T2": 228,
+     "family all 1d H=10d T6": 228,
+     "1d H=10d T2": 169,
+     "1d H=10d T6": 169,
+     "family box_break_close 1w H=20d T2": 109,
+     "family box_break_close 1w H=20d T6": 109,
+     "family sweep_absorb 1w H=20d T2": 104,
+     "family sweep_absorb 1w H=20d T6": 104,
+     "family session_range_break 1w H=20d T2": 111,
+     "family session_range_break 1w H=20d T6": 111,
+     "family all 1w H=20d T2": 112,
+     "family all 1w H=20d T6": 112,
+     "1w H=20d T2": 109,
+     "1w H=20d T6": 109
+    },
+    "wall_s": 90.5
+   },
+   "XAGUSD": {
+    "minutes": 2650530,
+    "source": "histdata:XAGUSD",
+    "bid_only": true,
+    "first": "2010-01-03 23:00:00+00:00",
+    "last": "2017-12-29 21:58:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 659,
+     "family box_break_close 1m H=1h T2": 499,
+     "family box_break_close 1m H=1h T6": 499,
+     "family sweep_absorb decisions": 391,
+     "family sweep_absorb 1m H=1h T2": 386,
+     "family sweep_absorb 1m H=1h T6": 386,
+     "family session_range_break decisions": 605,
+     "family session_range_break 1m H=1h T2": 605,
+     "family session_range_break 1m H=1h T6": 605,
+     "family all decisions": 1633,
+     "family all 1m H=1h T2": 1333,
+     "family all 1m H=1h T6": 1333,
+     "1m H=1h T2": 10376,
+     "1m H=1h T6": 10376,
+     "family box_break_close 5m H=4h T2": 399,
+     "family box_break_close 5m H=4h T6": 399,
+     "family sweep_absorb 5m H=4h T2": 309,
+     "family sweep_absorb 5m H=4h T6": 309,
+     "family session_range_break 5m H=4h T2": 574,
+     "family session_range_break 5m H=4h T6": 574,
+     "family all 5m H=4h T2": 941,
+     "family all 5m H=4h T6": 941,
+     "5m H=4h T2": 2847,
+     "5m H=4h T6": 2847,
+     "family box_break_close 15m H=8h T2": 354,
+     "family box_break_close 15m H=8h T6": 354,
+     "family sweep_absorb 15m H=8h T2": 268,
+     "family sweep_absorb 15m H=8h T6": 268,
+     "family session_range_break 15m H=8h T2": 410,
+     "family session_range_break 15m H=8h T6": 410,
+     "family all 15m H=8h T2": 657,
+     "family all 15m H=8h T6": 657,
+     "15m H=8h T2": 1473,
+     "15m H=8h T6": 1473,
+     "family box_break_close 30m H=16h T2": 274,
+     "family box_break_close 30m H=16h T6": 274,
+     "family sweep_absorb 30m H=16h T2": 243,
+     "family sweep_absorb 30m H=16h T6": 243,
+     "family session_range_break 30m H=16h T2": 401,
+     "family session_range_break 30m H=16h T6": 401,
+     "family all 30m H=16h T2": 457,
+     "family all 30m H=16h T6": 457,
+     "30m H=16h T2": 1010,
+     "30m H=16h T6": 1010,
+     "family box_break_close 1h H=1d T2": 234,
+     "family box_break_close 1h H=1d T6": 234,
+     "family sweep_absorb 1h H=1d T2": 216,
+     "family sweep_absorb 1h H=1d T6": 216,
+     "family session_range_break 1h H=1d T2": 325,
+     "family session_range_break 1h H=1d T6": 325,
+     "family all 1h H=1d T2": 384,
+     "family all 1h H=1d T6": 384,
+     "1h H=1d T2": 457,
+     "1h H=1d T6": 457,
+     "family box_break_close 2h H=2d T2": 171,
+     "family box_break_close 2h H=2d T6": 171,
+     "family sweep_absorb 2h H=2d T2": 155,
+     "family sweep_absorb 2h H=2d T6": 155,
+     "family session_range_break 2h H=2d T2": 211,
+     "family session_range_break 2h H=2d T6": 211,
+     "family all 2h H=2d T2": 245,
+     "family all 2h H=2d T6": 245,
+     "2h H=2d T2": 225,
+     "2h H=2d T6": 225,
+     "family box_break_close 4h H=5d T2": 87,
+     "family box_break_close 4h H=5d T6": 87,
+     "family sweep_absorb 4h H=5d T2": 87,
+     "family sweep_absorb 4h H=5d T6": 87,
+     "family session_range_break 4h H=5d T2": 90,
+     "family session_range_break 4h H=5d T6": 90,
+     "family all 4h H=5d T2": 90,
+     "family all 4h H=5d T6": 90,
+     "4h H=5d T2": 78,
+     "4h H=5d T6": 78,
+     "family box_break_close 1d H=10d T2": 49,
+     "family box_break_close 1d H=10d T6": 49,
+     "family sweep_absorb 1d H=10d T2": 51,
+     "family sweep_absorb 1d H=10d T6": 51,
+     "family session_range_break 1d H=10d T2": 55,
+     "family session_range_break 1d H=10d T6": 55,
+     "family all 1d H=10d T2": 55,
+     "family all 1d H=10d T6": 55,
+     "1d H=10d T2": 35,
+     "1d H=10d T6": 35,
+     "family box_break_close 1w H=20d T2": 26,
+     "family box_break_close 1w H=20d T6": 26,
+     "family sweep_absorb 1w H=20d T2": 26,
+     "family sweep_absorb 1w H=20d T6": 26,
+     "family session_range_break 1w H=20d T2": 26,
+     "family session_range_break 1w H=20d T6": 26,
+     "family all 1w H=20d T2": 26,
+     "family all 1w H=20d T6": 26,
+     "1w H=20d T2": 24,
+     "1w H=20d T6": 24
+    },
+    "wall_s": 45.1
+   },
+   "XAUUSD@dukascopy": {
+    "minutes": 2819388,
+    "source": "dukascopy",
+    "bid_only": false,
+    "first": "2010-01-01 00:02:00+00:00",
+    "last": "2017-12-29 21:56:00+00:00",
+    "candidates": {
+     "family box_break_close decisions": 4441,
+     "family box_break_close 1m H=1h T2": 2392,
+     "family box_break_close 1m H=1h T6": 2392,
+     "family sweep_absorb decisions": 1602,
+     "family sweep_absorb 1m H=1h T2": 1089,
+     "family sweep_absorb 1m H=1h T6": 1089,
+     "family session_range_break decisions": 2793,
+     "family session_range_break 1m H=1h T2": 1960,
+     "family session_range_break 1m H=1h T6": 1960,
+     "family all decisions": 8672,
+     "family all 1m H=1h T2": 4865,
+     "family all 1m H=1h T6": 4865,
+     "1m H=1h T2": 33673,
+     "1m H=1h T6": 33673,
+     "family box_break_close 5m H=4h T2": 1872,
+     "family box_break_close 5m H=4h T6": 1872,
+     "family sweep_absorb 5m H=4h T2": 924,
+     "family sweep_absorb 5m H=4h T6": 924,
+     "family session_range_break 5m H=4h T2": 1838,
+     "family session_range_break 5m H=4h T6": 1838,
+     "family all 5m H=4h T2": 3366,
+     "family all 5m H=4h T6": 3366,
+     "5m H=4h T2": 9090,
+     "5m H=4h T6": 9090,
+     "family box_break_close 15m H=8h T2": 1539,
+     "family box_break_close 15m H=8h T6": 1539,
+     "family sweep_absorb 15m H=8h T2": 800,
+     "family sweep_absorb 15m H=8h T6": 800,
+     "family session_range_break 15m H=8h T2": 1332,
+     "family session_range_break 15m H=8h T6": 1332,
+     "family all 15m H=8h T2": 2324,
+     "family all 15m H=8h T6": 2324,
+     "15m H=8h T2": 4703,
+     "15m H=8h T6": 4703,
+     "family box_break_close 30m H=16h T2": 1163,
+     "family box_break_close 30m H=16h T6": 1163,
+     "family sweep_absorb 30m H=16h T2": 740,
+     "family sweep_absorb 30m H=16h T6": 740,
+     "family session_range_break 30m H=16h T2": 1317,
+     "family session_range_break 30m H=16h T6": 1317,
+     "family all 30m H=16h T2": 1552,
+     "family all 30m H=16h T6": 1552,
+     "30m H=16h T2": 3229,
+     "30m H=16h T6": 3229,
+     "family box_break_close 1h H=1d T2": 943,
+     "family box_break_close 1h H=1d T6": 943,
+     "family sweep_absorb 1h H=1d T2": 634,
+     "family sweep_absorb 1h H=1d T6": 634,
+     "family session_range_break 1h H=1d T2": 1046,
+     "family session_range_break 1h H=1d T6": 1046,
+     "family all 1h H=1d T2": 1286,
+     "family all 1h H=1d T6": 1286,
+     "1h H=1d T2": 1467,
+     "1h H=1d T6": 1467,
+     "family box_break_close 2h H=2d T2": 626,
+     "family box_break_close 2h H=2d T6": 626,
+     "family sweep_absorb 2h H=2d T2": 473,
+     "family sweep_absorb 2h H=2d T6": 473,
+     "family session_range_break 2h H=2d T2": 663,
+     "family session_range_break 2h H=2d T6": 663,
+     "family all 2h H=2d T2": 795,
+     "family all 2h H=2d T6": 795,
+     "2h H=2d T2": 727,
+     "2h H=2d T6": 727,
+     "family box_break_close 4h H=5d T2": 285,
+     "family box_break_close 4h H=5d T6": 285,
+     "family sweep_absorb 4h H=5d T2": 271,
+     "family sweep_absorb 4h H=5d T6": 271,
+     "family session_range_break 4h H=5d T2": 284,
+     "family session_range_break 4h H=5d T6": 284,
+     "family all 4h H=5d T2": 284,
+     "family all 4h H=5d T6": 284,
+     "4h H=5d T2": 281,
+     "4h H=5d T6": 281,
+     "family box_break_close 1d H=10d T2": 174,
+     "family box_break_close 1d H=10d T6": 174,
+     "family sweep_absorb 1d H=10d T2": 160,
+     "family sweep_absorb 1d H=10d T6": 160,
+     "family session_range_break 1d H=10d T2": 179,
+     "family session_range_break 1d H=10d T6": 179,
+     "family all 1d H=10d T2": 182,
+     "family all 1d H=10d T6": 182,
+     "1d H=10d T2": 136,
+     "1d H=10d T6": 136,
+     "family box_break_close 1w H=20d T2": 82,
+     "family box_break_close 1w H=20d T6": 82,
+     "family sweep_absorb 1w H=20d T2": 82,
+     "family sweep_absorb 1w H=20d T6": 82,
+     "family session_range_break 1w H=20d T2": 81,
+     "family session_range_break 1w H=20d T6": 81,
+     "family all 1w H=20d T2": 81,
+     "family all 1w H=20d T6": 81,
+     "1w H=20d T2": 88,
+     "1w H=20d T6": 88
+    },
+    "wall_s": 84.9
+   }
+  }
+ },
+ "classes": {
+  "gold": [
+   "XAUUSD@dukascopy"
+  ],
+  "metals": [
+   "XAUUSD@dukascopy",
+   "XAGUSD"
+  ],
+  "fx10": [
+   "AUDJPY",
+   "AUDUSD",
+   "EURJPY",
+   "EURUSD",
+   "GBPJPY",
+   "GBPUSD",
+   "NZDUSD",
+   "USDCAD",
+   "USDCHF",
+   "USDJPY"
+  ],
+  "pooled": [
+   "XAUUSD@dukascopy",
+   "XAGUSD",
+   "AUDJPY",
+   "AUDUSD",
+   "EURJPY",
+   "EURUSD",
+   "GBPJPY",
+   "GBPUSD",
+   "NZDUSD",
+   "USDCAD",
+   "USDCHF",
+   "USDJPY"
+  ],
+  "gold+fx10": [
+   "XAUUSD@dukascopy",
+   "AUDJPY",
+   "AUDUSD",
+   "EURJPY",
+   "EURUSD",
+   "GBPJPY",
+   "GBPUSD",
+   "NZDUSD",
+   "USDCAD",
+   "USDCHF",
+   "USDJPY"
+  ]
+ },
+ "not_measurable": {
+  "index": "no A/A-consistent learn month (r11-v2.1)",
+  "energy": "XTIUSD 3 A months",
+  "crosses": "EURAUD, EURGBP, GBPAUD: tier B/C only",
+  "XAUEUR": "tier B only"
+ },
+ "pc1_orientation": {
+  "metals": {
+   "XAUUSD@dukascopy": 1,
+   "XAGUSD": 1
+  },
+  "fx10": {
+   "AUDJPY": 1,
+   "AUDUSD": 1,
+   "EURJPY": 1,
+   "EURUSD": 1,
+   "GBPJPY": 1,
+   "GBPUSD": 1,
+   "NZDUSD": 1,
+   "USDCAD": -1,
+   "USDCHF": -1,
+   "USDJPY": 1
+  },
+  "pooled": {
+   "XAUUSD@dukascopy": 1,
+   "XAGUSD": 1,
+   "AUDJPY": 1,
+   "AUDUSD": 1,
+   "EURJPY": 1,
+   "EURUSD": 1,
+   "GBPJPY": 1,
+   "GBPUSD": 1,
+   "NZDUSD": 1,
+   "USDCAD": -1,
+   "USDCHF": -1,
+   "USDJPY": -1
+  },
+  "gold+fx10": {
+   "XAUUSD@dukascopy": 1,
+   "AUDJPY": 1,
+   "AUDUSD": 1,
+   "EURJPY": 1,
+   "EURUSD": 1,
+   "GBPJPY": 1,
+   "GBPUSD": 1,
+   "NZDUSD": 1,
+   "USDCAD": -1,
+   "USDCHF": -1,
+   "USDJPY": 1
+  }
+ },
+ "gold_sign_orientation": {
+  "metals": {
+   "XAUUSD@dukascopy": 1,
+   "XAGUSD": 1
+  },
+  "pooled": {
+   "XAUUSD@dukascopy": 1,
+   "XAGUSD": 1,
+   "AUDJPY": -1,
+   "AUDUSD": 1,
+   "EURJPY": -1,
+   "EURUSD": 1,
+   "GBPJPY": -1,
+   "GBPUSD": 1,
+   "NZDUSD": 1,
+   "USDCAD": -1,
+   "USDCHF": -1,
+   "USDJPY": -1
+  },
+  "gold+fx10": {
+   "XAUUSD@dukascopy": 1,
+   "AUDJPY": -1,
+   "AUDUSD": 1,
+   "EURJPY": -1,
+   "EURUSD": 1,
+   "GBPJPY": -1,
+   "GBPUSD": 1,
+   "NZDUSD": 1,
+   "USDCAD": -1,
+   "USDCHF": -1,
+   "USDJPY": -1
+  }
+ },
+ "rho_x_from": {
+  "path": "docs/research/rho-measurement-2026-11.json",
+  "sha256": "58baedcac5115d42476ddcc0856ab25329e580810a1159d592928324499bdcf7",
+  "note": "D-12a rho_x, read from this file"
+ },
+ "binding": {
+  "rho_u_day": {
+   "fx10|1h-4h": {
+    "grid": 0.01182,
+    "families": 0.0733,
+    "families_pooled": 0.02185,
+    "max": 0.0733,
+    "rerun": 0.0733,
+    "d12_recorded": 0.06017
+   },
+   "fx10|gt4h": {
+    "grid": 0.03129,
+    "families": 0.13637,
+    "families_pooled": 0.11513,
+    "max": 0.13637,
+    "rerun": 0.13637,
+    "d12_recorded": 0.09695
+   },
+   "fx10|le60m": {
+    "grid": 0.02068,
+    "families": 0.0614,
+    "families_pooled": 0.02824,
+    "max": 0.06154,
+    "rerun": 0.0614,
+    "d12_recorded": 0.06154,
+    "rho_value": 0.06154
+   },
+   "gold+fx10|1h-4h": {
+    "grid": 0.0116,
+    "families": 0.06244,
+    "families_pooled": 0.01888,
+    "max": 0.06244,
+    "rerun": 0.06244,
+    "d12_recorded": 0.05499
+   },
+   "gold+fx10|gt4h": {
+    "grid": 0.03061,
+    "families": 0.1262,
+    "families_pooled": 0.10843,
+    "max": 0.1262,
+    "rerun": 0.1262,
+    "d12_recorded": 0.0672
+   },
+   "gold+fx10|le60m": {
+    "grid": 0.0197,
+    "families": 0.0551,
+    "families_pooled": 0.02733,
+    "max": 0.0563,
+    "rerun": 0.0551,
+    "d12_recorded": 0.0563,
+    "rho_value": 0.0563
+   },
+   "gold|1h-4h": {
+    "grid": 0.03206,
+    "families": 0.2148,
+    "families_pooled": 0.08671,
+    "max": 0.2148,
+    "rerun": 0.2148,
+    "d12_recorded": 0.15478
+   },
+   "gold|gt4h": {
+    "grid": 0.06767,
+    "families": 0.44691,
+    "families_pooled": 0.21752,
+    "max": 0.44691,
+    "rerun": 0.44691,
+    "d12_recorded": 0.16863
+   },
+   "gold|le60m": {
+    "grid": 0.01324,
+    "families": 0.22376,
+    "families_pooled": 0.04262,
+    "max": 0.22376,
+    "rerun": 0.22376,
+    "d12_recorded": 0.14771,
+    "rho_value": 0.22376
+   },
+   "metals|1h-4h": {
+    "grid": 0.02486,
+    "families": 0.20245,
+    "families_pooled": 0.06907,
+    "max": 0.20245,
+    "rerun": 0.20245,
+    "d12_recorded": 0.12399
+   },
+   "metals|gt4h": {
+    "grid": 0.06,
+    "families": 0.29928,
+    "families_pooled": 0.2182,
+    "max": 0.29928,
+    "rerun": 0.29928,
+    "d12_recorded": 0.16009
+   },
+   "metals|le60m": {
+    "grid": 0.01712,
+    "families": 0.18798,
+    "families_pooled": 0.04247,
+    "max": 0.18798,
+    "rerun": 0.18798,
+    "d12_recorded": 0.13681,
+    "rho_value": 0.18798
+   },
+   "pooled|1h-4h": {
+    "grid": 0.01148,
+    "families": 0.05554,
+    "families_pooled": 0.0189,
+    "max": 0.05554,
+    "rerun": 0.05554,
+    "d12_recorded": 0.05316
+   },
+   "pooled|gt4h": {
+    "grid": 0.02961,
+    "families": 0.12711,
+    "families_pooled": 0.10842,
+    "max": 0.12711,
+    "rerun": 0.12711,
+    "d12_recorded": 0.07022
+   },
+   "pooled|le60m": {
+    "grid": 0.01977,
+    "families": 0.05267,
+    "families_pooled": 0.02755,
+    "max": 0.05363,
+    "rerun": 0.05267,
+    "d12_recorded": 0.05363,
+    "rho_value": 0.05363
+   }
+  },
+  "rho_u_inst_day_mean": {
+   "fx10|1h-4h": {
+    "grid": 0.23802,
+    "families": 0.15616,
+    "families_pooled": 0.10643,
+    "max": 0.29722,
+    "rerun": 0.23802,
+    "d12_recorded": 0.29722
+   },
+   "fx10|gt4h": {
+    "grid": 0.42036,
+    "families": 0.55433,
+    "families_pooled": 0.46668,
+    "max": 0.55433,
+    "rerun": 0.55433,
+    "d12_recorded": 0.33752
+   },
+   "fx10|le60m": {
+    "grid": 0.23287,
+    "families": 0.12112,
+    "families_pooled": 0.0794,
+    "max": 0.44293,
+    "rerun": 0.23287,
+    "d12_recorded": 0.44293
+   },
+   "gold+fx10|1h-4h": {
+    "grid": 0.20749,
+    "families": 0.14336,
+    "families_pooled": 0.0969,
+    "max": 0.26154,
+    "rerun": 0.20749,
+    "d12_recorded": 0.26154
+   },
+   "gold+fx10|gt4h": {
+    "grid": 0.36991,
+    "families": 0.51038,
+    "families_pooled": 0.41768,
+    "max": 0.51038,
+    "rerun": 0.51038,
+    "d12_recorded": 0.31666
+   },
+   "gold+fx10|le60m": {
+    "grid": 0.21302,
+    "families": 0.10687,
+    "families_pooled": 0.07096,
+    "max": 0.39895,
+    "rerun": 0.21302,
+    "d12_recorded": 0.39895
+   },
+   "metals|1h-4h": {
+    "grid": 0.6104,
+    "families": 0.91931,
+    "families_pooled": 0.44658,
+    "max": 1.0,
+    "rerun": 0.91931,
+    "d12_recorded": 1.0
+   },
+   "metals|gt4h": {
+    "grid": 1.72523,
+    "families": 5.99336,
+    "families_pooled": 1.3421,
+    "max": 1.0,
+    "rerun": 1.0,
+    "d12_recorded": 1.0
+   },
+   "metals|le60m": {
+    "grid": 0.44231,
+    "families": 0.74322,
+    "families_pooled": 0.55765,
+    "max": 0.88477,
+    "rerun": 0.74322,
+    "d12_recorded": 0.88477
+   },
+   "pooled|1h-4h": {
+    "grid": 0.17046,
+    "families": 0.14111,
+    "families_pooled": 0.09219,
+    "max": 0.17046,
+    "rerun": 0.17046,
+    "d12_recorded": 0.15122
+   },
+   "pooled|gt4h": {
+    "grid": 0.36491,
+    "families": 0.44316,
+    "families_pooled": 0.38046,
+    "max": 0.44316,
+    "rerun": 0.44316,
+    "d12_recorded": 0.18501
+   },
+   "pooled|le60m": {
+    "grid": 0.17547,
+    "families": 0.10378,
+    "families_pooled": 0.07078,
+    "max": 0.39704,
+    "rerun": 0.17547,
+    "d12_recorded": 0.39704
+   }
+  },
+  "rho_u_inst_vs_gold_day_mean": {
+   "gold+fx10|1h-4h": {
+    "grid": 0.14955,
+    "families": 0.14491,
+    "families_pooled": 0.07437,
+    "max": 0.30414,
+    "rerun": 0.14955,
+    "d12_recorded": 0.30414
+   },
+   "gold+fx10|gt4h": {
+    "grid": 0.42753,
+    "families": 0.75029,
+    "families_pooled": 0.56563,
+    "max": 0.75029,
+    "rerun": 0.75029,
+    "d12_recorded": 0.34987
+   },
+   "gold+fx10|le60m": {
+    "grid": 0.05489,
+    "families": 0.11276,
+    "families_pooled": 0.04986,
+    "max": 0.25634,
+    "rerun": 0.11276,
+    "d12_recorded": 0.25634
+   },
+   "metals|1h-4h": {
+    "grid": 0.6104,
+    "families": 0.91931,
+    "families_pooled": 0.44658,
+    "max": 1.0,
+    "rerun": 0.91931,
+    "d12_recorded": 1.0
+   },
+   "metals|gt4h": {
+    "grid": 1.72523,
+    "families": 5.99336,
+    "families_pooled": 1.3421,
+    "max": 1.0,
+    "rerun": 1.0,
+    "d12_recorded": 1.0
+   },
+   "metals|le60m": {
+    "grid": 0.44231,
+    "families": 0.74322,
+    "families_pooled": 0.55765,
+    "max": 0.88477,
+    "rerun": 0.74322,
+    "d12_recorded": 0.88477
+   },
+   "pooled|1h-4h": {
+    "grid": 0.15927,
+    "families": 0.15519,
+    "families_pooled": 0.09039,
+    "max": 0.25499,
+    "rerun": 0.15927,
+    "d12_recorded": 0.25499
+   },
+   "pooled|gt4h": {
+    "grid": 0.44985,
+    "families": 0.76323,
+    "families_pooled": 0.55918,
+    "max": 0.76323,
+    "rerun": 0.76323,
+    "d12_recorded": 0.32508
+   },
+   "pooled|le60m": {
+    "grid": 0.06091,
+    "families": 0.10567,
+    "families_pooled": 0.05867,
+    "max": 0.21458,
+    "rerun": 0.10567,
+    "d12_recorded": 0.21458
+   }
+  },
+  "tau_a": {
+   "fx10|1h-4h": {
+    "grid": 0.02585,
+    "families": 0.07884,
+    "families_pooled": 0.05164,
+    "tau_a": 0.07884,
+    "lambda_a": 217.19201,
+    "d12_recorded_tau_a": 0.04321,
+    "rule": "re-run only"
+   },
+   "fx10|gt4h": {
+    "grid": 0.20954,
+    "families": 0.198,
+    "families_pooled": 0.18614,
+    "tau_a": 0.20954,
+    "lambda_a": 30.7468,
+    "d12_recorded_tau_a": 0.04021,
+    "rule": "re-run only"
+   },
+   "fx10|le60m": {
+    "grid": 0.02491,
+    "families": 0.0686,
+    "families_pooled": 0.04113,
+    "tau_a": 0.0686,
+    "lambda_a": 286.8711,
+    "d12_recorded_tau_a": 0.03606,
+    "rule": "re-run only"
+   },
+   "gold+fx10|1h-4h": {
+    "grid": 0.02663,
+    "families": 0.08015,
+    "families_pooled": 0.05531,
+    "tau_a": 0.08015,
+    "lambda_a": 210.17021,
+    "d12_recorded_tau_a": 0.04182,
+    "rule": "re-run only"
+   },
+   "gold+fx10|gt4h": {
+    "grid": 0.20693,
+    "families": 0.19566,
+    "families_pooled": 0.18442,
+    "tau_a": 0.20693,
+    "lambda_a": 31.527,
+    "d12_recorded_tau_a": 0.04222,
+    "rule": "re-run only"
+   },
+   "gold+fx10|le60m": {
+    "grid": 0.02415,
+    "families": 0.07126,
+    "families_pooled": 0.04158,
+    "tau_a": 0.07126,
+    "lambda_a": 265.85857,
+    "d12_recorded_tau_a": 0.0376,
+    "rule": "re-run only"
+   },
+   "metals|1h-4h": {
+    "grid": 0.07817,
+    "families": 0.21557,
+    "families_pooled": 0.1551,
+    "tau_a": 0.21557,
+    "lambda_a": 29.0502,
+    "d12_recorded_tau_a": 0.13527,
+    "rule": "re-run only"
+   },
+   "metals|gt4h": {
+    "grid": 0.41495,
+    "families": 0.57777,
+    "families_pooled": 0.57081,
+    "tau_a": 0.57777,
+    "lambda_a": 4.0441,
+    "d12_recorded_tau_a": 0.1285,
+    "rule": "re-run only"
+   },
+   "metals|le60m": {
+    "grid": 0.03142,
+    "families": 0.23375,
+    "families_pooled": 0.13283,
+    "tau_a": 0.23375,
+    "lambda_a": 24.70654,
+    "d12_recorded_tau_a": 0.09608,
+    "rule": "re-run only"
+   },
+   "pooled|1h-4h": {
+    "grid": 0.03233,
+    "families": 0.08748,
+    "families_pooled": 0.06091,
+    "tau_a": 0.08748,
+    "lambda_a": 176.41846,
+    "d12_recorded_tau_a": 0.0553,
+    "rule": "re-run only"
+   },
+   "pooled|gt4h": {
+    "grid": 0.22044,
+    "families": 0.25778,
+    "families_pooled": 0.229,
+    "tau_a": 0.25778,
+    "lambda_a": 20.3165,
+    "d12_recorded_tau_a": 0.06293,
+    "rule": "re-run only"
+   },
+   "pooled|le60m": {
+    "grid": 0.02514,
+    "families": 0.09184,
+    "families_pooled": 0.05243,
+    "tau_a": 0.09184,
+    "lambda_a": 160.06365,
+    "d12_recorded_tau_a": 0.04057,
+    "rule": "re-run only"
+   }
+  }
+ },
+ "side_by_side": [
+  {
+   "class": "gold",
+   "bucket": "le60m",
+   "rho_u_day": {
+    "d12": 0.14771,
+    "rerun": 0.22376,
+    "binding": 0.22376
+   }
+  },
+  {
+   "class": "gold",
+   "bucket": "1h-4h",
+   "rho_u_day": {
+    "d12": 0.15478,
+    "rerun": 0.2148,
+    "binding": 0.2148
+   }
+  },
+  {
+   "class": "gold",
+   "bucket": "gt4h",
+   "rho_u_day": {
+    "d12": 0.16863,
+    "rerun": 0.44691,
+    "binding": 0.44691
+   }
+  },
+  {
+   "class": "metals",
+   "bucket": "le60m",
+   "rho_u_day": {
+    "d12": 0.13681,
+    "rerun": 0.18798,
+    "binding": 0.18798
+   },
+   "rho_u_inst": {
+    "d12": 0.88477,
+    "rerun": 0.74322,
+    "binding": 0.88477
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.88477,
+    "rerun": 0.74322,
+    "binding": 0.88477
+   },
+   "tau_a": {
+    "d12": 0.09608,
+    "rerun": 0.23375,
+    "binding": 0.23375
+   }
+  },
+  {
+   "class": "metals",
+   "bucket": "1h-4h",
+   "rho_u_day": {
+    "d12": 0.12399,
+    "rerun": 0.20245,
+    "binding": 0.20245
+   },
+   "rho_u_inst": {
+    "d12": 1.0,
+    "rerun": 0.91931,
+    "binding": 1.0
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 1.0,
+    "rerun": 0.91931,
+    "binding": 1.0
+   },
+   "tau_a": {
+    "d12": 0.13527,
+    "rerun": 0.21557,
+    "binding": 0.21557
+   }
+  },
+  {
+   "class": "metals",
+   "bucket": "gt4h",
+   "rho_u_day": {
+    "d12": 0.16009,
+    "rerun": 0.29928,
+    "binding": 0.29928
+   },
+   "rho_u_inst": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "binding": 1.0
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "binding": 1.0
+   },
+   "tau_a": {
+    "d12": 0.1285,
+    "rerun": 0.57777,
+    "binding": 0.57777
+   }
+  },
+  {
+   "class": "fx10",
+   "bucket": "le60m",
+   "rho_u_day": {
+    "d12": 0.06154,
+    "rerun": 0.0614,
+    "binding": 0.06154
+   },
+   "rho_u_inst": {
+    "d12": 0.44293,
+    "rerun": 0.23287,
+    "binding": 0.44293
+   },
+   "tau_a": {
+    "d12": 0.03606,
+    "rerun": 0.0686,
+    "binding": 0.0686
+   }
+  },
+  {
+   "class": "fx10",
+   "bucket": "1h-4h",
+   "rho_u_day": {
+    "d12": 0.06017,
+    "rerun": 0.0733,
+    "binding": 0.0733
+   },
+   "rho_u_inst": {
+    "d12": 0.29722,
+    "rerun": 0.23802,
+    "binding": 0.29722
+   },
+   "tau_a": {
+    "d12": 0.04321,
+    "rerun": 0.07884,
+    "binding": 0.07884
+   }
+  },
+  {
+   "class": "fx10",
+   "bucket": "gt4h",
+   "rho_u_day": {
+    "d12": 0.09695,
+    "rerun": 0.13637,
+    "binding": 0.13637
+   },
+   "rho_u_inst": {
+    "d12": 0.33752,
+    "rerun": 0.55433,
+    "binding": 0.55433
+   },
+   "tau_a": {
+    "d12": 0.04021,
+    "rerun": 0.20954,
+    "binding": 0.20954
+   }
+  },
+  {
+   "class": "pooled",
+   "bucket": "le60m",
+   "rho_u_day": {
+    "d12": 0.05363,
+    "rerun": 0.05267,
+    "binding": 0.05363
+   },
+   "rho_u_inst": {
+    "d12": 0.39704,
+    "rerun": 0.17547,
+    "binding": 0.39704
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.21458,
+    "rerun": 0.10567,
+    "binding": 0.21458
+   },
+   "tau_a": {
+    "d12": 0.04057,
+    "rerun": 0.09184,
+    "binding": 0.09184
+   }
+  },
+  {
+   "class": "pooled",
+   "bucket": "1h-4h",
+   "rho_u_day": {
+    "d12": 0.05316,
+    "rerun": 0.05554,
+    "binding": 0.05554
+   },
+   "rho_u_inst": {
+    "d12": 0.15122,
+    "rerun": 0.17046,
+    "binding": 0.17046
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.25499,
+    "rerun": 0.15927,
+    "binding": 0.25499
+   },
+   "tau_a": {
+    "d12": 0.0553,
+    "rerun": 0.08748,
+    "binding": 0.08748
+   }
+  },
+  {
+   "class": "pooled",
+   "bucket": "gt4h",
+   "rho_u_day": {
+    "d12": 0.07022,
+    "rerun": 0.12711,
+    "binding": 0.12711
+   },
+   "rho_u_inst": {
+    "d12": 0.18501,
+    "rerun": 0.44316,
+    "binding": 0.44316
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.32508,
+    "rerun": 0.76323,
+    "binding": 0.76323
+   },
+   "tau_a": {
+    "d12": 0.06293,
+    "rerun": 0.25778,
+    "binding": 0.25778
+   }
+  },
+  {
+   "class": "gold+fx10",
+   "bucket": "le60m",
+   "rho_u_day": {
+    "d12": 0.0563,
+    "rerun": 0.0551,
+    "binding": 0.0563
+   },
+   "rho_u_inst": {
+    "d12": 0.39895,
+    "rerun": 0.21302,
+    "binding": 0.39895
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.25634,
+    "rerun": 0.11276,
+    "binding": 0.25634
+   },
+   "tau_a": {
+    "d12": 0.0376,
+    "rerun": 0.07126,
+    "binding": 0.07126
+   }
+  },
+  {
+   "class": "gold+fx10",
+   "bucket": "1h-4h",
+   "rho_u_day": {
+    "d12": 0.05499,
+    "rerun": 0.06244,
+    "binding": 0.06244
+   },
+   "rho_u_inst": {
+    "d12": 0.26154,
+    "rerun": 0.20749,
+    "binding": 0.26154
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.30414,
+    "rerun": 0.14955,
+    "binding": 0.30414
+   },
+   "tau_a": {
+    "d12": 0.04182,
+    "rerun": 0.08015,
+    "binding": 0.08015
+   }
+  },
+  {
+   "class": "gold+fx10",
+   "bucket": "gt4h",
+   "rho_u_day": {
+    "d12": 0.0672,
+    "rerun": 0.1262,
+    "binding": 0.1262
+   },
+   "rho_u_inst": {
+    "d12": 0.31666,
+    "rerun": 0.51038,
+    "binding": 0.51038
+   },
+   "rho_u_inst_vs_gold": {
+    "d12": 0.34987,
+    "rerun": 0.75029,
+    "binding": 0.75029
+   },
+   "tau_a": {
+    "d12": 0.04222,
+    "rerun": 0.20693,
+    "binding": 0.20693
+   }
+  }
+ ],
+ "by_source": {
+  "grid": {
+   "rho_u_day": {
+    "gold|le60m": {
+     "upper95": 0.01324,
+     "point_at_max": 0.00914,
+     "argmax": "out|1m H=1h T2|short_net|raw",
+     "point_range": [
+      -0.00223,
+      0.00914
+     ],
+     "days": [
+      1500,
+      1500
+     ],
+     "variants": 12
+    },
+    "metals|le60m": {
+     "upper95": 0.01712,
+     "point_at_max": 0.0123,
+     "argmax": "out|1m H=1h T2|short_net|pc1",
+     "point_range": [
+      -0.00215,
+      0.0123
+     ],
+     "days": [
+      1653,
+      1653
+     ],
+     "variants": 24
+    },
+    "fx10|le60m": {
+     "upper95": 0.02068,
+     "point_at_max": 0.01705,
+     "argmax": "out|1m H=1h T2|short_net|pc1",
+     "point_range": [
+      -0.00216,
+      0.01705
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 24
+    },
+    "pooled|le60m": {
+     "upper95": 0.01977,
+     "point_at_max": 0.01653,
+     "argmax": "out|1m H=1h T2|short_net|goldsign",
+     "point_range": [
+      -0.00216,
+      0.01653
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 36
+    },
+    "gold+fx10|le60m": {
+     "upper95": 0.0197,
+     "point_at_max": 0.01638,
+     "argmax": "out|1m H=1h T2|short_net|raw",
+     "point_range": [
+      -0.00209,
+      0.01638
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 36
+    },
+    "gold|1h-4h": {
+     "upper95": 0.03206,
+     "point_at_max": 0.01876,
+     "argmax": "out|5m H=4h T6|rand_net|raw",
+     "point_range": [
+      -0.00259,
+      0.01876
+     ],
+     "days": [
+      1767,
+      1767
+     ],
+     "variants": 12
+    },
+    "metals|1h-4h": {
+     "upper95": 0.02486,
+     "point_at_max": 0.01332,
+     "argmax": "out|5m H=4h T6|rand_net|raw",
+     "point_range": [
+      -0.00235,
+      0.01332
+     ],
+     "days": [
+      1869,
+      1869
+     ],
+     "variants": 24
+    },
+    "fx10|1h-4h": {
+     "upper95": 0.01182,
+     "point_at_max": 0.00653,
+     "argmax": "out|5m H=4h T2|short_net|pc1",
+     "point_range": [
+      -0.00333,
+      0.00667
+     ],
+     "days": [
+      2491,
+      2491
+     ],
+     "variants": 24
+    },
+    "pooled|1h-4h": {
+     "upper95": 0.01148,
+     "point_at_max": 0.00627,
+     "argmax": "out|5m H=4h T2|short_net|goldsign",
+     "point_range": [
+      -0.0026,
+      0.00661
+     ],
+     "days": [
+      2492,
+      2492
+     ],
+     "variants": 36
+    },
+    "gold+fx10|1h-4h": {
+     "upper95": 0.0116,
+     "point_at_max": 0.00623,
+     "argmax": "out|5m H=4h T2|short_net|raw",
+     "point_range": [
+      -0.00279,
+      0.00636
+     ],
+     "days": [
+      2492,
+      2492
+     ],
+     "variants": 36
+    },
+    "gold|gt4h": {
+     "upper95": 0.06767,
+     "point_at_max": 0.02025,
+     "argmax": "out|30m H=16h T2|short_net|raw",
+     "point_range": [
+      -0.03016,
+      0.02025
+     ],
+     "days": [
+      1770,
+      1771
+     ],
+     "variants": 24
+    },
+    "metals|gt4h": {
+     "upper95": 0.06,
+     "point_at_max": 0.0058,
+     "argmax": "out|30m H=16h T6|long_gross|pc1",
+     "point_range": [
+      -0.03335,
+      0.01392
+     ],
+     "days": [
+      1872,
+      1873
+     ],
+     "variants": 48
+    },
+    "fx10|gt4h": {
+     "upper95": 0.03129,
+     "point_at_max": 0.01183,
+     "argmax": "out|30m H=16h T2|long_net|raw",
+     "point_range": [
+      -0.0034,
+      0.01188
+     ],
+     "days": [
+      2491,
+      2491
+     ],
+     "variants": 48
+    },
+    "pooled|gt4h": {
+     "upper95": 0.02961,
+     "point_at_max": 0.00962,
+     "argmax": "out|30m H=16h T6|long_gross|pc1",
+     "point_range": [
+      -0.00571,
+      0.01029
+     ],
+     "days": [
+      2493,
+      2493
+     ],
+     "variants": 72
+    },
+    "gold+fx10|gt4h": {
+     "upper95": 0.03061,
+     "point_at_max": 0.01207,
+     "argmax": "out|30m H=16h T2|long_net|raw",
+     "point_range": [
+      -0.00475,
+      0.01207
+     ],
+     "days": [
+      2493,
+      2493
+     ],
+     "variants": 72
+    }
+   },
+   "rho_u_inst": {
+    "metals|le60m": {
+     "agg": {
+      "upper95": 0.44231,
+      "point_at_max": 0.2673,
+      "argmax": "out|1m H=1h T2|short_net|pc1",
+      "point_range": [
+       -0.02729,
+       0.2673
+      ],
+      "days": [
+       1653,
+       1653
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.03651,
+      "point_at_max": 0.0253,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00276,
+       0.02677
+      ],
+      "days": [
+       1653,
+       1653
+      ],
+      "variants": 24
+     }
+    },
+    "fx10|le60m": {
+     "agg": {
+      "upper95": 0.23287,
+      "point_at_max": 0.1987,
+      "argmax": "out|1m H=1h T6|short_gross|pc1",
+      "point_range": [
+       0.01334,
+       0.1987
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.01911,
+      "point_at_max": 0.01605,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       0.00019,
+       0.01605
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 24
+     }
+    },
+    "pooled|le60m": {
+     "agg": {
+      "upper95": 0.17547,
+      "point_at_max": 0.15246,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00873,
+       0.15246
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.01782,
+      "point_at_max": 0.01499,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00125,
+       0.01499
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     }
+    },
+    "gold+fx10|le60m": {
+     "agg": {
+      "upper95": 0.21302,
+      "point_at_max": 0.18192,
+      "argmax": "out|1m H=1h T6|short_gross|pc1",
+      "point_range": [
+       -0.00848,
+       0.18192
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.01741,
+      "point_at_max": 0.01461,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00115,
+       0.01461
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     }
+    },
+    "metals|1h-4h": {
+     "agg": {
+      "upper95": 0.6104,
+      "point_at_max": 0.41197,
+      "argmax": "out|5m H=4h T6|long_gross|raw",
+      "point_range": [
+       0.00727,
+       0.41232
+      ],
+      "days": [
+       1869,
+       1869
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.12718,
+      "point_at_max": 0.10542,
+      "argmax": "out|5m H=4h T6|long_gross|raw",
+      "point_range": [
+       0.01779,
+       0.10542
+      ],
+      "days": [
+       1869,
+       1869
+      ],
+      "variants": 24
+     }
+    },
+    "fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.23802,
+      "point_at_max": 0.21164,
+      "argmax": "out|5m H=4h T6|long_gross|pc1",
+      "point_range": [
+       0.00464,
+       0.21257
+      ],
+      "days": [
+       2491,
+       2491
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.04047,
+      "point_at_max": 0.03677,
+      "argmax": "out|5m H=4h T6|short_net|pc1",
+      "point_range": [
+       0.00128,
+       0.03677
+      ],
+      "days": [
+       2491,
+       2491
+      ],
+      "variants": 24
+     }
+    },
+    "pooled|1h-4h": {
+     "agg": {
+      "upper95": 0.17046,
+      "point_at_max": 0.14676,
+      "argmax": "out|5m H=4h T6|short_net|pc1",
+      "point_range": [
+       -0.00503,
+       0.14773
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.03184,
+      "point_at_max": 0.029,
+      "argmax": "out|5m H=4h T6|short_net|pc1",
+      "point_range": [
+       -0.00023,
+       0.029
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     }
+    },
+    "gold+fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.20749,
+      "point_at_max": 0.18438,
+      "argmax": "out|5m H=4h T6|short_gross|pc1",
+      "point_range": [
+       -0.00402,
+       0.18438
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.03643,
+      "point_at_max": 0.03299,
+      "argmax": "out|5m H=4h T6|short_net|pc1",
+      "point_range": [
+       -0.00049,
+       0.03299
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     }
+    },
+    "metals|gt4h": {
+     "agg": {
+      "upper95": 1.72523,
+      "point_at_max": 1.21484,
+      "argmax": "out|1w H=20d T6|short_gross|pc1",
+      "point_range": [
+       -0.07638,
+       1.21503
+      ],
+      "days": [
+       93,
+       1873
+      ],
+      "variants": 168
+     },
+     "pair": {
+      "upper95": 1.72523,
+      "point_at_max": 1.21484,
+      "argmax": "out|1w H=20d T6|short_gross|pc1",
+      "point_range": [
+       -0.07638,
+       1.21503
+      ],
+      "days": [
+       93,
+       1873
+      ],
+      "variants": 168
+     }
+    },
+    "fx10|gt4h": {
+     "agg": {
+      "upper95": 0.42036,
+      "point_at_max": 0.33957,
+      "argmax": "out|1w H=20d T2|short_net|pc1",
+      "point_range": [
+       -0.00672,
+       0.33961
+      ],
+      "days": [
+       133,
+       2491
+      ],
+      "variants": 168
+     },
+     "pair": {
+      "upper95": 0.42036,
+      "point_at_max": 0.33957,
+      "argmax": "out|1w H=20d T2|short_net|pc1",
+      "point_range": [
+       -0.00672,
+       0.33961
+      ],
+      "days": [
+       133,
+       2491
+      ],
+      "variants": 168
+     }
+    },
+    "pooled|gt4h": {
+     "agg": {
+      "upper95": 0.36491,
+      "point_at_max": 0.26477,
+      "argmax": "out|1w H=20d T6|short_net|pc1",
+      "point_range": [
+       -0.00935,
+       0.29519
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     },
+     "pair": {
+      "upper95": 0.36491,
+      "point_at_max": 0.26477,
+      "argmax": "out|1w H=20d T6|short_net|pc1",
+      "point_range": [
+       -0.00935,
+       0.29519
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     }
+    },
+    "gold+fx10|gt4h": {
+     "agg": {
+      "upper95": 0.36991,
+      "point_at_max": 0.3033,
+      "argmax": "out|1w H=20d T2|short_net|pc1",
+      "point_range": [
+       -0.01081,
+       0.30336
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     },
+     "pair": {
+      "upper95": 0.36991,
+      "point_at_max": 0.3033,
+      "argmax": "out|1w H=20d T2|short_net|pc1",
+      "point_range": [
+       -0.01081,
+       0.30336
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     }
+    }
+   },
+   "rho_u_inst_vs_gold": {
+    "metals|le60m": {
+     "agg": {
+      "upper95": 0.44231,
+      "point_at_max": 0.2673,
+      "argmax": "out|1m H=1h T2|short_net|pc1",
+      "point_range": [
+       -0.02729,
+       0.2673
+      ],
+      "days": [
+       1653,
+       1653
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.03651,
+      "point_at_max": 0.0253,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00276,
+       0.02677
+      ],
+      "days": [
+       1653,
+       1653
+      ],
+      "variants": 24
+     }
+    },
+    "pooled|le60m": {
+     "agg": {
+      "upper95": 0.06091,
+      "point_at_max": 0.04603,
+      "argmax": "out|1m H=1h T6|short_net|pc1",
+      "point_range": [
+       -0.01274,
+       0.04603
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.01059,
+      "point_at_max": 0.0084,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00116,
+       0.0084
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     }
+    },
+    "gold+fx10|le60m": {
+     "agg": {
+      "upper95": 0.05489,
+      "point_at_max": 0.04148,
+      "argmax": "out|1m H=1h T6|short_gross|goldsign",
+      "point_range": [
+       -0.01421,
+       0.04148
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.01009,
+      "point_at_max": 0.00784,
+      "argmax": "out|1m H=1h T2|short_net|raw",
+      "point_range": [
+       -0.00145,
+       0.00784
+      ],
+      "days": [
+       2487,
+       2487
+      ],
+      "variants": 36
+     }
+    },
+    "metals|1h-4h": {
+     "agg": {
+      "upper95": 0.6104,
+      "point_at_max": 0.41197,
+      "argmax": "out|5m H=4h T6|long_gross|raw",
+      "point_range": [
+       0.00727,
+       0.41232
+      ],
+      "days": [
+       1869,
+       1869
+      ],
+      "variants": 24
+     },
+     "pair": {
+      "upper95": 0.12718,
+      "point_at_max": 0.10542,
+      "argmax": "out|5m H=4h T6|long_gross|raw",
+      "point_range": [
+       0.01779,
+       0.10542
+      ],
+      "days": [
+       1869,
+       1869
+      ],
+      "variants": 24
+     }
+    },
+    "pooled|1h-4h": {
+     "agg": {
+      "upper95": 0.15927,
+      "point_at_max": 0.12573,
+      "argmax": "out|5m H=4h T6|long_net|goldsign",
+      "point_range": [
+       -0.01271,
+       0.12573
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.03105,
+      "point_at_max": 0.02653,
+      "argmax": "out|5m H=4h T6|long_gross|goldsign",
+      "point_range": [
+       -0.00073,
+       0.02653
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     }
+    },
+    "gold+fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.14955,
+      "point_at_max": 0.11495,
+      "argmax": "out|5m H=4h T6|long_net|goldsign",
+      "point_range": [
+       -0.0186,
+       0.11495
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     },
+     "pair": {
+      "upper95": 0.02872,
+      "point_at_max": 0.02398,
+      "argmax": "out|5m H=4h T6|long_net|goldsign",
+      "point_range": [
+       -0.00267,
+       0.02416
+      ],
+      "days": [
+       2492,
+       2492
+      ],
+      "variants": 36
+     }
+    },
+    "metals|gt4h": {
+     "agg": {
+      "upper95": 1.72523,
+      "point_at_max": 1.21484,
+      "argmax": "out|1w H=20d T6|short_gross|pc1",
+      "point_range": [
+       -0.07638,
+       1.21503
+      ],
+      "days": [
+       93,
+       1873
+      ],
+      "variants": 168
+     },
+     "pair": {
+      "upper95": 1.72523,
+      "point_at_max": 1.21484,
+      "argmax": "out|1w H=20d T6|short_gross|pc1",
+      "point_range": [
+       -0.07638,
+       1.21503
+      ],
+      "days": [
+       93,
+       1873
+      ],
+      "variants": 168
+     }
+    },
+    "pooled|gt4h": {
+     "agg": {
+      "upper95": 0.44985,
+      "point_at_max": 0.34824,
+      "argmax": "out|1w H=20d T6|short_net|goldsign",
+      "point_range": [
+       -0.08933,
+       0.34827
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     },
+     "pair": {
+      "upper95": 0.44985,
+      "point_at_max": 0.34824,
+      "argmax": "out|1w H=20d T6|short_net|goldsign",
+      "point_range": [
+       -0.08933,
+       0.34827
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     }
+    },
+    "gold+fx10|gt4h": {
+     "agg": {
+      "upper95": 0.42753,
+      "point_at_max": 0.32426,
+      "argmax": "out|1w H=20d T6|short_net|goldsign",
+      "point_range": [
+       -0.12755,
+       0.32431
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     },
+     "pair": {
+      "upper95": 0.42753,
+      "point_at_max": 0.32426,
+      "argmax": "out|1w H=20d T6|short_net|goldsign",
+      "point_range": [
+       -0.12755,
+       0.32431
+      ],
+      "days": [
+       133,
+       2493
+      ],
+      "variants": 252
+     }
+    }
+   },
+   "tau_sd": {
+    "metals|le60m": {
+     "upper95": 0.03142,
+     "point_at_max": 0.01063,
+     "argmax": "out|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.00693,
+      0.01063
+     ],
+     "days": [
+      1653,
+      1653
+     ],
+     "variants": 2
+    },
+    "fx10|le60m": {
+     "upper95": 0.02491,
+     "point_at_max": 0.01861,
+     "argmax": "out|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.01425,
+      0.01861
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 2
+    },
+    "pooled|le60m": {
+     "upper95": 0.02514,
+     "point_at_max": 0.01828,
+     "argmax": "out|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.01331,
+      0.01828
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 2
+    },
+    "gold+fx10|le60m": {
+     "upper95": 0.02415,
+     "point_at_max": 0.01786,
+     "argmax": "out|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.01396,
+      0.01786
+     ],
+     "days": [
+      2487,
+      2487
+     ],
+     "variants": 2
+    },
+    "metals|1h-4h": {
+     "upper95": 0.07817,
+     "point_at_max": 0.0346,
+     "argmax": "out|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.00921,
+      0.0346
+     ],
+     "days": [
+      1869,
+      1869
+     ],
+     "variants": 2
+    },
+    "fx10|1h-4h": {
+     "upper95": 0.02585,
+     "point_at_max": 0.01288,
+     "argmax": "out|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.00907,
+      0.01288
+     ],
+     "days": [
+      2491,
+      2491
+     ],
+     "variants": 2
+    },
+    "pooled|1h-4h": {
+     "upper95": 0.03233,
+     "point_at_max": 0.01572,
+     "argmax": "out|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.00992,
+      0.01572
+     ],
+     "days": [
+      2492,
+      2492
+     ],
+     "variants": 2
+    },
+    "gold+fx10|1h-4h": {
+     "upper95": 0.02663,
+     "point_at_max": 0.01365,
+     "argmax": "out|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.01032,
+      0.01365
+     ],
+     "days": [
+      2492,
+      2492
+     ],
+     "variants": 2
+    },
+    "metals|gt4h": {
+     "upper95": 0.41495,
+     "point_at_max": 0.06577,
+     "argmax": "out|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.00148,
+      0.14642
+     ],
+     "days": [
+      93,
+      1873
+     ],
+     "variants": 14
+    },
+    "fx10|gt4h": {
+     "upper95": 0.20954,
+     "point_at_max": 0.09905,
+     "argmax": "out|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.01038,
+      0.09905
+     ],
+     "days": [
+      133,
+      2491
+     ],
+     "variants": 14
+    },
+    "pooled|gt4h": {
+     "upper95": 0.22044,
+     "point_at_max": 0.09244,
+     "argmax": "out|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.01055,
+      0.09244
+     ],
+     "days": [
+      133,
+      2493
+     ],
+     "variants": 14
+    },
+    "gold+fx10|gt4h": {
+     "upper95": 0.20693,
+     "point_at_max": 0.09667,
+     "argmax": "out|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.01094,
+      0.09667
+     ],
+     "days": [
+      133,
+      2493
+     ],
+     "variants": 14
+    }
+   }
+  },
+  "families": {
+   "rho_u_day": {
+    "gold|le60m": {
+     "upper95": 0.22376,
+     "point_at_max": 0.08292,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_gross|raw",
+     "point_range": [
+      -0.08184,
+      0.08292
+     ],
+     "days": [
+      753,
+      1458
+     ],
+     "variants": 48
+    },
+    "metals|le60m": {
+     "upper95": 0.18798,
+     "point_at_max": 0.07618,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_gross|pc1",
+     "point_range": [
+      -0.06682,
+      0.07618
+     ],
+     "days": [
+      893,
+      1547
+     ],
+     "variants": 96
+    },
+    "fx10|le60m": {
+     "upper95": 0.0614,
+     "point_at_max": 0.03368,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|pc1",
+     "point_range": [
+      -0.01662,
+      0.03368
+     ],
+     "days": [
+      2060,
+      2103
+     ],
+     "variants": 96
+    },
+    "pooled|le60m": {
+     "upper95": 0.05267,
+     "point_at_max": 0.02567,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|pc1",
+     "point_range": [
+      -0.01789,
+      0.02567
+     ],
+     "days": [
+      2065,
+      2105
+     ],
+     "variants": 144
+    },
+    "gold+fx10|le60m": {
+     "upper95": 0.0551,
+     "point_at_max": 0.02798,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|goldsign",
+     "point_range": [
+      -0.01743,
+      0.02798
+     ],
+     "days": [
+      2062,
+      2104
+     ],
+     "variants": 144
+    },
+    "gold|1h-4h": {
+     "upper95": 0.2148,
+     "point_at_max": 0.05394,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|short_net|raw",
+     "point_range": [
+      -0.10146,
+      0.06729
+     ],
+     "days": [
+      753,
+      1458
+     ],
+     "variants": 48
+    },
+    "metals|1h-4h": {
+     "upper95": 0.20245,
+     "point_at_max": 0.07269,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|short_net|raw",
+     "point_range": [
+      -0.10159,
+      0.07269
+     ],
+     "days": [
+      893,
+      1547
+     ],
+     "variants": 96
+    },
+    "fx10|1h-4h": {
+     "upper95": 0.0733,
+     "point_at_max": 0.03136,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|pc1",
+     "point_range": [
+      -0.03145,
+      0.03136
+     ],
+     "days": [
+      2060,
+      2103
+     ],
+     "variants": 96
+    },
+    "pooled|1h-4h": {
+     "upper95": 0.05554,
+     "point_at_max": 0.01666,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|goldsign",
+     "point_range": [
+      -0.03354,
+      0.01666
+     ],
+     "days": [
+      2065,
+      2105
+     ],
+     "variants": 144
+    },
+    "gold+fx10|1h-4h": {
+     "upper95": 0.06244,
+     "point_at_max": 0.02362,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|raw",
+     "point_range": [
+      -0.03278,
+      0.02362
+     ],
+     "days": [
+      2062,
+      2104
+     ],
+     "variants": 144
+    },
+    "gold|gt4h": {
+     "upper95": 0.44691,
+     "point_at_max": 0.20708,
+     "argmax": "fam-sweep_absorb|15m H=8h T2|fam_net|raw",
+     "point_range": [
+      -0.17588,
+      0.21147
+     ],
+     "days": [
+      751,
+      1458
+     ],
+     "variants": 60
+    },
+    "metals|gt4h": {
+     "upper95": 0.29928,
+     "point_at_max": 0.09446,
+     "argmax": "fam-sweep_absorb|15m H=8h T2|fam_gross|pc1",
+     "point_range": [
+      -0.12335,
+      0.09446
+     ],
+     "days": [
+      890,
+      1547
+     ],
+     "variants": 120
+    },
+    "fx10|gt4h": {
+     "upper95": 0.13637,
+     "point_at_max": 0.05755,
+     "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+     "point_range": [
+      -0.06442,
+      0.05947
+     ],
+     "days": [
+      2060,
+      2102
+     ],
+     "variants": 120
+    },
+    "pooled|gt4h": {
+     "upper95": 0.12711,
+     "point_at_max": 0.05001,
+     "argmax": "fam-sweep_absorb|15m H=8h T2|long_net|goldsign",
+     "point_range": [
+      -0.07145,
+      0.05164
+     ],
+     "days": [
+      2065,
+      2104
+     ],
+     "variants": 180
+    },
+    "gold+fx10|gt4h": {
+     "upper95": 0.1262,
+     "point_at_max": 0.04845,
+     "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+     "point_range": [
+      -0.07092,
+      0.04999
+     ],
+     "days": [
+      2062,
+      2103
+     ],
+     "variants": 180
+    }
+   },
+   "rho_u_inst": {
+    "metals|le60m": {
+     "agg": {
+      "upper95": 0.74322,
+      "point_at_max": 0.51681,
+      "argmax": "fam-session_range_break|1m H=1h T6|long_gross|pc1",
+      "point_range": [
+       -0.07984,
+       0.51681
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.55029,
+      "point_at_max": 0.38977,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_gross|pc1",
+      "point_range": [
+       -0.03937,
+       0.38977
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     }
+    },
+    "fx10|le60m": {
+     "agg": {
+      "upper95": 0.12112,
+      "point_at_max": 0.10014,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       0.00038,
+       0.10014
+      ],
+      "days": [
+       2060,
+       2103
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.08413,
+      "point_at_max": 0.06879,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.00153,
+       0.06879
+      ],
+      "days": [
+       2060,
+       2103
+      ],
+      "variants": 96
+     }
+    },
+    "pooled|le60m": {
+     "agg": {
+      "upper95": 0.10378,
+      "point_at_max": 0.08717,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.00544,
+       0.08717
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.07251,
+      "point_at_max": 0.06064,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.00648,
+       0.06064
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     }
+    },
+    "gold+fx10|le60m": {
+     "agg": {
+      "upper95": 0.10687,
+      "point_at_max": 0.08924,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.00755,
+       0.08924
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.07435,
+      "point_at_max": 0.06133,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.00317,
+       0.06133
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     }
+    },
+    "metals|1h-4h": {
+     "agg": {
+      "upper95": 0.91931,
+      "point_at_max": 0.35244,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|pc1",
+      "point_range": [
+       -0.06982,
+       0.41128
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.80954,
+      "point_at_max": 0.35634,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|short_gross|pc1",
+      "point_range": [
+       -0.06638,
+       0.35634
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     }
+    },
+    "fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.15616,
+      "point_at_max": 0.1394,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+      "point_range": [
+       -0.00503,
+       0.1394
+      ],
+      "days": [
+       2060,
+       2103
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.12025,
+      "point_at_max": 0.10572,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+      "point_range": [
+       -0.00043,
+       0.10572
+      ],
+      "days": [
+       2060,
+       2103
+      ],
+      "variants": 96
+     }
+    },
+    "pooled|1h-4h": {
+     "agg": {
+      "upper95": 0.14111,
+      "point_at_max": 0.12537,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_gross|raw",
+      "point_range": [
+       -0.01457,
+       0.12555
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.10916,
+      "point_at_max": 0.09608,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_gross|raw",
+      "point_range": [
+       -0.00642,
+       0.09644
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     }
+    },
+    "gold+fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.14336,
+      "point_at_max": 0.1269,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+      "point_range": [
+       -0.01447,
+       0.1269
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.11144,
+      "point_at_max": 0.09765,
+      "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+      "point_range": [
+       -0.00608,
+       0.09765
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     }
+    },
+    "metals|gt4h": {
+     "agg": {
+      "upper95": 5.99336,
+      "point_at_max": 4.35249,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+      "point_range": [
+       -0.63588,
+       4.35249
+      ],
+      "days": [
+       105,
+       1547
+      ],
+      "variants": 648
+     },
+     "pair": {
+      "upper95": 5.99336,
+      "point_at_max": 4.35249,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+      "point_range": [
+       -0.63588,
+       4.35249
+      ],
+      "days": [
+       105,
+       1547
+      ],
+      "variants": 648
+     }
+    },
+    "fx10|gt4h": {
+     "agg": {
+      "upper95": 0.55433,
+      "point_at_max": 0.4232,
+      "argmax": "fam-session_range_break|1w H=20d T6|short_net|pc1",
+      "point_range": [
+       -0.02567,
+       0.42324
+      ],
+      "days": [
+       438,
+       2102
+      ],
+      "variants": 672
+     },
+     "pair": {
+      "upper95": 0.55433,
+      "point_at_max": 0.4232,
+      "argmax": "fam-session_range_break|1w H=20d T6|short_net|pc1",
+      "point_range": [
+       -0.02567,
+       0.42324
+      ],
+      "days": [
+       438,
+       2102
+      ],
+      "variants": 672
+     }
+    },
+    "pooled|gt4h": {
+     "agg": {
+      "upper95": 0.44316,
+      "point_at_max": 0.30544,
+      "argmax": "fam-session_range_break|1w H=20d T6|long_gross|pc1",
+      "point_range": [
+       -0.07756,
+       0.33124
+      ],
+      "days": [
+       452,
+       2104
+      ],
+      "variants": 1008
+     },
+     "pair": {
+      "upper95": 0.44316,
+      "point_at_max": 0.30544,
+      "argmax": "fam-session_range_break|1w H=20d T6|long_gross|pc1",
+      "point_range": [
+       -0.07756,
+       0.33124
+      ],
+      "days": [
+       452,
+       2104
+      ],
+      "variants": 1008
+     }
+    },
+    "gold+fx10|gt4h": {
+     "agg": {
+      "upper95": 0.51038,
+      "point_at_max": 0.3562,
+      "argmax": "fam-session_range_break|1w H=20d T6|long_net|pc1",
+      "point_range": [
+       -0.06746,
+       0.37752
+      ],
+      "days": [
+       445,
+       2103
+      ],
+      "variants": 1008
+     },
+     "pair": {
+      "upper95": 0.51038,
+      "point_at_max": 0.3562,
+      "argmax": "fam-session_range_break|1w H=20d T6|long_net|pc1",
+      "point_range": [
+       -0.06746,
+       0.37752
+      ],
+      "days": [
+       445,
+       2103
+      ],
+      "variants": 1008
+     }
+    }
+   },
+   "rho_u_inst_vs_gold": {
+    "metals|le60m": {
+     "agg": {
+      "upper95": 0.74322,
+      "point_at_max": 0.51681,
+      "argmax": "fam-session_range_break|1m H=1h T6|long_gross|pc1",
+      "point_range": [
+       -0.07984,
+       0.51681
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.55029,
+      "point_at_max": 0.38977,
+      "argmax": "fam-session_range_break|1m H=1h T6|fam_gross|pc1",
+      "point_range": [
+       -0.03937,
+       0.38977
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     }
+    },
+    "pooled|le60m": {
+     "agg": {
+      "upper95": 0.10567,
+      "point_at_max": 0.06078,
+      "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.02486,
+       0.06078
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.06643,
+      "point_at_max": 0.03665,
+      "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.01769,
+       0.0446
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     }
+    },
+    "gold+fx10|le60m": {
+     "agg": {
+      "upper95": 0.11276,
+      "point_at_max": 0.06624,
+      "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|pc1",
+      "point_range": [
+       -0.02792,
+       0.06624
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.07039,
+      "point_at_max": 0.03886,
+      "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+      "point_range": [
+       -0.01739,
+       0.03886
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     }
+    },
+    "metals|1h-4h": {
+     "agg": {
+      "upper95": 0.91931,
+      "point_at_max": 0.35244,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|pc1",
+      "point_range": [
+       -0.06982,
+       0.41128
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     },
+     "pair": {
+      "upper95": 0.80954,
+      "point_at_max": 0.35634,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|short_gross|pc1",
+      "point_range": [
+       -0.06638,
+       0.35634
+      ],
+      "days": [
+       893,
+       1547
+      ],
+      "variants": 96
+     }
+    },
+    "pooled|1h-4h": {
+     "agg": {
+      "upper95": 0.15519,
+      "point_at_max": 0.10776,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|goldsign",
+      "point_range": [
+       -0.02151,
+       0.10776
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.11233,
+      "point_at_max": 0.07827,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_net|goldsign",
+      "point_range": [
+       -0.01311,
+       0.07864
+      ],
+      "days": [
+       2065,
+       2105
+      ],
+      "variants": 144
+     }
+    },
+    "gold+fx10|1h-4h": {
+     "agg": {
+      "upper95": 0.14491,
+      "point_at_max": 0.09858,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|goldsign",
+      "point_range": [
+       -0.03714,
+       0.09887
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     },
+     "pair": {
+      "upper95": 0.10242,
+      "point_at_max": 0.07106,
+      "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|goldsign",
+      "point_range": [
+       -0.02393,
+       0.07106
+      ],
+      "days": [
+       2062,
+       2104
+      ],
+      "variants": 144
+     }
+    },
+    "metals|gt4h": {
+     "agg": {
+      "upper95": 5.99336,
+      "point_at_max": 4.35249,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+      "point_range": [
+       -0.63588,
+       4.35249
+      ],
+      "days": [
+       105,
+       1547
+      ],
+      "variants": 648
+     },
+     "pair": {
+      "upper95": 5.99336,
+      "point_at_max": 4.35249,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+      "point_range": [
+       -0.63588,
+       4.35249
+      ],
+      "days": [
+       105,
+       1547
+      ],
+      "variants": 648
+     }
+    },
+    "pooled|gt4h": {
+     "agg": {
+      "upper95": 0.76323,
+      "point_at_max": 0.42879,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|goldsign",
+      "point_range": [
+       -0.19774,
+       0.48196
+      ],
+      "days": [
+       452,
+       2104
+      ],
+      "variants": 1008
+     },
+     "pair": {
+      "upper95": 0.76323,
+      "point_at_max": 0.42879,
+      "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|goldsign",
+      "point_range": [
+       -0.19774,
+       0.48196
+      ],
+      "days": [
+       452,
+       2104
+      ],
+      "variants": 1008
+     }
+    },
+    "gold+fx10|gt4h": {
+     "agg": {
+      "upper95": 0.75029,
+      "point_at_max": 0.48742,
+      "argmax": "fam-box_break_close|1w H=20d T2|short_net|goldsign",
+      "point_range": [
+       -0.26065,
+       0.48742
+      ],
+      "days": [
+       445,
+       2103
+      ],
+      "variants": 1008
+     },
+     "pair": {
+      "upper95": 0.75029,
+      "point_at_max": 0.48742,
+      "argmax": "fam-box_break_close|1w H=20d T2|short_net|goldsign",
+      "point_range": [
+       -0.26065,
+       0.48742
+      ],
+      "days": [
+       445,
+       2103
+      ],
+      "variants": 1008
+     }
+    }
+   },
+   "tau_sd": {
+    "metals|le60m": {
+     "upper95": 0.23375,
+     "point_at_max": 0.11584,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.02379,
+      0.11584
+     ],
+     "days": [
+      893,
+      1547
+     ],
+     "variants": 8
+    },
+    "fx10|le60m": {
+     "upper95": 0.0686,
+     "point_at_max": 0.03004,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.01443,
+      0.03004
+     ],
+     "days": [
+      2060,
+      2103
+     ],
+     "variants": 8
+    },
+    "pooled|le60m": {
+     "upper95": 0.09184,
+     "point_at_max": 0.0456,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.0171,
+      0.0456
+     ],
+     "days": [
+      2065,
+      2105
+     ],
+     "variants": 8
+    },
+    "gold+fx10|le60m": {
+     "upper95": 0.07126,
+     "point_at_max": 0.03277,
+     "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+     "point_range": [
+      0.01412,
+      0.03277
+     ],
+     "days": [
+      2062,
+      2104
+     ],
+     "variants": 8
+    },
+    "metals|1h-4h": {
+     "upper95": 0.21557,
+     "point_at_max": 0.08506,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.00601,
+      0.08506
+     ],
+     "days": [
+      893,
+      1547
+     ],
+     "variants": 8
+    },
+    "fx10|1h-4h": {
+     "upper95": 0.07884,
+     "point_at_max": 0.03616,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.01009,
+      0.03616
+     ],
+     "days": [
+      2060,
+      2103
+     ],
+     "variants": 8
+    },
+    "pooled|1h-4h": {
+     "upper95": 0.08748,
+     "point_at_max": 0.04194,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.01461,
+      0.04194
+     ],
+     "days": [
+      2065,
+      2105
+     ],
+     "variants": 8
+    },
+    "gold+fx10|1h-4h": {
+     "upper95": 0.08015,
+     "point_at_max": 0.04101,
+     "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+     "point_range": [
+      0.01073,
+      0.04101
+     ],
+     "days": [
+      2062,
+      2104
+     ],
+     "variants": 8
+    },
+    "metals|gt4h": {
+     "upper95": 0.57777,
+     "point_at_max": 0.2792,
+     "argmax": "fam-box_break_close|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.00043,
+      0.34586
+     ],
+     "days": [
+      105,
+      1547
+     ],
+     "variants": 56
+    },
+    "fx10|gt4h": {
+     "upper95": 0.198,
+     "point_at_max": 0.11125,
+     "argmax": "fam-session_range_break|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      0.01033,
+      0.11125
+     ],
+     "days": [
+      438,
+      2102
+     ],
+     "variants": 56
+    },
+    "pooled|gt4h": {
+     "upper95": 0.25778,
+     "point_at_max": 0.13571,
+     "argmax": "fam-box_break_close|1d H=10d T2|long_gross|raw",
+     "point_range": [
+      0.01043,
+      0.14908
+     ],
+     "days": [
+      452,
+      2104
+     ],
+     "variants": 56
+    },
+    "gold+fx10|gt4h": {
+     "upper95": 0.19566,
+     "point_at_max": 0.10596,
+     "argmax": "fam-session_range_break|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      0.01004,
+      0.10596
+     ],
+     "days": [
+      445,
+      2103
+     ],
+     "variants": 56
+    }
+   }
+  }
+ },
+ "rho_day_le_60m": {
+  "gold": 0.22376,
+  "metals": 0.18798,
+  "fx10": 0.06154,
+  "pooled": 0.05363,
+  "gold+fx10": 0.0563
+ },
+ "binding_by_tf": {
+  "rule": "quant ruling 1 on #525 (bind per tf): rho_u,inst(tf) = max(D-12 binding of the tf's bucket, the cumulative max of the re-run per-tf value over holds <= this tf), the same for the vs-gold level; rho_u,day(tf) = max(D-12 bucket value, re-run at the tf), undefined for H >= 1 d (design effect 1); tau_a(tf) = the re-run at the tf only",
+  "rho_u_day": {
+   "gold|1m": {
+    "d12": 0.14771,
+    "rerun": 0.22376,
+    "max": 0.22376
+   },
+   "gold|5m": {
+    "d12": 0.15478,
+    "rerun": 0.2148,
+    "max": 0.2148
+   },
+   "gold|15m": {
+    "d12": 0.16863,
+    "rerun": 0.44691,
+    "max": 0.44691
+   },
+   "gold|30m": {
+    "d12": 0.16863,
+    "rerun": 0.2726,
+    "max": 0.2726
+   },
+   "gold|1h": {
+    "d12": 0.16863,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold|2h": {
+    "d12": 0.16863,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold|4h": {
+    "d12": 0.16863,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold|1d": {
+    "d12": 0.16863,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold|1w": {
+    "d12": 0.16863,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "metals|1m": {
+    "d12": 0.13681,
+    "rerun": 0.18798,
+    "max": 0.18798
+   },
+   "metals|5m": {
+    "d12": 0.12399,
+    "rerun": 0.20245,
+    "max": 0.20245
+   },
+   "metals|15m": {
+    "d12": 0.16009,
+    "rerun": 0.29928,
+    "max": 0.29928
+   },
+   "metals|30m": {
+    "d12": 0.16009,
+    "rerun": 0.26031,
+    "max": 0.26031
+   },
+   "metals|1h": {
+    "d12": 0.16009,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "metals|2h": {
+    "d12": 0.16009,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "metals|4h": {
+    "d12": 0.16009,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "metals|1d": {
+    "d12": 0.16009,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "metals|1w": {
+    "d12": 0.16009,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "fx10|1m": {
+    "d12": 0.06154,
+    "rerun": 0.0614,
+    "max": 0.06154
+   },
+   "fx10|5m": {
+    "d12": 0.06017,
+    "rerun": 0.0733,
+    "max": 0.0733
+   },
+   "fx10|15m": {
+    "d12": 0.09695,
+    "rerun": 0.13637,
+    "max": 0.13637
+   },
+   "fx10|30m": {
+    "d12": 0.09695,
+    "rerun": 0.11843,
+    "max": 0.11843
+   },
+   "fx10|1h": {
+    "d12": 0.09695,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "fx10|2h": {
+    "d12": 0.09695,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "fx10|4h": {
+    "d12": 0.09695,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "fx10|1d": {
+    "d12": 0.09695,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "fx10|1w": {
+    "d12": 0.09695,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "pooled|1m": {
+    "d12": 0.05363,
+    "rerun": 0.05267,
+    "max": 0.05363
+   },
+   "pooled|5m": {
+    "d12": 0.05316,
+    "rerun": 0.05554,
+    "max": 0.05554
+   },
+   "pooled|15m": {
+    "d12": 0.07022,
+    "rerun": 0.12711,
+    "max": 0.12711
+   },
+   "pooled|30m": {
+    "d12": 0.07022,
+    "rerun": 0.11197,
+    "max": 0.11197
+   },
+   "pooled|1h": {
+    "d12": 0.07022,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "pooled|2h": {
+    "d12": 0.07022,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "pooled|4h": {
+    "d12": 0.07022,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "pooled|1d": {
+    "d12": 0.07022,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "pooled|1w": {
+    "d12": 0.07022,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold+fx10|1m": {
+    "d12": 0.0563,
+    "rerun": 0.0551,
+    "max": 0.0563
+   },
+   "gold+fx10|5m": {
+    "d12": 0.05499,
+    "rerun": 0.06244,
+    "max": 0.06244
+   },
+   "gold+fx10|15m": {
+    "d12": 0.0672,
+    "rerun": 0.1262,
+    "max": 0.1262
+   },
+   "gold+fx10|30m": {
+    "d12": 0.0672,
+    "rerun": 0.10843,
+    "max": 0.10843
+   },
+   "gold+fx10|1h": {
+    "d12": 0.0672,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold+fx10|2h": {
+    "d12": 0.0672,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold+fx10|4h": {
+    "d12": 0.0672,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold+fx10|1d": {
+    "d12": 0.0672,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   },
+   "gold+fx10|1w": {
+    "d12": 0.0672,
+    "rerun": null,
+    "max": null,
+    "design_effect_1": true
+   }
+  },
+  "rho_u_inst_day_mean": {
+   "metals|1m": {
+    "d12": 0.88477,
+    "rerun": 0.74322,
+    "rerun_cummax": 0.74322,
+    "max": 0.88477
+   },
+   "metals|5m": {
+    "d12": 1.0,
+    "rerun": 0.91931,
+    "rerun_cummax": 0.91931,
+    "max": 1.0
+   },
+   "metals|15m": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|30m": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|2h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|4h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1d": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1w": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "fx10|1m": {
+    "d12": 0.44293,
+    "rerun": 0.23287,
+    "rerun_cummax": 0.23287,
+    "max": 0.44293
+   },
+   "fx10|5m": {
+    "d12": 0.29722,
+    "rerun": 0.23802,
+    "rerun_cummax": 0.23802,
+    "max": 0.29722
+   },
+   "fx10|15m": {
+    "d12": 0.33752,
+    "rerun": 0.25338,
+    "rerun_cummax": 0.25338,
+    "max": 0.33752
+   },
+   "fx10|30m": {
+    "d12": 0.33752,
+    "rerun": 0.27003,
+    "rerun_cummax": 0.27003,
+    "max": 0.33752
+   },
+   "fx10|1h": {
+    "d12": 0.33752,
+    "rerun": 0.25479,
+    "rerun_cummax": 0.27003,
+    "max": 0.33752
+   },
+   "fx10|2h": {
+    "d12": 0.33752,
+    "rerun": 0.28279,
+    "rerun_cummax": 0.28279,
+    "max": 0.33752
+   },
+   "fx10|4h": {
+    "d12": 0.33752,
+    "rerun": 0.28711,
+    "rerun_cummax": 0.28711,
+    "max": 0.33752
+   },
+   "fx10|1d": {
+    "d12": 0.33752,
+    "rerun": 0.4267,
+    "rerun_cummax": 0.4267,
+    "max": 0.4267
+   },
+   "fx10|1w": {
+    "d12": 0.33752,
+    "rerun": 0.55433,
+    "rerun_cummax": 0.55433,
+    "max": 0.55433
+   },
+   "pooled|1m": {
+    "d12": 0.39704,
+    "rerun": 0.17547,
+    "rerun_cummax": 0.17547,
+    "max": 0.39704
+   },
+   "pooled|5m": {
+    "d12": 0.15122,
+    "rerun": 0.17046,
+    "rerun_cummax": 0.17547,
+    "max": 0.17547
+   },
+   "pooled|15m": {
+    "d12": 0.18501,
+    "rerun": 0.19832,
+    "rerun_cummax": 0.19832,
+    "max": 0.19832
+   },
+   "pooled|30m": {
+    "d12": 0.18501,
+    "rerun": 0.20326,
+    "rerun_cummax": 0.20326,
+    "max": 0.20326
+   },
+   "pooled|1h": {
+    "d12": 0.18501,
+    "rerun": 0.21109,
+    "rerun_cummax": 0.21109,
+    "max": 0.21109
+   },
+   "pooled|2h": {
+    "d12": 0.18501,
+    "rerun": 0.26949,
+    "rerun_cummax": 0.26949,
+    "max": 0.26949
+   },
+   "pooled|4h": {
+    "d12": 0.18501,
+    "rerun": 0.26532,
+    "rerun_cummax": 0.26949,
+    "max": 0.26949
+   },
+   "pooled|1d": {
+    "d12": 0.18501,
+    "rerun": 0.37998,
+    "rerun_cummax": 0.37998,
+    "max": 0.37998
+   },
+   "pooled|1w": {
+    "d12": 0.18501,
+    "rerun": 0.44316,
+    "rerun_cummax": 0.44316,
+    "max": 0.44316
+   },
+   "gold+fx10|1m": {
+    "d12": 0.39895,
+    "rerun": 0.21302,
+    "rerun_cummax": 0.21302,
+    "max": 0.39895
+   },
+   "gold+fx10|5m": {
+    "d12": 0.26154,
+    "rerun": 0.20749,
+    "rerun_cummax": 0.21302,
+    "max": 0.26154
+   },
+   "gold+fx10|15m": {
+    "d12": 0.31666,
+    "rerun": 0.22859,
+    "rerun_cummax": 0.22859,
+    "max": 0.31666
+   },
+   "gold+fx10|30m": {
+    "d12": 0.31666,
+    "rerun": 0.23674,
+    "rerun_cummax": 0.23674,
+    "max": 0.31666
+   },
+   "gold+fx10|1h": {
+    "d12": 0.31666,
+    "rerun": 0.23168,
+    "rerun_cummax": 0.23674,
+    "max": 0.31666
+   },
+   "gold+fx10|2h": {
+    "d12": 0.31666,
+    "rerun": 0.2592,
+    "rerun_cummax": 0.2592,
+    "max": 0.31666
+   },
+   "gold+fx10|4h": {
+    "d12": 0.31666,
+    "rerun": 0.27088,
+    "rerun_cummax": 0.27088,
+    "max": 0.31666
+   },
+   "gold+fx10|1d": {
+    "d12": 0.31666,
+    "rerun": 0.41021,
+    "rerun_cummax": 0.41021,
+    "max": 0.41021
+   },
+   "gold+fx10|1w": {
+    "d12": 0.31666,
+    "rerun": 0.51038,
+    "rerun_cummax": 0.51038,
+    "max": 0.51038
+   }
+  },
+  "rho_u_inst_vs_gold_day_mean": {
+   "metals|1m": {
+    "d12": 0.88477,
+    "rerun": 0.74322,
+    "rerun_cummax": 0.74322,
+    "max": 0.88477
+   },
+   "metals|5m": {
+    "d12": 1.0,
+    "rerun": 0.91931,
+    "rerun_cummax": 0.91931,
+    "max": 1.0
+   },
+   "metals|15m": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|30m": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|2h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|4h": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1d": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "metals|1w": {
+    "d12": 1.0,
+    "rerun": 1.0,
+    "rerun_cummax": 1.0,
+    "max": 1.0
+   },
+   "pooled|1m": {
+    "d12": 0.21458,
+    "rerun": 0.10567,
+    "rerun_cummax": 0.10567,
+    "max": 0.21458
+   },
+   "pooled|5m": {
+    "d12": 0.25499,
+    "rerun": 0.15927,
+    "rerun_cummax": 0.15927,
+    "max": 0.25499
+   },
+   "pooled|15m": {
+    "d12": 0.32508,
+    "rerun": 0.19665,
+    "rerun_cummax": 0.19665,
+    "max": 0.32508
+   },
+   "pooled|30m": {
+    "d12": 0.32508,
+    "rerun": 0.25319,
+    "rerun_cummax": 0.25319,
+    "max": 0.32508
+   },
+   "pooled|1h": {
+    "d12": 0.32508,
+    "rerun": 0.30327,
+    "rerun_cummax": 0.30327,
+    "max": 0.32508
+   },
+   "pooled|2h": {
+    "d12": 0.32508,
+    "rerun": 0.33745,
+    "rerun_cummax": 0.33745,
+    "max": 0.33745
+   },
+   "pooled|4h": {
+    "d12": 0.32508,
+    "rerun": 0.33024,
+    "rerun_cummax": 0.33745,
+    "max": 0.33745
+   },
+   "pooled|1d": {
+    "d12": 0.32508,
+    "rerun": 0.65521,
+    "rerun_cummax": 0.65521,
+    "max": 0.65521
+   },
+   "pooled|1w": {
+    "d12": 0.32508,
+    "rerun": 0.76323,
+    "rerun_cummax": 0.76323,
+    "max": 0.76323
+   },
+   "gold+fx10|1m": {
+    "d12": 0.25634,
+    "rerun": 0.11276,
+    "rerun_cummax": 0.11276,
+    "max": 0.25634
+   },
+   "gold+fx10|5m": {
+    "d12": 0.30414,
+    "rerun": 0.14955,
+    "rerun_cummax": 0.14955,
+    "max": 0.30414
+   },
+   "gold+fx10|15m": {
+    "d12": 0.34987,
+    "rerun": 0.16587,
+    "rerun_cummax": 0.16587,
+    "max": 0.34987
+   },
+   "gold+fx10|30m": {
+    "d12": 0.34987,
+    "rerun": 0.21216,
+    "rerun_cummax": 0.21216,
+    "max": 0.34987
+   },
+   "gold+fx10|1h": {
+    "d12": 0.34987,
+    "rerun": 0.26939,
+    "rerun_cummax": 0.26939,
+    "max": 0.34987
+   },
+   "gold+fx10|2h": {
+    "d12": 0.34987,
+    "rerun": 0.3043,
+    "rerun_cummax": 0.3043,
+    "max": 0.34987
+   },
+   "gold+fx10|4h": {
+    "d12": 0.34987,
+    "rerun": 0.31469,
+    "rerun_cummax": 0.31469,
+    "max": 0.34987
+   },
+   "gold+fx10|1d": {
+    "d12": 0.34987,
+    "rerun": 0.66476,
+    "rerun_cummax": 0.66476,
+    "max": 0.66476
+   },
+   "gold+fx10|1w": {
+    "d12": 0.34987,
+    "rerun": 0.75029,
+    "rerun_cummax": 0.75029,
+    "max": 0.75029
+   }
+  },
+  "tau_a": {
+   "metals|1m": {
+    "rerun": 0.23375,
+    "tau_a": 0.23375,
+    "lambda_a": 24.70654
+   },
+   "metals|5m": {
+    "rerun": 0.21557,
+    "tau_a": 0.21557,
+    "lambda_a": 29.0502
+   },
+   "metals|15m": {
+    "rerun": 0.26549,
+    "tau_a": 0.26549,
+    "lambda_a": 19.15245
+   },
+   "metals|30m": {
+    "rerun": 0.264,
+    "tau_a": 0.264,
+    "lambda_a": 19.36983
+   },
+   "metals|1h": {
+    "rerun": 0.312,
+    "tau_a": 0.312,
+    "lambda_a": 13.86799
+   },
+   "metals|2h": {
+    "rerun": 0.25125,
+    "tau_a": 0.25125,
+    "lambda_a": 21.38612
+   },
+   "metals|4h": {
+    "rerun": 0.57081,
+    "tau_a": 0.57081,
+    "lambda_a": 4.14334
+   },
+   "metals|1d": {
+    "rerun": 0.57777,
+    "tau_a": 0.57777,
+    "lambda_a": 4.0441
+   },
+   "metals|1w": {
+    "rerun": 0.34979,
+    "tau_a": 0.34979,
+    "lambda_a": 11.03358
+   },
+   "fx10|1m": {
+    "rerun": 0.0686,
+    "tau_a": 0.0686,
+    "lambda_a": 286.8711
+   },
+   "fx10|5m": {
+    "rerun": 0.07884,
+    "tau_a": 0.07884,
+    "lambda_a": 217.19201
+   },
+   "fx10|15m": {
+    "rerun": 0.07834,
+    "tau_a": 0.07834,
+    "lambda_a": 219.96936
+   },
+   "fx10|30m": {
+    "rerun": 0.08361,
+    "tau_a": 0.08361,
+    "lambda_a": 193.11096
+   },
+   "fx10|1h": {
+    "rerun": 0.09965,
+    "tau_a": 0.09965,
+    "lambda_a": 135.94425
+   },
+   "fx10|2h": {
+    "rerun": 0.10171,
+    "tau_a": 0.10171,
+    "lambda_a": 130.50135
+   },
+   "fx10|4h": {
+    "rerun": 0.17196,
+    "tau_a": 0.17196,
+    "lambda_a": 45.65348
+   },
+   "fx10|1d": {
+    "rerun": 0.20954,
+    "tau_a": 0.20954,
+    "lambda_a": 30.7468
+   },
+   "fx10|1w": {
+    "rerun": 0.198,
+    "tau_a": 0.198,
+    "lambda_a": 34.43631
+   },
+   "pooled|1m": {
+    "rerun": 0.09184,
+    "tau_a": 0.09184,
+    "lambda_a": 160.06365
+   },
+   "pooled|5m": {
+    "rerun": 0.08748,
+    "tau_a": 0.08748,
+    "lambda_a": 176.41846
+   },
+   "pooled|15m": {
+    "rerun": 0.09942,
+    "tau_a": 0.09942,
+    "lambda_a": 136.57094
+   },
+   "pooled|30m": {
+    "rerun": 0.10046,
+    "tau_a": 0.10046,
+    "lambda_a": 133.76652
+   },
+   "pooled|1h": {
+    "rerun": 0.12342,
+    "tau_a": 0.12342,
+    "lambda_a": 88.62631
+   },
+   "pooled|2h": {
+    "rerun": 0.11672,
+    "tau_a": 0.11672,
+    "lambda_a": 99.09645
+   },
+   "pooled|4h": {
+    "rerun": 0.24292,
+    "tau_a": 0.24292,
+    "lambda_a": 22.87743
+   },
+   "pooled|1d": {
+    "rerun": 0.25778,
+    "tau_a": 0.25778,
+    "lambda_a": 20.3165
+   },
+   "pooled|1w": {
+    "rerun": 0.20696,
+    "tau_a": 0.20696,
+    "lambda_a": 31.51725
+   },
+   "gold+fx10|1m": {
+    "rerun": 0.07126,
+    "tau_a": 0.07126,
+    "lambda_a": 265.85857
+   },
+   "gold+fx10|5m": {
+    "rerun": 0.08015,
+    "tau_a": 0.08015,
+    "lambda_a": 210.17021
+   },
+   "gold+fx10|15m": {
+    "rerun": 0.08293,
+    "tau_a": 0.08293,
+    "lambda_a": 196.28702
+   },
+   "gold+fx10|30m": {
+    "rerun": 0.08671,
+    "tau_a": 0.08671,
+    "lambda_a": 179.55496
+   },
+   "gold+fx10|1h": {
+    "rerun": 0.09816,
+    "tau_a": 0.09816,
+    "lambda_a": 140.11969
+   },
+   "gold+fx10|2h": {
+    "rerun": 0.10318,
+    "tau_a": 0.10318,
+    "lambda_a": 126.80439
+   },
+   "gold+fx10|4h": {
+    "rerun": 0.16426,
+    "tau_a": 0.16426,
+    "lambda_a": 50.03335
+   },
+   "gold+fx10|1d": {
+    "rerun": 0.20693,
+    "tau_a": 0.20693,
+    "lambda_a": 31.527
+   },
+   "gold+fx10|1w": {
+    "rerun": 0.19566,
+    "tau_a": 0.19566,
+    "lambda_a": 35.26493
+   }
+  }
+ },
+ "by_tf_rerun": {
+  "rho_u_day": {
+   "gold|1m": {
+    "upper95": 0.22376,
+    "point_at_max": 0.08292,
+    "argmax": "fam-sweep_absorb|1m H=1h T6|fam_gross|raw",
+    "point_range": [
+     -0.08184,
+     0.08292
+    ],
+    "days": [
+     753,
+     1500
+    ],
+    "variants": 60
+   },
+   "metals|1m": {
+    "upper95": 0.18798,
+    "point_at_max": 0.07618,
+    "argmax": "fam-sweep_absorb|1m H=1h T6|fam_gross|pc1",
+    "point_range": [
+     -0.06682,
+     0.07618
+    ],
+    "days": [
+     893,
+     1653
+    ],
+    "variants": 120
+   },
+   "fx10|1m": {
+    "upper95": 0.0614,
+    "point_at_max": 0.03368,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|pc1",
+    "point_range": [
+     -0.01662,
+     0.03368
+    ],
+    "days": [
+     2060,
+     2487
+    ],
+    "variants": 120
+   },
+   "pooled|1m": {
+    "upper95": 0.05267,
+    "point_at_max": 0.02567,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|pc1",
+    "point_range": [
+     -0.01789,
+     0.02567
+    ],
+    "days": [
+     2065,
+     2487
+    ],
+    "variants": 180
+   },
+   "gold+fx10|1m": {
+    "upper95": 0.0551,
+    "point_at_max": 0.02798,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|short_net|goldsign",
+    "point_range": [
+     -0.01743,
+     0.02798
+    ],
+    "days": [
+     2062,
+     2487
+    ],
+    "variants": 180
+   },
+   "gold|5m": {
+    "upper95": 0.2148,
+    "point_at_max": 0.05394,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|short_net|raw",
+    "point_range": [
+     -0.10146,
+     0.06729
+    ],
+    "days": [
+     753,
+     1767
+    ],
+    "variants": 60
+   },
+   "metals|5m": {
+    "upper95": 0.20245,
+    "point_at_max": 0.07269,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|short_net|raw",
+    "point_range": [
+     -0.10159,
+     0.07269
+    ],
+    "days": [
+     893,
+     1869
+    ],
+    "variants": 120
+   },
+   "fx10|5m": {
+    "upper95": 0.0733,
+    "point_at_max": 0.03136,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|pc1",
+    "point_range": [
+     -0.03145,
+     0.03136
+    ],
+    "days": [
+     2060,
+     2491
+    ],
+    "variants": 120
+   },
+   "pooled|5m": {
+    "upper95": 0.05554,
+    "point_at_max": 0.01666,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|goldsign",
+    "point_range": [
+     -0.03354,
+     0.01666
+    ],
+    "days": [
+     2065,
+     2492
+    ],
+    "variants": 180
+   },
+   "gold+fx10|5m": {
+    "upper95": 0.06244,
+    "point_at_max": 0.02362,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_net|raw",
+    "point_range": [
+     -0.03278,
+     0.02362
+    ],
+    "days": [
+     2062,
+     2492
+    ],
+    "variants": 180
+   },
+   "gold|15m": {
+    "upper95": 0.44691,
+    "point_at_max": 0.20708,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|fam_net|raw",
+    "point_range": [
+     -0.17588,
+     0.21147
+    ],
+    "days": [
+     751,
+     1770
+    ],
+    "variants": 48
+   },
+   "metals|15m": {
+    "upper95": 0.29928,
+    "point_at_max": 0.09446,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|fam_gross|pc1",
+    "point_range": [
+     -0.12335,
+     0.09446
+    ],
+    "days": [
+     890,
+     1872
+    ],
+    "variants": 96
+   },
+   "fx10|15m": {
+    "upper95": 0.13637,
+    "point_at_max": 0.05755,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     -0.06093,
+     0.05947
+    ],
+    "days": [
+     2060,
+     2491
+    ],
+    "variants": 96
+   },
+   "pooled|15m": {
+    "upper95": 0.12711,
+    "point_at_max": 0.05001,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|long_net|goldsign",
+    "point_range": [
+     -0.06815,
+     0.05022
+    ],
+    "days": [
+     2065,
+     2493
+    ],
+    "variants": 144
+   },
+   "gold+fx10|15m": {
+    "upper95": 0.1262,
+    "point_at_max": 0.04845,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     -0.07092,
+     0.04925
+    ],
+    "days": [
+     2062,
+     2493
+    ],
+    "variants": 144
+   },
+   "gold|30m": {
+    "upper95": 0.2726,
+    "point_at_max": 0.06004,
+    "argmax": "fam-box_break_close|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     -0.11212,
+     0.08912
+    ],
+    "days": [
+     1085,
+     1771
+    ],
+    "variants": 36
+   },
+   "metals|30m": {
+    "upper95": 0.26031,
+    "point_at_max": 0.05435,
+    "argmax": "fam-box_break_close|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     -0.11613,
+     0.086
+    ],
+    "days": [
+     1191,
+     1873
+    ],
+    "variants": 72
+   },
+   "fx10|30m": {
+    "upper95": 0.11843,
+    "point_at_max": 0.03574,
+    "argmax": "fam-box_break_close|30m H=16h T2|fam_net|raw",
+    "point_range": [
+     -0.06442,
+     0.05172
+    ],
+    "days": [
+     2083,
+     2491
+    ],
+    "variants": 72
+   },
+   "pooled|30m": {
+    "upper95": 0.11197,
+    "point_at_max": 0.03029,
+    "argmax": "fam-box_break_close|30m H=16h T2|fam_gross|goldsign",
+    "point_range": [
+     -0.07145,
+     0.05164
+    ],
+    "days": [
+     2085,
+     2493
+    ],
+    "variants": 108
+   },
+   "gold+fx10|30m": {
+    "upper95": 0.10843,
+    "point_at_max": 0.04954,
+    "argmax": "fam-all|30m H=16h T2|fam_net|pc1",
+    "point_range": [
+     -0.0702,
+     0.04999
+    ],
+    "days": [
+     2084,
+     2493
+    ],
+    "variants": 108
+   },
+   "gold|1h": {
+    "upper95": null
+   },
+   "metals|1h": {
+    "upper95": null
+   },
+   "fx10|1h": {
+    "upper95": null
+   },
+   "pooled|1h": {
+    "upper95": null
+   },
+   "gold+fx10|1h": {
+    "upper95": null
+   },
+   "gold|2h": {
+    "upper95": null
+   },
+   "metals|2h": {
+    "upper95": null
+   },
+   "fx10|2h": {
+    "upper95": null
+   },
+   "pooled|2h": {
+    "upper95": null
+   },
+   "gold+fx10|2h": {
+    "upper95": null
+   },
+   "gold|4h": {
+    "upper95": null
+   },
+   "metals|4h": {
+    "upper95": null
+   },
+   "fx10|4h": {
+    "upper95": null
+   },
+   "pooled|4h": {
+    "upper95": null
+   },
+   "gold+fx10|4h": {
+    "upper95": null
+   },
+   "gold|1d": {
+    "upper95": null
+   },
+   "metals|1d": {
+    "upper95": null
+   },
+   "fx10|1d": {
+    "upper95": null
+   },
+   "pooled|1d": {
+    "upper95": null
+   },
+   "gold+fx10|1d": {
+    "upper95": null
+   },
+   "gold|1w": {
+    "upper95": null
+   },
+   "metals|1w": {
+    "upper95": null
+   },
+   "fx10|1w": {
+    "upper95": null
+   },
+   "pooled|1w": {
+    "upper95": null
+   },
+   "gold+fx10|1w": {
+    "upper95": null
+   }
+  },
+  "rho_u_inst": {
+   "metals|1m": {
+    "agg": {
+     "upper95": 0.74322,
+     "point_at_max": 0.51681,
+     "argmax": "fam-session_range_break|1m H=1h T6|long_gross|pc1",
+     "point_range": [
+      -0.07984,
+      0.51681
+     ],
+     "days": [
+      893,
+      1653
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.55029,
+     "point_at_max": 0.38977,
+     "argmax": "fam-session_range_break|1m H=1h T6|fam_gross|pc1",
+     "point_range": [
+      -0.03937,
+      0.38977
+     ],
+     "days": [
+      893,
+      1653
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|1m": {
+    "agg": {
+     "upper95": 0.23287,
+     "point_at_max": 0.1987,
+     "argmax": "out|1m H=1h T6|short_gross|pc1",
+     "point_range": [
+      0.00038,
+      0.1987
+     ],
+     "days": [
+      2060,
+      2487
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.08413,
+     "point_at_max": 0.06879,
+     "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.00153,
+      0.06879
+     ],
+     "days": [
+      2060,
+      2487
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1m": {
+    "agg": {
+     "upper95": 0.17547,
+     "point_at_max": 0.15246,
+     "argmax": "out|1m H=1h T2|short_net|raw",
+     "point_range": [
+      -0.00873,
+      0.15246
+     ],
+     "days": [
+      2065,
+      2487
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.07251,
+     "point_at_max": 0.06064,
+     "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.00648,
+      0.06064
+     ],
+     "days": [
+      2065,
+      2487
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1m": {
+    "agg": {
+     "upper95": 0.21302,
+     "point_at_max": 0.18192,
+     "argmax": "out|1m H=1h T6|short_gross|pc1",
+     "point_range": [
+      -0.00848,
+      0.18192
+     ],
+     "days": [
+      2062,
+      2487
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.07435,
+     "point_at_max": 0.06133,
+     "argmax": "fam-session_range_break|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.00317,
+      0.06133
+     ],
+     "days": [
+      2062,
+      2487
+     ],
+     "variants": 180
+    }
+   },
+   "metals|5m": {
+    "agg": {
+     "upper95": 0.91931,
+     "point_at_max": 0.35244,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|pc1",
+     "point_range": [
+      -0.06982,
+      0.41232
+     ],
+     "days": [
+      893,
+      1869
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.80954,
+     "point_at_max": 0.35634,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|short_gross|pc1",
+     "point_range": [
+      -0.06638,
+      0.35634
+     ],
+     "days": [
+      893,
+      1869
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|5m": {
+    "agg": {
+     "upper95": 0.23802,
+     "point_at_max": 0.21164,
+     "argmax": "out|5m H=4h T6|long_gross|pc1",
+     "point_range": [
+      -0.00503,
+      0.21257
+     ],
+     "days": [
+      2060,
+      2491
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.12025,
+     "point_at_max": 0.10572,
+     "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+     "point_range": [
+      -0.00043,
+      0.10572
+     ],
+     "days": [
+      2060,
+      2491
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|5m": {
+    "agg": {
+     "upper95": 0.17046,
+     "point_at_max": 0.14676,
+     "argmax": "out|5m H=4h T6|short_net|pc1",
+     "point_range": [
+      -0.01457,
+      0.14773
+     ],
+     "days": [
+      2065,
+      2492
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.10916,
+     "point_at_max": 0.09608,
+     "argmax": "fam-session_range_break|5m H=4h T6|fam_gross|raw",
+     "point_range": [
+      -0.00642,
+      0.09644
+     ],
+     "days": [
+      2065,
+      2492
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|5m": {
+    "agg": {
+     "upper95": 0.20749,
+     "point_at_max": 0.18438,
+     "argmax": "out|5m H=4h T6|short_gross|pc1",
+     "point_range": [
+      -0.01447,
+      0.18438
+     ],
+     "days": [
+      2062,
+      2492
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.11144,
+     "point_at_max": 0.09765,
+     "argmax": "fam-session_range_break|5m H=4h T6|fam_net|raw",
+     "point_range": [
+      -0.00608,
+      0.09765
+     ],
+     "days": [
+      2062,
+      2492
+     ],
+     "variants": 180
+    }
+   },
+   "metals|15m": {
+    "agg": {
+     "upper95": 1.34326,
+     "point_at_max": 0.69573,
+     "argmax": "fam-sweep_absorb|15m H=8h T6|long_gross|pc1",
+     "point_range": [
+      -0.08788,
+      0.69573
+     ],
+     "days": [
+      890,
+      1872
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.23826,
+     "point_at_max": 0.67644,
+     "argmax": "fam-sweep_absorb|15m H=8h T6|long_gross|pc1",
+     "point_range": [
+      -0.0757,
+      0.67644
+     ],
+     "days": [
+      890,
+      1872
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|15m": {
+    "agg": {
+     "upper95": 0.25338,
+     "point_at_max": 0.2339,
+     "argmax": "out|15m H=8h T6|short_net|pc1",
+     "point_range": [
+      0.00394,
+      0.23408
+     ],
+     "days": [
+      2060,
+      2491
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.18953,
+     "point_at_max": 0.16416,
+     "argmax": "fam-session_range_break|15m H=8h T6|fam_net|raw",
+     "point_range": [
+      0.00187,
+      0.16452
+     ],
+     "days": [
+      2060,
+      2491
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|15m": {
+    "agg": {
+     "upper95": 0.19832,
+     "point_at_max": 0.1822,
+     "argmax": "out|15m H=8h T6|short_net|pc1",
+     "point_range": [
+      -0.00767,
+      0.18227
+     ],
+     "days": [
+      2065,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.17423,
+     "point_at_max": 0.15238,
+     "argmax": "fam-session_range_break|15m H=8h T6|fam_gross|raw",
+     "point_range": [
+      -0.00978,
+      0.15238
+     ],
+     "days": [
+      2065,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|15m": {
+    "agg": {
+     "upper95": 0.22859,
+     "point_at_max": 0.21026,
+     "argmax": "out|15m H=8h T6|short_gross|pc1",
+     "point_range": [
+      -0.0067,
+      0.21026
+     ],
+     "days": [
+      2062,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.17706,
+     "point_at_max": 0.15393,
+     "argmax": "fam-session_range_break|15m H=8h T6|fam_gross|raw",
+     "point_range": [
+      -0.00736,
+      0.15393
+     ],
+     "days": [
+      2062,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "metals|30m": {
+    "agg": {
+     "upper95": 1.29838,
+     "point_at_max": 0.6833,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|long_gross|raw",
+     "point_range": [
+      -0.0723,
+      0.7244
+     ],
+     "days": [
+      875,
+      1873
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.29838,
+     "point_at_max": 0.6833,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|long_gross|raw",
+     "point_range": [
+      -0.04362,
+      0.6833
+     ],
+     "days": [
+      875,
+      1873
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|30m": {
+    "agg": {
+     "upper95": 0.27003,
+     "point_at_max": 0.24841,
+     "argmax": "out|30m H=16h T6|short_net|pc1",
+     "point_range": [
+      -0.00185,
+      0.24856
+     ],
+     "days": [
+      2056,
+      2491
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.20565,
+     "point_at_max": 0.18127,
+     "argmax": "fam-session_range_break|30m H=16h T6|fam_gross|raw",
+     "point_range": [
+      -0.00185,
+      0.18394
+     ],
+     "days": [
+      2056,
+      2491
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|30m": {
+    "agg": {
+     "upper95": 0.20326,
+     "point_at_max": 0.18458,
+     "argmax": "out|30m H=16h T6|short_gross|pc1",
+     "point_range": [
+      -0.00741,
+      0.18475
+     ],
+     "days": [
+      2061,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.19338,
+     "point_at_max": 0.16987,
+     "argmax": "fam-session_range_break|30m H=16h T6|fam_net|raw",
+     "point_range": [
+      -0.00741,
+      0.17022
+     ],
+     "days": [
+      2061,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|30m": {
+    "agg": {
+     "upper95": 0.23674,
+     "point_at_max": 0.21673,
+     "argmax": "out|30m H=16h T6|short_gross|pc1",
+     "point_range": [
+      -0.01026,
+      0.21673
+     ],
+     "days": [
+      2059,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.19552,
+     "point_at_max": 0.17196,
+     "argmax": "fam-session_range_break|30m H=16h T6|fam_gross|raw",
+     "point_range": [
+      -0.01026,
+      0.17196
+     ],
+     "days": [
+      2059,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1h": {
+    "agg": {
+     "upper95": 1.80903,
+     "point_at_max": 0.9644,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|long_net|pc1",
+     "point_range": [
+      -0.12713,
+      0.97379
+     ],
+     "days": [
+      767,
+      1551
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.80903,
+     "point_at_max": 0.9644,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|long_net|pc1",
+     "point_range": [
+      -0.12713,
+      0.97379
+     ],
+     "days": [
+      767,
+      1551
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|1h": {
+    "agg": {
+     "upper95": 0.25479,
+     "point_at_max": 0.23392,
+     "argmax": "out|1h H=1d T6|short_net|pc1",
+     "point_range": [
+      -0.00755,
+      0.23399
+     ],
+     "days": [
+      2031,
+      2082
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.25479,
+     "point_at_max": 0.23392,
+     "argmax": "out|1h H=1d T6|short_net|pc1",
+     "point_range": [
+      -0.00755,
+      0.23399
+     ],
+     "days": [
+      2031,
+      2082
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1h": {
+    "agg": {
+     "upper95": 0.21109,
+     "point_at_max": 0.19073,
+     "argmax": "out|1h H=1d T6|long_gross|pc1",
+     "point_range": [
+      -0.00782,
+      0.19082
+     ],
+     "days": [
+      2040,
+      2083
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.21109,
+     "point_at_max": 0.19073,
+     "argmax": "out|1h H=1d T6|long_gross|pc1",
+     "point_range": [
+      -0.00782,
+      0.19082
+     ],
+     "days": [
+      2040,
+      2083
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1h": {
+    "agg": {
+     "upper95": 0.23168,
+     "point_at_max": 0.21033,
+     "argmax": "out|1h H=1d T6|short_net|pc1",
+     "point_range": [
+      -0.00832,
+      0.21053
+     ],
+     "days": [
+      2035,
+      2083
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.23168,
+     "point_at_max": 0.21033,
+     "argmax": "out|1h H=1d T6|short_net|pc1",
+     "point_range": [
+      -0.00832,
+      0.21053
+     ],
+     "days": [
+      2035,
+      2083
+     ],
+     "variants": 180
+    }
+   },
+   "metals|2h": {
+    "agg": {
+     "upper95": 2.03034,
+     "point_at_max": 1.10818,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|long_net|raw",
+     "point_range": [
+      0.04244,
+      1.11487
+     ],
+     "days": [
+      576,
+      872
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 2.03034,
+     "point_at_max": 1.10818,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|long_net|raw",
+     "point_range": [
+      0.04244,
+      1.11487
+     ],
+     "days": [
+      576,
+      872
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|2h": {
+    "agg": {
+     "upper95": 0.28279,
+     "point_at_max": 0.2447,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_gross|pc1",
+     "point_range": [
+      0.00839,
+      0.24498
+     ],
+     "days": [
+      1039,
+      1940
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.28279,
+     "point_at_max": 0.2447,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_gross|pc1",
+     "point_range": [
+      0.00839,
+      0.24498
+     ],
+     "days": [
+      1039,
+      1940
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|2h": {
+    "agg": {
+     "upper95": 0.26949,
+     "point_at_max": 0.23464,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.01437,
+      0.23464
+     ],
+     "days": [
+      1039,
+      1976
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.26949,
+     "point_at_max": 0.23464,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.01437,
+      0.23464
+     ],
+     "days": [
+      1039,
+      1976
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|2h": {
+    "agg": {
+     "upper95": 0.2592,
+     "point_at_max": 0.22429,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.0142,
+      0.22804
+     ],
+     "days": [
+      1039,
+      1970
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.2592,
+     "point_at_max": 0.22429,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.0142,
+      0.22804
+     ],
+     "days": [
+      1039,
+      1970
+     ],
+     "variants": 180
+    }
+   },
+   "metals|4h": {
+    "agg": {
+     "upper95": 1.52888,
+     "point_at_max": 0.9869,
+     "argmax": "fam-box_break_close|4h H=5d T6|long_net|raw",
+     "point_range": [
+      -0.02571,
+      0.99642
+     ],
+     "days": [
+      297,
+      340
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.52888,
+     "point_at_max": 0.9869,
+     "argmax": "fam-box_break_close|4h H=5d T6|long_net|raw",
+     "point_range": [
+      -0.02571,
+      0.99642
+     ],
+     "days": [
+      297,
+      340
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|4h": {
+    "agg": {
+     "upper95": 0.28711,
+     "point_at_max": 0.23708,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_net|pc1",
+     "point_range": [
+      0.00479,
+      0.23869
+     ],
+     "days": [
+      415,
+      1323
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.28711,
+     "point_at_max": 0.23708,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_net|pc1",
+     "point_range": [
+      0.00479,
+      0.23869
+     ],
+     "days": [
+      415,
+      1323
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|4h": {
+    "agg": {
+     "upper95": 0.26532,
+     "point_at_max": 0.2127,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_gross|pc1",
+     "point_range": [
+      -0.00857,
+      0.22886
+     ],
+     "days": [
+      415,
+      1376
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.26532,
+     "point_at_max": 0.2127,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_gross|pc1",
+     "point_range": [
+      -0.00857,
+      0.22886
+     ],
+     "days": [
+      415,
+      1376
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|4h": {
+    "agg": {
+     "upper95": 0.27088,
+     "point_at_max": 0.21828,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_gross|pc1",
+     "point_range": [
+      -0.01229,
+      0.22546
+     ],
+     "days": [
+      415,
+      1361
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.27088,
+     "point_at_max": 0.21828,
+     "argmax": "fam-sweep_absorb|4h H=5d T6|short_gross|pc1",
+     "point_range": [
+      -0.01229,
+      0.22546
+     ],
+     "days": [
+      415,
+      1361
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1d": {
+    "agg": {
+     "upper95": 3.96631,
+     "point_at_max": 2.11947,
+     "argmax": "fam-session_range_break|1d H=10d T6|long_net|pc1",
+     "point_range": [
+      -0.63588,
+      2.12815
+     ],
+     "days": [
+      145,
+      236
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 3.96631,
+     "point_at_max": 2.11947,
+     "argmax": "fam-session_range_break|1d H=10d T6|long_net|pc1",
+     "point_range": [
+      -0.63588,
+      2.12815
+     ],
+     "days": [
+      145,
+      236
+     ],
+     "variants": 120
+    }
+   },
+   "fx10|1d": {
+    "agg": {
+     "upper95": 0.4267,
+     "point_at_max": 0.34726,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_gross|pc1",
+     "point_range": [
+      -0.01316,
+      0.34728
+     ],
+     "days": [
+      205,
+      1212
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.4267,
+     "point_at_max": 0.34726,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_gross|pc1",
+     "point_range": [
+      -0.01316,
+      0.34728
+     ],
+     "days": [
+      205,
+      1212
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1d": {
+    "agg": {
+     "upper95": 0.37998,
+     "point_at_max": 0.3159,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_net|pc1",
+     "point_range": [
+      -0.04302,
+      0.31596
+     ],
+     "days": [
+      206,
+      1279
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.37998,
+     "point_at_max": 0.3159,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_net|pc1",
+     "point_range": [
+      -0.04302,
+      0.31596
+     ],
+     "days": [
+      206,
+      1279
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1d": {
+    "agg": {
+     "upper95": 0.41021,
+     "point_at_max": 0.34039,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_net|pc1",
+     "point_range": [
+      -0.0087,
+      0.34041
+     ],
+     "days": [
+      206,
+      1262
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.41021,
+     "point_at_max": 0.34039,
+     "argmax": "fam-session_range_break|1d H=10d T6|short_net|pc1",
+     "point_range": [
+      -0.0087,
+      0.34041
+     ],
+     "days": [
+      206,
+      1262
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1w": {
+    "agg": {
+     "upper95": 5.99336,
+     "point_at_max": 4.35249,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      -0.00093,
+      4.35249
+     ],
+     "days": [
+      93,
+      107
+     ],
+     "variants": 96
+    },
+    "pair": {
+     "upper95": 5.99336,
+     "point_at_max": 4.35249,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      -0.00093,
+      4.35249
+     ],
+     "days": [
+      93,
+      107
+     ],
+     "variants": 96
+    }
+   },
+   "fx10|1w": {
+    "agg": {
+     "upper95": 0.55433,
+     "point_at_max": 0.4232,
+     "argmax": "fam-session_range_break|1w H=20d T6|short_net|pc1",
+     "point_range": [
+      -0.02567,
+      0.42324
+     ],
+     "days": [
+      133,
+      782
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.55433,
+     "point_at_max": 0.4232,
+     "argmax": "fam-session_range_break|1w H=20d T6|short_net|pc1",
+     "point_range": [
+      -0.02567,
+      0.42324
+     ],
+     "days": [
+      133,
+      782
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1w": {
+    "agg": {
+     "upper95": 0.44316,
+     "point_at_max": 0.30544,
+     "argmax": "fam-session_range_break|1w H=20d T6|long_gross|pc1",
+     "point_range": [
+      -0.07756,
+      0.33124
+     ],
+     "days": [
+      133,
+      843
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.44316,
+     "point_at_max": 0.30544,
+     "argmax": "fam-session_range_break|1w H=20d T6|long_gross|pc1",
+     "point_range": [
+      -0.07756,
+      0.33124
+     ],
+     "days": [
+      133,
+      843
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1w": {
+    "agg": {
+     "upper95": 0.51038,
+     "point_at_max": 0.3562,
+     "argmax": "fam-session_range_break|1w H=20d T6|long_net|pc1",
+     "point_range": [
+      -0.06746,
+      0.37752
+     ],
+     "days": [
+      133,
+      827
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.51038,
+     "point_at_max": 0.3562,
+     "argmax": "fam-session_range_break|1w H=20d T6|long_net|pc1",
+     "point_range": [
+      -0.06746,
+      0.37752
+     ],
+     "days": [
+      133,
+      827
+     ],
+     "variants": 180
+    }
+   }
+  },
+  "rho_u_inst_vs_gold": {
+   "metals|1m": {
+    "agg": {
+     "upper95": 0.74322,
+     "point_at_max": 0.51681,
+     "argmax": "fam-session_range_break|1m H=1h T6|long_gross|pc1",
+     "point_range": [
+      -0.07984,
+      0.51681
+     ],
+     "days": [
+      893,
+      1653
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.55029,
+     "point_at_max": 0.38977,
+     "argmax": "fam-session_range_break|1m H=1h T6|fam_gross|pc1",
+     "point_range": [
+      -0.03937,
+      0.38977
+     ],
+     "days": [
+      893,
+      1653
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1m": {
+    "agg": {
+     "upper95": 0.10567,
+     "point_at_max": 0.06078,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.02486,
+      0.06078
+     ],
+     "days": [
+      2065,
+      2487
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.06643,
+     "point_at_max": 0.03665,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.01769,
+      0.0446
+     ],
+     "days": [
+      2065,
+      2487
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1m": {
+    "agg": {
+     "upper95": 0.11276,
+     "point_at_max": 0.06624,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|pc1",
+     "point_range": [
+      -0.02792,
+      0.06624
+     ],
+     "days": [
+      2062,
+      2487
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.07039,
+     "point_at_max": 0.03886,
+     "argmax": "fam-sweep_absorb|1m H=1h T6|fam_net|raw",
+     "point_range": [
+      -0.01739,
+      0.03886
+     ],
+     "days": [
+      2062,
+      2487
+     ],
+     "variants": 180
+    }
+   },
+   "metals|5m": {
+    "agg": {
+     "upper95": 0.91931,
+     "point_at_max": 0.35244,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|pc1",
+     "point_range": [
+      -0.06982,
+      0.41232
+     ],
+     "days": [
+      893,
+      1869
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 0.80954,
+     "point_at_max": 0.35634,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|short_gross|pc1",
+     "point_range": [
+      -0.06638,
+      0.35634
+     ],
+     "days": [
+      893,
+      1869
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|5m": {
+    "agg": {
+     "upper95": 0.15927,
+     "point_at_max": 0.12573,
+     "argmax": "out|5m H=4h T6|long_net|goldsign",
+     "point_range": [
+      -0.02151,
+      0.12573
+     ],
+     "days": [
+      2065,
+      2492
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.11233,
+     "point_at_max": 0.07827,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|long_net|goldsign",
+     "point_range": [
+      -0.01311,
+      0.07864
+     ],
+     "days": [
+      2065,
+      2492
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|5m": {
+    "agg": {
+     "upper95": 0.14955,
+     "point_at_max": 0.11495,
+     "argmax": "out|5m H=4h T6|long_net|goldsign",
+     "point_range": [
+      -0.03714,
+      0.11495
+     ],
+     "days": [
+      2062,
+      2492
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.10242,
+     "point_at_max": 0.07106,
+     "argmax": "fam-sweep_absorb|5m H=4h T6|long_gross|goldsign",
+     "point_range": [
+      -0.02393,
+      0.07106
+     ],
+     "days": [
+      2062,
+      2492
+     ],
+     "variants": 180
+    }
+   },
+   "metals|15m": {
+    "agg": {
+     "upper95": 1.34326,
+     "point_at_max": 0.69573,
+     "argmax": "fam-sweep_absorb|15m H=8h T6|long_gross|pc1",
+     "point_range": [
+      -0.08788,
+      0.69573
+     ],
+     "days": [
+      890,
+      1872
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.23826,
+     "point_at_max": 0.67644,
+     "argmax": "fam-sweep_absorb|15m H=8h T6|long_gross|pc1",
+     "point_range": [
+      -0.0757,
+      0.67644
+     ],
+     "days": [
+      890,
+      1872
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|15m": {
+    "agg": {
+     "upper95": 0.19665,
+     "point_at_max": 0.16245,
+     "argmax": "out|15m H=8h T6|short_net|pc1",
+     "point_range": [
+      -0.02603,
+      0.16245
+     ],
+     "days": [
+      2065,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.19044,
+     "point_at_max": 0.14203,
+     "argmax": "fam-session_range_break|15m H=8h T6|short_net|pc1",
+     "point_range": [
+      -0.02538,
+      0.14438
+     ],
+     "days": [
+      2065,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|15m": {
+    "agg": {
+     "upper95": 0.16587,
+     "point_at_max": 0.14135,
+     "argmax": "out|15m H=8h T6|long_net|goldsign",
+     "point_range": [
+      -0.02669,
+      0.14135
+     ],
+     "days": [
+      2062,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.1637,
+     "point_at_max": 0.12277,
+     "argmax": "fam-session_range_break|15m H=8h T6|fam_gross|raw",
+     "point_range": [
+      -0.02513,
+      0.12321
+     ],
+     "days": [
+      2062,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "metals|30m": {
+    "agg": {
+     "upper95": 1.29838,
+     "point_at_max": 0.6833,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|long_gross|raw",
+     "point_range": [
+      -0.0723,
+      0.7244
+     ],
+     "days": [
+      875,
+      1873
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.29838,
+     "point_at_max": 0.6833,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|long_gross|raw",
+     "point_range": [
+      -0.04362,
+      0.6833
+     ],
+     "days": [
+      875,
+      1873
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|30m": {
+    "agg": {
+     "upper95": 0.25319,
+     "point_at_max": 0.18468,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|short_net|pc1",
+     "point_range": [
+      -0.0169,
+      0.18468
+     ],
+     "days": [
+      2061,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.25319,
+     "point_at_max": 0.18468,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|short_net|pc1",
+     "point_range": [
+      -0.0169,
+      0.18468
+     ],
+     "days": [
+      2061,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|30m": {
+    "agg": {
+     "upper95": 0.21216,
+     "point_at_max": 0.14572,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|short_net|pc1",
+     "point_range": [
+      -0.01948,
+      0.1633
+     ],
+     "days": [
+      2059,
+      2493
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.21216,
+     "point_at_max": 0.14572,
+     "argmax": "fam-sweep_absorb|30m H=16h T6|short_net|pc1",
+     "point_range": [
+      -0.01948,
+      0.14572
+     ],
+     "days": [
+      2059,
+      2493
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1h": {
+    "agg": {
+     "upper95": 1.80903,
+     "point_at_max": 0.9644,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|long_net|pc1",
+     "point_range": [
+      -0.12713,
+      0.97379
+     ],
+     "days": [
+      767,
+      1551
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.80903,
+     "point_at_max": 0.9644,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|long_net|pc1",
+     "point_range": [
+      -0.12713,
+      0.97379
+     ],
+     "days": [
+      767,
+      1551
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1h": {
+    "agg": {
+     "upper95": 0.30327,
+     "point_at_max": 0.21776,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|short_net|goldsign",
+     "point_range": [
+      -0.01364,
+      0.21776
+     ],
+     "days": [
+      2040,
+      2083
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.30327,
+     "point_at_max": 0.21776,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|short_net|goldsign",
+     "point_range": [
+      -0.01364,
+      0.21776
+     ],
+     "days": [
+      2040,
+      2083
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1h": {
+    "agg": {
+     "upper95": 0.26939,
+     "point_at_max": 0.19386,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|short_net|goldsign",
+     "point_range": [
+      -0.02088,
+      0.19386
+     ],
+     "days": [
+      2035,
+      2083
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.26939,
+     "point_at_max": 0.19386,
+     "argmax": "fam-sweep_absorb|1h H=1d T6|short_net|goldsign",
+     "point_range": [
+      -0.02088,
+      0.19386
+     ],
+     "days": [
+      2035,
+      2083
+     ],
+     "variants": 180
+    }
+   },
+   "metals|2h": {
+    "agg": {
+     "upper95": 2.03034,
+     "point_at_max": 1.10818,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|long_net|raw",
+     "point_range": [
+      0.04244,
+      1.11487
+     ],
+     "days": [
+      576,
+      872
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 2.03034,
+     "point_at_max": 1.10818,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|long_net|raw",
+     "point_range": [
+      0.04244,
+      1.11487
+     ],
+     "days": [
+      576,
+      872
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|2h": {
+    "agg": {
+     "upper95": 0.33745,
+     "point_at_max": 0.24854,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.01794,
+      0.25488
+     ],
+     "days": [
+      1039,
+      1976
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.33745,
+     "point_at_max": 0.24854,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|pc1",
+     "point_range": [
+      -0.01794,
+      0.25488
+     ],
+     "days": [
+      1039,
+      1976
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|2h": {
+    "agg": {
+     "upper95": 0.3043,
+     "point_at_max": 0.22804,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|goldsign",
+     "point_range": [
+      -0.02174,
+      0.22804
+     ],
+     "days": [
+      1039,
+      1970
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.3043,
+     "point_at_max": 0.22804,
+     "argmax": "fam-sweep_absorb|2h H=2d T6|short_net|goldsign",
+     "point_range": [
+      -0.02174,
+      0.22804
+     ],
+     "days": [
+      1039,
+      1970
+     ],
+     "variants": 180
+    }
+   },
+   "metals|4h": {
+    "agg": {
+     "upper95": 1.52888,
+     "point_at_max": 0.9869,
+     "argmax": "fam-box_break_close|4h H=5d T6|long_net|raw",
+     "point_range": [
+      -0.02571,
+      0.99642
+     ],
+     "days": [
+      297,
+      340
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 1.52888,
+     "point_at_max": 0.9869,
+     "argmax": "fam-box_break_close|4h H=5d T6|long_net|raw",
+     "point_range": [
+      -0.02571,
+      0.99642
+     ],
+     "days": [
+      297,
+      340
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|4h": {
+    "agg": {
+     "upper95": 0.33024,
+     "point_at_max": 0.2454,
+     "argmax": "fam-session_range_break|4h H=5d T6|short_net|goldsign",
+     "point_range": [
+      -0.07155,
+      0.2454
+     ],
+     "days": [
+      415,
+      1376
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.33024,
+     "point_at_max": 0.2454,
+     "argmax": "fam-session_range_break|4h H=5d T6|short_net|goldsign",
+     "point_range": [
+      -0.07155,
+      0.2454
+     ],
+     "days": [
+      415,
+      1376
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|4h": {
+    "agg": {
+     "upper95": 0.31469,
+     "point_at_max": 0.22738,
+     "argmax": "fam-session_range_break|4h H=5d T6|short_net|goldsign",
+     "point_range": [
+      -0.08899,
+      0.22738
+     ],
+     "days": [
+      415,
+      1361
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.31469,
+     "point_at_max": 0.22738,
+     "argmax": "fam-session_range_break|4h H=5d T6|short_net|goldsign",
+     "point_range": [
+      -0.08899,
+      0.22738
+     ],
+     "days": [
+      415,
+      1361
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1d": {
+    "agg": {
+     "upper95": 3.96631,
+     "point_at_max": 2.11947,
+     "argmax": "fam-session_range_break|1d H=10d T6|long_net|pc1",
+     "point_range": [
+      -0.63588,
+      2.12815
+     ],
+     "days": [
+      145,
+      236
+     ],
+     "variants": 120
+    },
+    "pair": {
+     "upper95": 3.96631,
+     "point_at_max": 2.11947,
+     "argmax": "fam-session_range_break|1d H=10d T6|long_net|pc1",
+     "point_range": [
+      -0.63588,
+      2.12815
+     ],
+     "days": [
+      145,
+      236
+     ],
+     "variants": 120
+    }
+   },
+   "pooled|1d": {
+    "agg": {
+     "upper95": 0.65521,
+     "point_at_max": 0.42147,
+     "argmax": "fam-box_break_close|1d H=10d T6|short_gross|goldsign",
+     "point_range": [
+      -0.07609,
+      0.42178
+     ],
+     "days": [
+      206,
+      1279
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.65521,
+     "point_at_max": 0.42147,
+     "argmax": "fam-box_break_close|1d H=10d T6|short_gross|goldsign",
+     "point_range": [
+      -0.07609,
+      0.42178
+     ],
+     "days": [
+      206,
+      1279
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1d": {
+    "agg": {
+     "upper95": 0.66476,
+     "point_at_max": 0.41129,
+     "argmax": "fam-box_break_close|1d H=10d T6|short_gross|goldsign",
+     "point_range": [
+      -0.09209,
+      0.41156
+     ],
+     "days": [
+      206,
+      1262
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.66476,
+     "point_at_max": 0.41129,
+     "argmax": "fam-box_break_close|1d H=10d T6|short_gross|goldsign",
+     "point_range": [
+      -0.09209,
+      0.41156
+     ],
+     "days": [
+      206,
+      1262
+     ],
+     "variants": 180
+    }
+   },
+   "metals|1w": {
+    "agg": {
+     "upper95": 5.99336,
+     "point_at_max": 4.35249,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      -0.00093,
+      4.35249
+     ],
+     "days": [
+      93,
+      107
+     ],
+     "variants": 96
+    },
+    "pair": {
+     "upper95": 5.99336,
+     "point_at_max": 4.35249,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+     "point_range": [
+      -0.00093,
+      4.35249
+     ],
+     "days": [
+      93,
+      107
+     ],
+     "variants": 96
+    }
+   },
+   "pooled|1w": {
+    "agg": {
+     "upper95": 0.76323,
+     "point_at_max": 0.42879,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|goldsign",
+     "point_range": [
+      -0.19774,
+      0.48196
+     ],
+     "days": [
+      133,
+      843
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.76323,
+     "point_at_max": 0.42879,
+     "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|goldsign",
+     "point_range": [
+      -0.19774,
+      0.48196
+     ],
+     "days": [
+      133,
+      843
+     ],
+     "variants": 180
+    }
+   },
+   "gold+fx10|1w": {
+    "agg": {
+     "upper95": 0.75029,
+     "point_at_max": 0.48742,
+     "argmax": "fam-box_break_close|1w H=20d T2|short_net|goldsign",
+     "point_range": [
+      -0.26065,
+      0.48742
+     ],
+     "days": [
+      133,
+      827
+     ],
+     "variants": 180
+    },
+    "pair": {
+     "upper95": 0.75029,
+     "point_at_max": 0.48742,
+     "argmax": "fam-box_break_close|1w H=20d T2|short_net|goldsign",
+     "point_range": [
+      -0.26065,
+      0.48742
+     ],
+     "days": [
+      133,
+      827
+     ],
+     "variants": 180
+    }
+   }
+  },
+  "tau_sd": {
+   "metals|1m": {
+    "upper95": 0.23375,
+    "point_at_max": 0.11584,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+    "point_range": [
+     0.00693,
+     0.11584
+    ],
+    "days": [
+     893,
+     1653
+    ],
+    "variants": 10
+   },
+   "fx10|1m": {
+    "upper95": 0.0686,
+    "point_at_max": 0.03004,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+    "point_range": [
+     0.01425,
+     0.03004
+    ],
+    "days": [
+     2060,
+     2487
+    ],
+    "variants": 10
+   },
+   "pooled|1m": {
+    "upper95": 0.09184,
+    "point_at_max": 0.0456,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+    "point_range": [
+     0.01331,
+     0.0456
+    ],
+    "days": [
+     2065,
+     2487
+    ],
+    "variants": 10
+   },
+   "gold+fx10|1m": {
+    "upper95": 0.07126,
+    "point_at_max": 0.03277,
+    "argmax": "fam-sweep_absorb|1m H=1h T2|long_gross|raw",
+    "point_range": [
+     0.01396,
+     0.03277
+    ],
+    "days": [
+     2062,
+     2487
+    ],
+    "variants": 10
+   },
+   "metals|5m": {
+    "upper95": 0.21557,
+    "point_at_max": 0.08506,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+    "point_range": [
+     0.00601,
+     0.08506
+    ],
+    "days": [
+     893,
+     1869
+    ],
+    "variants": 10
+   },
+   "fx10|5m": {
+    "upper95": 0.07884,
+    "point_at_max": 0.03616,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+    "point_range": [
+     0.00907,
+     0.03616
+    ],
+    "days": [
+     2060,
+     2491
+    ],
+    "variants": 10
+   },
+   "pooled|5m": {
+    "upper95": 0.08748,
+    "point_at_max": 0.04194,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+    "point_range": [
+     0.00992,
+     0.04194
+    ],
+    "days": [
+     2065,
+     2492
+    ],
+    "variants": 10
+   },
+   "gold+fx10|5m": {
+    "upper95": 0.08015,
+    "point_at_max": 0.04101,
+    "argmax": "fam-sweep_absorb|5m H=4h T2|long_gross|raw",
+    "point_range": [
+     0.01032,
+     0.04101
+    ],
+    "days": [
+     2062,
+     2492
+    ],
+    "variants": 10
+   },
+   "metals|15m": {
+    "upper95": 0.26549,
+    "point_at_max": 0.1612,
+    "argmax": "fam-session_range_break|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     0.00097,
+     0.1612
+    ],
+    "days": [
+     890,
+     1872
+    ],
+    "variants": 10
+   },
+   "fx10|15m": {
+    "upper95": 0.07834,
+    "point_at_max": 0.03142,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     0.01033,
+     0.0384
+    ],
+    "days": [
+     2060,
+     2491
+    ],
+    "variants": 10
+   },
+   "pooled|15m": {
+    "upper95": 0.09942,
+    "point_at_max": 0.05683,
+    "argmax": "fam-session_range_break|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     0.01043,
+     0.05683
+    ],
+    "days": [
+     2065,
+     2493
+    ],
+    "variants": 10
+   },
+   "gold+fx10|15m": {
+    "upper95": 0.08293,
+    "point_at_max": 0.04039,
+    "argmax": "fam-sweep_absorb|15m H=8h T2|long_gross|raw",
+    "point_range": [
+     0.01004,
+     0.04039
+    ],
+    "days": [
+     2062,
+     2493
+    ],
+    "variants": 10
+   },
+   "metals|30m": {
+    "upper95": 0.264,
+    "point_at_max": 0.11408,
+    "argmax": "fam-sweep_absorb|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     0.00719,
+     0.14131
+    ],
+    "days": [
+     875,
+     1873
+    ],
+    "variants": 10
+   },
+   "fx10|30m": {
+    "upper95": 0.08361,
+    "point_at_max": 0.04489,
+    "argmax": "fam-box_break_close|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     0.01079,
+     0.05093
+    ],
+    "days": [
+     2056,
+     2491
+    ],
+    "variants": 10
+   },
+   "pooled|30m": {
+    "upper95": 0.10046,
+    "point_at_max": 0.04635,
+    "argmax": "fam-sweep_absorb|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     0.01055,
+     0.0497
+    ],
+    "days": [
+     2061,
+     2493
+    ],
+    "variants": 10
+   },
+   "gold+fx10|30m": {
+    "upper95": 0.08671,
+    "point_at_max": 0.04122,
+    "argmax": "fam-sweep_absorb|30m H=16h T2|long_gross|raw",
+    "point_range": [
+     0.01036,
+     0.04836
+    ],
+    "days": [
+     2059,
+     2493
+    ],
+    "variants": 10
+   },
+   "metals|1h": {
+    "upper95": 0.312,
+    "point_at_max": 0.15601,
+    "argmax": "fam-sweep_absorb|1h H=1d T2|long_gross|raw",
+    "point_range": [
+     0.00043,
+     0.15601
+    ],
+    "days": [
+     767,
+     1551
+    ],
+    "variants": 10
+   },
+   "fx10|1h": {
+    "upper95": 0.09965,
+    "point_at_max": 0.06437,
+    "argmax": "out|1h H=1d T2|long_gross|raw",
+    "point_range": [
+     0.01222,
+     0.06437
+    ],
+    "days": [
+     2031,
+     2082
+    ],
+    "variants": 10
+   },
+   "pooled|1h": {
+    "upper95": 0.12342,
+    "point_at_max": 0.06205,
+    "argmax": "fam-sweep_absorb|1h H=1d T2|long_gross|raw",
+    "point_range": [
+     0.01423,
+     0.06324
+    ],
+    "days": [
+     2040,
+     2083
+    ],
+    "variants": 10
+   },
+   "gold+fx10|1h": {
+    "upper95": 0.09816,
+    "point_at_max": 0.06478,
+    "argmax": "out|1h H=1d T2|long_gross|raw",
+    "point_range": [
+     0.01449,
+     0.06478
+    ],
+    "days": [
+     2035,
+     2083
+    ],
+    "variants": 10
+   },
+   "metals|2h": {
+    "upper95": 0.25125,
+    "point_at_max": 0.08389,
+    "argmax": "fam-box_break_close|2h H=2d T2|long_gross|raw",
+    "point_range": [
+     0.00457,
+     0.1097
+    ],
+    "days": [
+     576,
+     872
+    ],
+    "variants": 10
+   },
+   "fx10|2h": {
+    "upper95": 0.10171,
+    "point_at_max": 0.05214,
+    "argmax": "fam-sweep_absorb|2h H=2d T2|long_gross|raw",
+    "point_range": [
+     0.01373,
+     0.05214
+    ],
+    "days": [
+     1039,
+     1940
+    ],
+    "variants": 10
+   },
+   "pooled|2h": {
+    "upper95": 0.11672,
+    "point_at_max": 0.05127,
+    "argmax": "fam-box_break_close|2h H=2d T2|long_gross|raw",
+    "point_range": [
+     0.01339,
+     0.05127
+    ],
+    "days": [
+     1039,
+     1976
+    ],
+    "variants": 10
+   },
+   "gold+fx10|2h": {
+    "upper95": 0.10318,
+    "point_at_max": 0.05121,
+    "argmax": "fam-sweep_absorb|2h H=2d T2|long_gross|raw",
+    "point_range": [
+     0.01385,
+     0.05121
+    ],
+    "days": [
+     1039,
+     1970
+    ],
+    "variants": 10
+   },
+   "metals|4h": {
+    "upper95": 0.57081,
+    "point_at_max": 0.34586,
+    "argmax": "fam-all|4h H=5d T2|long_gross|raw",
+    "point_range": [
+     0.00148,
+     0.34586
+    ],
+    "days": [
+     297,
+     340
+    ],
+    "variants": 10
+   },
+   "fx10|4h": {
+    "upper95": 0.17196,
+    "point_at_max": 0.10635,
+    "argmax": "fam-sweep_absorb|4h H=5d T2|long_gross|raw",
+    "point_range": [
+     0.03385,
+     0.10635
+    ],
+    "days": [
+     415,
+     1323
+    ],
+    "variants": 10
+   },
+   "pooled|4h": {
+    "upper95": 0.24292,
+    "point_at_max": 0.14908,
+    "argmax": "fam-session_range_break|4h H=5d T2|long_gross|raw",
+    "point_range": [
+     0.03107,
+     0.14908
+    ],
+    "days": [
+     415,
+     1376
+    ],
+    "variants": 10
+   },
+   "gold+fx10|4h": {
+    "upper95": 0.16426,
+    "point_at_max": 0.10097,
+    "argmax": "fam-sweep_absorb|4h H=5d T2|long_gross|raw",
+    "point_range": [
+     0.03219,
+     0.10097
+    ],
+    "days": [
+     415,
+     1361
+    ],
+    "variants": 10
+   },
+   "metals|1d": {
+    "upper95": 0.57777,
+    "point_at_max": 0.2792,
+    "argmax": "fam-box_break_close|1d H=10d T2|long_gross|raw",
+    "point_range": [
+     0.00944,
+     0.2792
+    ],
+    "days": [
+     145,
+     236
+    ],
+    "variants": 10
+   },
+   "fx10|1d": {
+    "upper95": 0.20954,
+    "point_at_max": 0.09905,
+    "argmax": "out|1d H=10d T2|long_gross|raw",
+    "point_range": [
+     0.03642,
+     0.09905
+    ],
+    "days": [
+     205,
+     1212
+    ],
+    "variants": 10
+   },
+   "pooled|1d": {
+    "upper95": 0.25778,
+    "point_at_max": 0.13571,
+    "argmax": "fam-box_break_close|1d H=10d T2|long_gross|raw",
+    "point_range": [
+     0.03678,
+     0.13571
+    ],
+    "days": [
+     206,
+     1279
+    ],
+    "variants": 10
+   },
+   "gold+fx10|1d": {
+    "upper95": 0.20693,
+    "point_at_max": 0.09667,
+    "argmax": "out|1d H=10d T2|long_gross|raw",
+    "point_range": [
+     0.03852,
+     0.09667
+    ],
+    "days": [
+     206,
+     1262
+    ],
+    "variants": 10
+   },
+   "metals|1w": {
+    "upper95": 0.34979,
+    "point_at_max": 0.08149,
+    "argmax": "fam-sweep_absorb|1w H=20d T2|long_gross|raw",
+    "point_range": [
+     0.0315,
+     0.08149
+    ],
+    "days": [
+     93,
+     107
+    ],
+    "variants": 10
+   },
+   "fx10|1w": {
+    "upper95": 0.198,
+    "point_at_max": 0.11125,
+    "argmax": "fam-session_range_break|1w H=20d T2|long_gross|raw",
+    "point_range": [
+     0.01995,
+     0.11125
+    ],
+    "days": [
+     133,
+     782
+    ],
+    "variants": 10
+   },
+   "pooled|1w": {
+    "upper95": 0.20696,
+    "point_at_max": 0.10539,
+    "argmax": "fam-session_range_break|1w H=20d T2|long_gross|raw",
+    "point_range": [
+     0.02631,
+     0.10539
+    ],
+    "days": [
+     133,
+     843
+    ],
+    "variants": 10
+   },
+   "gold+fx10|1w": {
+    "upper95": 0.19566,
+    "point_at_max": 0.10596,
+    "argmax": "fam-session_range_break|1w H=20d T2|long_gross|raw",
+    "point_range": [
+     0.01991,
+     0.10596
+    ],
+    "days": [
+     133,
+     827
+    ],
+    "variants": 10
+   }
+  }
+ },
+ "measurement_run": {
+  "path": "scripts/research/measure_rho_xt.py",
+  "sha256": "abcaf023e2ee6b7086edff6cf06f54b7bfb9ea1954d3e08c6762505422b1d8c4",
+  "git_blob": "117043d8aabbb3e3b401c9c71a10dc5de2e13517",
+  "uses": {
+   "scripts/research/measure_rho.py": "91adec307b8ede9b43580a381756da45d7e2dc8784d0815f42b2af862e6a4203",
+   "goldbot/research/dense_labels.py": "d908f93ec30367c138157ddcacb9a9c8935670e91aa89f8c86fd59ad685fb9c8"
+  },
+  "base_commit": "55c64c4caf80c9a756e7138163285c79a70af6b0"
+ },
+ "cells_file": {
+  "path": "docs/research/rho-measurement-2026-11-28-xt-v1-cells.csv.gz",
+  "sha256": "483e4295fdb2a7f06ed3c84e81d412a59f6820175c52c8bf2c26265e9bd9f4e8",
+  "rows": 6390
+ }
+}

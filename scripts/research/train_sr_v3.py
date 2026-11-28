@@ -48,7 +48,7 @@ from goldbot.research import sr_v3_store as ST
 from goldbot.research import sr_v3_train as T
 
 ROOT = Path(__file__).resolve().parents[2]
-RHO = ROOT / "docs" / "research" / "rho-measurement-2026-11.json"
+RHO = ROOT / "docs" / "research" / "rho-measurement-2026-11-28-xt-v1.json"     # D-12-xt (xt-v1 freeze)
 COSTS = Path.home() / "tmp" / "sr-v3-trainsets" / "manifest.json"     # the data team's cost of record (H1), local
 
 

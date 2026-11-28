@@ -296,6 +296,8 @@ def test_ship_manifest_has_sha_and_cutovers_and_verify_catches_drift(tmp_path: P
 DATA_FILE_ALLOWLIST: dict[str, str] = {
     "docs/research/rho-measurement-2026-11-cells.csv.gz":
         "aggregate ICC statistics only (counts, point, lo95/hi95), no prices or bars; code review on PR #466",
+    "docs/research/rho-measurement-2026-11-28-xt-v1-cells.csv.gz":
+        "D-12-xt re-run at xt-v1: the same aggregate ICC statistics only (quant ruling on PR #514)",
 }
 # the only column names the allowlisted D-12 cells file may carry: identifiers of a cell and its aggregate statistics
 RHO_CELL_ID_COLUMNS = {"kind", "class", "key", "source", "geometry", "outcome", "orientation", "band", "head", "tf",
@@ -333,9 +335,11 @@ def test_the_allowlisted_data_files_hold_only_aggregate_statistics() -> None:
                                  check=True).stdout.decode().split("\0"))
     for path, why in DATA_FILE_ALLOWLIST.items():
         assert path in tracked and not path.endswith("/") and why, path
-    with gzip.open(root / "docs/research/rho-measurement-2026-11-cells.csv.gz", "rt", newline="") as fh:
-        header = next(csv.reader(fh))
     stat_cols = {f"{s}.{p}" for s in RHO_CELL_STATS for p in ("point", "lo95", "hi95")}
-    assert header and set(header) <= RHO_CELL_ID_COLUMNS | stat_cols, sorted(set(header) - RHO_CELL_ID_COLUMNS - stat_cols)
     banned = ("open", "high", "low", "close", "bid", "ask", "price", "ts_utc", "visible_at", "volume", "tick")
-    assert not [c for c in header if any(b in c.lower() for b in banned)], header
+    for path in DATA_FILE_ALLOWLIST:
+        with gzip.open(root / path, "rt", newline="") as fh:
+            header = next(csv.reader(fh))
+        assert header and set(header) <= RHO_CELL_ID_COLUMNS | stat_cols, sorted(set(header) - RHO_CELL_ID_COLUMNS
+                                                                                   - stat_cols)
+        assert not [c for c in header if any(b in c.lower() for b in banned)], header

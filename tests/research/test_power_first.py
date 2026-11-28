@@ -138,10 +138,12 @@ def test_a_daily_card_with_20_day_overlapping_holds_is_refused_where_counting_ea
 
 def test_holds_short_or_sparse_enough_that_under_one_label_is_open_change_nothing():
     """Little's law on signals (quant C1): c = signals per instrument per trading day x hold_days. Below one open
-    label on average the overlap term is 1; at 1.49 signals a day a 1-day hold is no longer free."""
-    base = P.evaluate(card(learn_signals=3_000, clusters=1_000), SETTINGS)
+    label on average the overlap term is 1; at 1.49 signals a day a 1-day hold is no longer free. (US500: outside
+    the D-12-xt classes, so rho_day is the prior at every hold and only the overlap term can move.)"""
+    us = ["US500"]
+    base = P.evaluate(card(learn_signals=3_000, clusters=1_000, instruments=us), SETTINGS)
     for hold in (1.0 / 24, 0.5):
-        assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=hold), SETTINGS) == base
+        assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=hold, instruments=us), SETTINGS) == base
     day = P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=1.0), SETTINGS)
     c = 3_000 / (8 * PF.trading_days_per_year)
     assert day.overlap_effect == pytest.approx(c)
@@ -300,10 +302,14 @@ def test_q1_rho_day_for_horizons_up_to_60_minutes_may_go_down_to_0_05_longer_kee
     pf = PF.model_copy(update={"rho_day_le_60m": 0.05})
     assert pf.rho_day_for(60 / 1440) == 0.05 and pf.rho_day_for(61 / 1440) == 0.25 and pf.rho_day_for(1.0) == 0.25
     s = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"power_first": pf})})
-    short = card(learn_signals=3_000, clusters=1_000, hold_days=1 / 24)
+    us = ["US500"]                      # outside the D-12-xt classes: the settings' prior alone
+    short = card(learn_signals=3_000, clusters=1_000, hold_days=1 / 24, instruments=us)
     assert P.evaluate(short, s).design_effect == pytest.approx(1 + 2 * 0.05)
-    assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=2 / 24), s).design_effect == \
+    assert P.evaluate(card(learn_signals=3_000, clusters=1_000, hold_days=2 / 24, instruments=us), s).design_effect == \
         pytest.approx(1 + 2 * 0.25)
+    # gold takes its D-12-xt class binding at the tf (quant R1 on #525): 1m (H = 60 min) 0.22376 above the 0.05 knob
+    gold = card(learn_signals=3_000, clusters=1_000, hold_days=1 / 24)
+    assert P.evaluate(gold, s).design_effect == pytest.approx(1 + 2 * 0.22376)
 
 
 def test_rho_inst_is_0_7_when_at_least_half_the_pooled_instruments_are_precious_metals():

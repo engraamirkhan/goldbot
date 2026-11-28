@@ -487,6 +487,9 @@ research:
     rho_day_measurement_sha256: null # sha256 of that file, pinned (code review of #466); both null at 0.25
     rho_day_measurement: null        # D-12 ruling (c): a value < 0.25 above is refused unless this names the committed
                                      #   measurement (docs/research/rho-measurement-2026-11.json; config.check_rho_measurement)
+    rho_xt_measurement: docs/research/rho-measurement-2026-11-28-xt-v1.json   # D-12-xt (quant F2 on #525): rho_day_for(hold,
+                                     #   class) = max(the prior, the class's binding rho_u,day at that tf; per-tf rule, ruling 1)
+    rho_xt_measurement_sha256: bf1baa5a5bd7765a8165d8b89d4b10fdec00673eb3831839b37f9ff5f7b24ac4
     rho_instrument: 0.5              # PRIOR: cross-instrument same-day correlation of a pooled family
     rho_instrument_metals: 0.7       # PRIOR: the same when >= half the pooled instruments are XAU/XAG/XPT/XPD
     sims: 20000                      # joint-power Monte Carlo draws (seeded)
