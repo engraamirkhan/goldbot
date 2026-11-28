@@ -225,3 +225,34 @@ def test_the_written_cells_file_holds_only_aggregate_columns(tmp_path: Path) -> 
     from tests.test_long_history import RHO_CELL_ID_COLUMNS, RHO_CELL_STATS
     stats = {f"{s}.{p}" for s in RHO_CELL_STATS for p in ("point", "lo95", "hi95")}
     assert set(header) <= RHO_CELL_ID_COLUMNS | stats
+
+
+# ------------------------------------------------------------------------------------------------ the committed file
+XT_JSON = ROOT / "docs" / "research" / f"{X.STEM}.json"
+
+
+def test_the_committed_xt_file_is_from_the_committed_script_and_passes_the_gate_read() -> None:
+    """CI tie (as D-12's): the committed D-12-xt JSON records the committed script's sha256, its cells file's sha256,
+    the D-12 file it binds with, and the xt-v1 freeze; the shipped sufficiency config reads it for its pooled bodies
+    and the one gate-read entry point accepts it."""
+    import yaml
+
+    from goldbot.config import ROOT as CROOT
+    d = json.loads(XT_JSON.read_text())
+    assert d["exit_freeze_sha"] == D.EXIT_FREEZE_SHA256
+    assert d["script"]["path"] == "scripts/research/measure_rho_xt.py"
+    assert d["script"]["sha256"] == _sha(ROOT / d["script"]["path"]), "measure_rho_xt.py changed: re-run it (D-12-xt)"
+    assert d["script"]["uses"]["scripts/research/measure_rho.py"] == _sha(ROOT / "scripts/research/measure_rho.py")
+    assert d["cells_file"]["sha256"] == _sha(ROOT / d["cells_file"]["path"])
+    assert d["binds_with"]["sha256"] == _sha(ROOT / d["binds_with"]["path"])
+    assert d["bootstrap"]["B"] == 2000
+    bound = max(d["rho_day_le_60m"].values())
+    check_rho_measurement(f"docs/research/{X.STEM}.json", bound, _sha(XT_JSON),
+                          gate_read=True, freeze_sha=D.EXIT_FREEZE_SHA256)
+    cfg = yaml.safe_load((CROOT / "config" / "data" / "sufficiency.yaml").read_text())
+    assert DS.pre_xt_v1_rho(cfg) == []
+    DS.require_power_read_rho(cfg, PowerFirstSettings())
+    for b in d["binding"]["rho_u_day"].values():                 # max(D-12 recorded, re-run), never below either
+        assert b["max"] >= max(x for x in (b["rerun"], b["d12_recorded"]) if x is not None) - 1e-5 or b["max"] == 1.0
+    for b in d["binding"]["tau_a"].values():
+        assert b["tau_a"] is None or b["tau_a"] >= 0.01

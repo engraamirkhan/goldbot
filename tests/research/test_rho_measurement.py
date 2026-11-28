@@ -99,13 +99,14 @@ def test_bodies_on_pre_xt_v1_rho_are_flagged_fit_only(tmp_path: Path) -> None:
     assert DS.PRE_XT_V1_FLAG == "pre-xt-v1 ρ_u,inst: fit-only, not a power read"
 
 
-def test_the_rendered_sufficiency_table_flags_the_d12_bodies() -> None:
+def test_the_rendered_sufficiency_table_flags_exactly_the_pre_xt_v1_bodies() -> None:
     import yaml
 
     from goldbot.config import ROOT
     cfg = yaml.safe_load((ROOT / "config" / "data" / "sufficiency.yaml").read_text())
     flagged = DS.pre_xt_v1_rho(cfg)
-    assert flagged                                           # D-12 (PR #466) predates xt-v1
     md = (ROOT / "docs" / "data" / "sufficiency.md").read_text()
     for body in flagged:
         assert f"`{body}`: {DS.PRE_XT_V1_FLAG}" in md
+    # D-12-xt moved the shipped bodies to the xt-v1 file: none is flagged and the table carries no flag line
+    assert flagged == [] and DS.PRE_XT_V1_FLAG not in md
