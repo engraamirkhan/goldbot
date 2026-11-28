@@ -757,6 +757,17 @@ def _with_binds_with(d: dict[str, object], recomputed: dict[str, float]) -> dict
 
 
 @lru_cache(maxsize=4)
+def _rho_xt_classes(path: str, sha256: str) -> dict[str, tuple[str, ...]]:
+    import json
+
+    f = ROOT / path
+    if not f.is_file() or _sha256(f) != sha256:
+        raise ValueError(f"rho_xt_measurement {path!r} is missing or differs from rho_xt_measurement_sha256")
+    classes = json.loads(f.read_text()).get("classes") or {}
+    return {str(c): tuple(str(m).split("@")[0].upper() for m in ms) for c, ms in classes.items()}
+
+
+@lru_cache(maxsize=4)
 def _rho_day_by_tf(path: str, sha256: str) -> dict[str, float | None]:
     """`binding_by_tf.rho_u_day` maxima (`<class>|<tf>` -> value, None for H >= 1 d) of a pinned D-12-xt file, and
     `h:<tf>` -> its hold seconds; checked against its pinned sha256."""
@@ -921,6 +932,13 @@ class PowerFirstSettings(_Section):
         if self.rho_xt_measurement is not None and self.rho_xt_measurement_sha256 is not None:
             _rho_day_by_tf(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
         return self
+
+    def rho_classes(self) -> dict[str, tuple[str, ...]]:
+        """The measured rho classes of the pinned D-12-xt file (`classes`: class -> member symbols, a
+        `<symbol>@<source>` id as its symbol); {} when no file is pinned (quant R1b on #525: never a copy that drifts)."""
+        if self.rho_xt_measurement is None or self.rho_xt_measurement_sha256 is None:
+            return {}
+        return _rho_xt_classes(self.rho_xt_measurement, self.rho_xt_measurement_sha256)
 
     def rho_day_for(self, hold_days: float, rho_class: str | None = None) -> float:
         """Quant Q1: rho_day for a label horizon of `hold_days` (a day = 1,440 min): <= 60 min the short-horizon value.

@@ -396,9 +396,15 @@ def test_power_cards_take_the_class_rho_day_at_their_tf() -> None:
     st = load_settings()
     v = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD"]), st)
     assert v.rho_day == pytest.approx(0.44691)
-    assert P.rho_class_of(["XAUUSD@dukascopy"]) == "gold"
-    assert P.rho_class_of(["XAUUSD", "EURUSD"]) == "gold+fx10" and P.rho_class_of(["XAUUSD", "XAGUSD"]) == "pooled"
-    assert P.rho_class_of(["XAUUSD", "US500"]) is None                      # outside the measured classes: the prior
+    cls = st.research.power_first.rho_classes()                    # the pinned file's `classes`, never a copy
+    assert cls["metals"] == ("XAUUSD", "XAGUSD") and len(cls["pooled"]) == 12
+    of = lambda xs: P.rho_class_of(xs, cls)                         # noqa: E731
+    assert of(["XAUUSD@dukascopy"]) == "gold" and of(["XAUUSD", "XAGUSD"]) == "metals" and of(["XAGUSD"]) == "metals"
+    assert of(["EURUSD", "GBPUSD"]) == "fx10" and of(["XAUUSD", "EURUSD"]) == "gold+fx10"
+    assert of(["XAUUSD", "XAGUSD", "EURUSD"]) == "pooled" and of(["XAGUSD", "EURUSD"]) == "pooled"
+    assert of(["XAUUSD", "US500"]) is None and P.rho_class_of(["XAUUSD"], {}) is None    # outside / no file: prior
+    metals = P.evaluate(card(tf="15m", hold_days=8 / 24, instruments=["XAUUSD", "XAGUSD"]), st)
+    assert metals.rho_day == pytest.approx(0.29928)                 # quant R1b on #525
     with pytest.raises(ValueError, match="looser"):                           # a verdict on the 0.25 prior is refused
         P._check_given(v.model_copy(update={"rho_day": 0.25}), card(tf="15m", hold_days=8 / 24,
                                                                        instruments=["XAUUSD"]), st)

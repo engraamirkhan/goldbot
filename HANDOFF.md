@@ -28,8 +28,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   per-tf rule the pooled gold_fx and fx10 divisors at 15m-4h are the D-12 values again; 1d / 1w rise. D-13 admission
   needs its own per-instrument, per-tf run at xt-v1 (this file measures no candidate instrument).
 - Quant re-verify of #525: `power_first.evaluate` and the verdict check pass the card's class
-  (`power_first.rho_class_of`, the `sr_v3.rho_class` mapping; None outside gold / XAG / FX10 keeps the prior), so a gold
-  15m card with an 8 h hold now carries rho_day 0.44691. A pooled `sr_v3.rho_inputs(freeze_sha=...)` runs
+  (`power_first.rho_class_of`: the smallest measured class of the pinned file's `classes` holding every instrument;
+  None outside them keeps the prior), so a gold 15m card with an 8 h hold carries rho_day 0.44691 and gold + XAG 0.29928. A pooled `sr_v3.rho_inputs(freeze_sha=...)` runs
   `verify_inst_by_tf` before reading. Backlog 281 (also recompute tau_a(tf) and the vs-gold level from the cells) and
   282 (the drivers must call `require_power_read_rho`, which has no production caller) are open.
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
