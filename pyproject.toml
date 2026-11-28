@@ -31,6 +31,9 @@ live = ["MetaTrader5>=5.0.45; sys_platform == 'win32'", "python-telegram-bot>=21
 viz = ["matplotlib>=3.8"]
 # Local-only long daily history (scripts/gold_history.py, scripts/long_daily_history.py): Goldhub .xlsx, EIA .xls.
 research-data = ["openpyxl>=3.1", "xlrd>=2.0"]
+# Local / ops-VM only: the SEQ-1 TCN (goldbot/research/seq1.py imports it lazily, so the core suite and CI run without
+# it). CPU wheels: Linux resolves from the PyTorch CPU index (below), macOS wheels are CPU builds on PyPI.
+dl = ["torch>=2.5"]
 dev = [
     "pytest>=8",
     "pytest-xdist>=3.5",
@@ -62,6 +65,14 @@ ignore = ["E501"]               # long lines are allowed; formatting is not enfo
 [tool.ruff.lint.isort]
 known-first-party = ["goldbot"]
 
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -87,7 +98,7 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 # third-party packages without type information
-module = ["lightgbm.*", "sklearn.*", "duckdb.*", "MetaTrader5.*", "keyring.*", "telegram.*", "pyotp.*", "polars.*", "structlog.*", "scipy.*", "pyarrow.*", "uvicorn.*", "matplotlib.*", "PIL.*"]
+module = ["lightgbm.*", "sklearn.*", "duckdb.*", "MetaTrader5.*", "keyring.*", "telegram.*", "pyotp.*", "polars.*", "structlog.*", "scipy.*", "pyarrow.*", "uvicorn.*", "matplotlib.*", "PIL.*", "torch", "torch.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

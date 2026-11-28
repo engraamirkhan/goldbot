@@ -5,6 +5,40 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- 2026-11-28 SEQ-1 / RL-X1 on the frozen exits and cost of record (PR #489 after D-3 / D-4 merged):
+  `learn_labels.load_learn` reads only rows stamped with the D-4 exit freeze xt-v1 (`NotExitFreeze` otherwise) and
+  `xt_keys` resolves the one xt-v1 partition per learn year; with `costs` (`sr_v3_store.cost_table(manifest)`) every
+  read is charged through `sr_v3_store.charge_of_record`, now the single module-level route the sr-v3 trainer's
+  `StoreData` also uses (gold rows exactly `gold_row_bp`, gate status re-derived by `srv3_cost_record.apply`); without
+  costs the D-3 block stays. RL-X1: an entry charged at the cost of record pays its own `cost_rt_bp`
+  (`Episode.rt_bp`, kept in the episodes file so a rebuild charges the same) instead of SimCosts.rt_bp; a separate
+  `slippage_ub95_bp` on such rows is refused (the record's ub95 already carries slippage); overshoot and swap stay the
+  simulator's, as sr_v3_train.cost_parts. `seq1_embed` reads no label and needs no cost. New runner
+  `scripts/research/train_seq1_embed.py` (outcome-free, no K): decisions from the xt-v1 skeleton, learn-year minutes
+  only, one purged outer fold (pretext loss in/out of fold beside the zero-prediction loss; optional 5-seed CKA), then
+  the recorded fit via `history_runs.record_seq1_embed`. macOS rule: torch must be imported before sklearn/lightgbm
+  (each bundles libomp; two runtimes segfault the first multi-threaded epoch) - `seq1.TorchState` now refuses more than
+  one thread when `omp_before_torch()` names a clash, and the runner and rebuild_model.py import torch first. SEQ-1
+  judges 1h-1d only (15m is refused by design, R11).
+  Quant review of #489 (2026-11-28, fixed in this lane): `seq1.read` and `rl_exits.run` are gate reads - refused
+  before scoring unless the read id is booked (`windows.require_booked_read`, family registered with the signed study
+  plan) and every row is charged at one D-3 cost of record (`gate_cost.require_cost_of_record`); RL costs are never
+  defaulted; RL-X1 adds baseline (ii) (best fixed template T0-T7 chosen on training episodes), `delta_vs_best`, a 2x
+  cost read, episode decision/end times with a train/test embargo refusal and the per-row swap of record
+  (`swap_rate`, = cost_parts per night); agg-v1 applies a round only after it closes (`replay`), `history_rounds`
+  refuses non-OOF keeps, `mix_keep` takes n; embeddings carry `train_end`, `embed_after` refuses rows inside
+  train_end (window_from_utc > train_end), `fold_embed` is forward-only; re-verify B1/B2: the day-block bound is
+  also against the better of baselines (i)/(ii), and a booked id must equal the read's `read_key` (spec, costs, data);
+  trading-safety: size-v1 now runs under the live limits (2 % day, 5 % week, 8 % size-down, 12 % halt, 1 % max risk;
+  validators refuse looser specs, `simulate` re-validates), reserves a gapped stop plus cost before each trade and
+  counts breaches; the services and the API load no history model and no torch (subprocess test); ADR 0107 point 1 restated and accepted. Lesson: never edit
+  `decision_cost.py` (or any `dense_labels.CODE_FILES` file) in a non-label change: it re-keys every built partition.
+  Fits (gold xt-v1, learn 2010-17, 8 threads, commit e54c3f33, ~/tmp/seq1-embed-2026-11-28b, local; pretext loss
+  fit / val / out of fold, baselines on the same out-of-fold rows: zero, fit mean, trailing range):
+  1h - 47,280 rows, manifest 73341c09..., rebuilt byte-identical; 0.881 / 0.996 / 0.887 vs 2.02 / 0.987 / 1.103;
+  5-seed mean linear CKA 0.925 (min 0.912). Pooled 1h+2h+4h+1d - 87,252 rows, manifest 51167a36...; 0.872 / 0.953 /
+  0.881 vs 2.00 / 0.977 / 1.158. The learned pretext beats the best constant by about 10 % out of fold. No label
+  read, no K.
 - 2026-11-27 history_gap: sub-day broker closures (vantage-demo 1h/4h refused since 10-26 by a 61-open-minute hole
   20:58-23:02 UTC, the DST-gap-week daily break, older than backfill_max_days so never re-pulled).
   - A clean broker-bar pull with no minute in a run of >= 15 minutes (an open one among them) covers that run, also
@@ -296,6 +330,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     | EURUSD 2010-17 | P30 | 5,644 | 4,247 | 3,214 | 2,191 | 1,734 | 422 | 35 | 0 |
 
     Gold 2003-09 is unchanged.
+- 2026-11-26 SEQ-1 outcome-free 8-dim embedding (quant R-c: self-supervised next-window-bar pretext, refit per
+  outer fold on purged rows, embargo = TCN window + H, A8 parity, 5-seed CKA stability) as the primary path, SEQ-1
+  label head (shadow-only, own card), RL-X1 fitted-Q exits, size-v1 sizing scaffold and agg-v1 AdaHedge (ML plan items 12, 15, 17;
+  ADR 0106 families A, D, G; ADR 0107). History code only, frozen artifacts with a sha, never live, no K booked, no
+  label read: `learn_labels.load_learn` is the single route (learn 2010-17, train, phase 0, no booked read) and stays
+  sealed until ADR 0085 A4 records the tiers sha (PR #482). torch is the optional `dl` group (`uv sync --extra dl`,
+  CPU wheels; Linux from the PyTorch CPU index); scripts/check_env.py now accepts a package locked once per platform.
+  Run records are ADR 0109 run manifests (`history_runs` builders; rebuild reproduces the sha); each record takes a
+  `manifest_key` and fits `seed_list(manifest_key)` seeds (SEQ-1 serves the ensemble, embedding and RL-X1 seed 0),
+  records `label_end_max`, and `seq1_quality` reads both verdicts on one rows_key with the folds, block horizon and
+  booked trial (PR #494 quant Q1-Q4); this branch merges PR #494 and lands after it. Open: quant ruling on the validation stop (ADR 0107 1), the GBT keep from the
+  tabular trainer for SEQ-1's paired D, a runner script for the first real fit.
 - **sr-v3 history trainer is built. It has not run on real labels.** The pipeline is Stage 0 (label-blind Riley
   ladder, level and served orders, tie rule, λ_a), then walk-forward fits of L-cw, G-cw (GBT baseline), HB and AVG
   with the D-40 dense prior, then a training report and one run manifest (ADR 0109) per v0 artifact.

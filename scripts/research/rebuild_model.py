@@ -28,6 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     repo = Path(a.repo).resolve()
     sys.path.insert(0, str(repo))
+    try:        # torch's OpenMP runtime before sklearn/lightgbm's: a multi-threaded SEQ-1 rebuild (seq1.omp_before_torch)
+        import torch  # noqa: F401
+    except ImportError:
+        pass
     from goldbot.research import run_manifest as rm
     if (repo / "goldbot").is_dir():
         import goldbot
